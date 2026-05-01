@@ -2,39 +2,32 @@
 - name: Install GitLab CLI
   hosts: localhost
   connection: local
-  gather_facts: yes
+  gather_facts: no
   become: yes
 
   tasks:
-    - name: 1. Install prerequisites
+    - name: 1. Get latest GitLab CLI release info
+      uri:
+        url: "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases?per_page=1&order_by=released_at&sort=desc"
+        return_content: yes
+      register: glab_release
+
+    - name: 2. Set glab download URL
+      set_fact:
+        glab_deb_url: "{{ glab_release.json[0].assets.links | selectattr('name', 'match', 'glab_.*_linux_amd64\\.deb') | map(attribute='url') | first }}"
+
+    - name: 3. Download GitLab CLI .deb package
+      get_url:
+        url: "{{ glab_deb_url }}"
+        dest: /tmp/glab_linux_amd64.deb
+        force: yes
+
+    - name: 4. Install GitLab CLI .deb package
       apt:
-        name:
-          - apt-transport-https
-          - ca-certificates
-          - gnupg
-          - curl
+        deb: /tmp/glab_linux_amd64.deb
         state: present
-        update_cache: yes
 
-    - name: 2. Download and dearmor GitLab CLI public key
-      shell: curl -fsSL https://packages.gitlab.com/gitlab/gitlab-cli/gpgkey | gpg --dearmor -o /usr/share/keyrings/gitlab-cli-archive-keyring.gpg
-      args:
-        creates: /usr/share/keyrings/gitlab-cli-archive-keyring.gpg
-
-    - name: 3. Set permissions on GitLab CLI keyring
+    - name: 5. Remove downloaded .deb package
       file:
-        path: /usr/share/keyrings/gitlab-cli-archive-keyring.gpg
-        mode: '0644'
-
-    - name: 4. Add GitLab CLI repository
-      apt_repository:
-        repo: "deb [signed-by=/usr/share/keyrings/gitlab-cli-archive-keyring.gpg] https://packages.gitlab.com/gitlab/gitlab-cli/ubuntu/ {{ ansible_distribution_release }} main"
-        state: present
-        filename: gitlab-cli
-        update_cache: yes
-
-    - name: 5. Install GitLab CLI
-      apt:
-        name: gitlab-cli
-        state: present
-        update_cache: yes
+        path: /tmp/glab_linux_amd64.deb
+        state: absent
