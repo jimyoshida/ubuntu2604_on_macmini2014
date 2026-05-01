@@ -1,0 +1,96 @@
+---
+- name: Install Go (Golang)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    go_user: "{{ lookup('env', 'USER') }}"
+    go_version: "1.23.4"  # Update this to the desired Go version
+    go_arch: "linux-amd64"
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+          - tar
+        state: present
+        update_cache: yes
+
+    - name: 2. Check if Go is already installed
+      stat:
+        path: /usr/local/go/bin/go
+      register: go_installed
+
+    - name: 3. Get installed Go version if exists
+      command: /usr/local/go/bin/go version
+      register: current_go_version
+      changed_when: false
+      failed_when: false
+      when: go_installed.stat.exists
+
+    - name: 4. Download Go binary
+      become: yes
+      get_url:
+        url: "https://go.dev/dl/go{{ go_version }}.{{ go_arch }}.tar.gz"
+        dest: "/tmp/go{{ go_version }}.{{ go_arch }}.tar.gz"
+        mode: '0644'
+      environment:
+        HTTPS_PROXY: "{{ lookup('env', 'HTTPS_PROXY') | default('') }}"
+      when: not go_installed.stat.exists or (current_go_version.stdout is defined and go_version not in current_go_version.stdout)
+
+    - name: 5. Remove old Go installation if exists
+      become: yes
+      file:
+        path: /usr/local/go
+        state: absent
+      when: go_installed.stat.exists and (current_go_version.stdout is defined and go_version not in current_go_version.stdout)
+
+    - name: 6. Extract Go binary to /usr/local
+      become: yes
+      unarchive:
+        src: "/tmp/go{{ go_version }}.{{ go_arch }}.tar.gz"
+        dest: /usr/local
+        remote_src: yes
+      when: not go_installed.stat.exists or (current_go_version.stdout is defined and go_version not in current_go_version.stdout)
+
+    - name: 7. Clean up downloaded archive
+      become: yes
+      file:
+        path: "/tmp/go{{ go_version }}.{{ go_arch }}.tar.gz"
+        state: absent
+
+    - name: 8. Add Go to PATH in ~/.bashrc
+      blockinfile:
+        path: "/home/{{ go_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: golang"
+        block: |
+          # Go path
+          export PATH=$PATH:/usr/local/go/bin
+          export GOPATH=$HOME/go
+          export PATH=$PATH:$GOPATH/bin
+        create: true
+        mode: '0644'
+
+    - name: 9. Verify Go installation
+      command: /usr/local/go/bin/go version
+      register: go_version_output
+      changed_when: false
+
+    - name: 10. Print installed version and instructions
+      debug:
+        msg:
+          - "Go version: {{ go_version_output.stdout }}"
+          - ""
+          - "Go has been installed to /usr/local/go"
+          - "To activate in current shell: source ~/.bashrc"
+          - ""
+          - "Common Go commands:"
+          - "  go version              - Show Go version"
+          - "  go mod init <module>    - Initialize a new module"
+          - "  go mod tidy             - Add missing and remove unused modules"
+          - "  go build                - Compile packages and dependencies"
+          - "  go run main.go          - Compile and run Go program"
+          - "  go install              - Compile and install packages"
+          - "  go get <package>        - Download and install packages"

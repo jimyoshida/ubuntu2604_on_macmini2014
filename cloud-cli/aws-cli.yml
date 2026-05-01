@@ -1,0 +1,32 @@
+---
+- name: Install AWS CLI v2
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - curl
+          - unzip
+        state: present
+        update_cache: yes
+
+    - name: 2. Download AWS CLI v2 installation package
+      get_url:
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+        dest: "/tmp/awscliv2.zip"
+
+    - name: 3. Unzip AWS CLI v2 package
+      unarchive:
+        src: "/tmp/awscliv2.zip"
+        dest: "/tmp"
+        remote_src: yes
+        creates: "/tmp/aws/install"
+
+    - name: 4. Run AWS CLI v2 install script
+      command: "/tmp/aws/install --update"
+      args:
+        creates: "/usr/local/bin/aws"

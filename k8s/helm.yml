@@ -1,0 +1,39 @@
+---
+- name: Install Helm
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    helm_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Check if Helm is already installed
+      stat:
+        path: /usr/local/bin/helm
+      register: helm_check
+
+    - name: 3. Download and install Helm using official script
+      become: yes
+      shell: |
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        executable: /bin/bash
+      when: not helm_check.stat.exists
+
+    - name: 4. Add Helm bash completion to ~/.bashrc
+      blockinfile:
+        path: "/home/{{ helm_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: helm"
+        block: |
+          # helm bash completion
+          source <(helm completion bash)
+        create: true
+        mode: '0644'

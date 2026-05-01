@@ -1,0 +1,95 @@
+---
+- name: Install Node.js LTS via nvm
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    nodejs_user: "{{ lookup('env', 'USER') }}"
+    nvm_version: "v0.40.1"  # Latest nvm version as of 2026
+    nodejs_lts_version: "--lts"  # Install latest LTS
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+          - build-essential
+          - libssl-dev
+        state: present
+        update_cache: yes
+
+    - name: 2. Check if nvm is already installed
+      stat:
+        path: "/home/{{ nodejs_user }}/.nvm/nvm.sh"
+      register: nvm_installed
+
+    - name: 3. Download and install nvm
+      become: no
+      shell: >
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/{{ nvm_version }}/install.sh | bash
+      args:
+        creates: "/home/{{ nodejs_user }}/.nvm/nvm.sh"
+      when: not nvm_installed.stat.exists
+
+    - name: 4. Add nvm to .bashrc if not already present
+      become: no
+      blockinfile:
+        path: "/home/{{ nodejs_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: nvm"
+        block: |
+          # nvm
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+        create: true
+        mode: '0644'
+
+    - name: 5. Install Node.js LTS via nvm
+      become: no
+      shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        nvm install {{ nodejs_lts_version }}
+        nvm alias default lts/*
+      args:
+        executable: /bin/bash
+        creates: "/home/{{ nodejs_user }}/.nvm/alias/default"
+
+    - name: 6. Verify Node.js installation
+      become: no
+      shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        node --version
+      args:
+        executable: /bin/bash
+      register: node_version
+      changed_when: false
+
+    - name: 7. Verify npm installation
+      become: no
+      shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        npm --version
+      args:
+        executable: /bin/bash
+      register: npm_version
+      changed_when: false
+
+    - name: 8. Print installed versions and instructions
+      debug:
+        msg:
+          - "Node.js version: {{ node_version.stdout }}"
+          - "npm version: {{ npm_version.stdout }}"
+          - ""
+          - "nvm has been installed in ~/.nvm"
+          - "To activate in current shell: source ~/.bashrc"
+          - ""
+          - "Common nvm commands:"
+          - "  nvm ls                  - List installed Node.js versions"
+          - "  nvm install --lts       - Install latest LTS"
+          - "  nvm install 20.x        - Install specific version"
+          - "  nvm use --lts           - Use LTS version"
+          - "  nvm alias default 20.x  - Set default version"

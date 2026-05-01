@@ -1,0 +1,43 @@
+---
+- name: Install Claude Code CLI
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    claude_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+          - ca-certificates
+        state: present
+        update_cache: yes
+
+    - name: 2. Check if Claude Code is already installed
+      stat:
+        path: /usr/local/bin/claude
+      register: claude_check
+
+    - name: 3. Download and install Claude Code using official script
+      become: yes
+      shell: |
+        curl -fsSL https://claude.ai/install.sh | bash
+      args:
+        executable: /bin/bash
+      when: not claude_check.stat.exists
+      environment:
+        HTTPS_PROXY: "{{ lookup('env', 'HTTPS_PROXY') | default('') }}"
+
+    - name: 4. Verify Claude Code installation
+      command: claude --version
+      register: claude_version
+      changed_when: false
+      failed_when: false
+
+    - name: 5. Display Claude Code version
+      debug:
+        msg: "Claude Code installed: {{ claude_version.stdout }}"
+      when: claude_version.rc == 0

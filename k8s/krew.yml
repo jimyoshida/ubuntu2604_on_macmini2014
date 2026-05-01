@@ -1,0 +1,56 @@
+---
+- name: Install Krew (kubectl plugin manager)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    krew_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - git
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Check if Krew is already installed
+      stat:
+        path: "/home/{{ krew_user }}/.krew/bin/kubectl-krew"
+      register: krew_check
+
+    - name: 3. Download and install Krew
+      shell: |
+        set -e
+        cd "$(mktemp -d)"
+        OS="$(uname | tr '[:upper:]' '[:lower:]')"
+        ARCH="$(uname -m | sed -e 's/x86_64/amd64/' -e 's/\(arm\)\(64\)\?.*/\1\2/' -e 's/aarch64$/arm64/')"
+        KREW="krew-${OS}_${ARCH}"
+        curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/latest/download/${KREW}.tar.gz"
+        tar zxvf "${KREW}.tar.gz"
+        ./"${KREW}" install krew
+      args:
+        executable: /bin/bash
+      environment:
+        PATH: "/home/{{ krew_user }}/.krew/bin:{{ ansible_env.PATH }}"
+      when: not krew_check.stat.exists
+
+    - name: 4. Add Krew to PATH in ~/.bashrc
+      blockinfile:
+        path: "/home/{{ krew_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: krew"
+        block: |
+          # krew (kubectl plugin manager)
+          export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
+        create: true
+        mode: '0644'
+
+    - name: 5. Display post-installation message
+      debug:
+        msg:
+          - "Krew installed successfully!"
+          - "Reload your shell or run: source ~/.bashrc"
+          - "Install common plugins with:"
+          - "  kubectl krew install ctx ns node-shell"

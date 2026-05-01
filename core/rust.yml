@@ -1,0 +1,81 @@
+---
+- name: Install Rust
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    rust_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+          - build-essential
+        state: present
+        update_cache: yes
+
+    - name: 2. Check if Rust is already installed
+      stat:
+        path: "/home/{{ rust_user }}/.cargo/bin/rustc"
+      register: rust_installed
+
+    - name: 3. Download and install Rust via rustup
+      become: no
+      shell: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+      args:
+        executable: /bin/bash
+        creates: "/home/{{ rust_user }}/.cargo/bin/rustc"
+      environment:
+        HTTPS_PROXY: "{{ lookup('env', 'HTTPS_PROXY') | default('') }}"
+      when: not rust_installed.stat.exists
+
+    - name: 4. Add Rust to PATH in ~/.bashrc
+      blockinfile:
+        path: "/home/{{ rust_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: rust"
+        block: |
+          # Rust cargo bin path
+          . "$HOME/.cargo/env"
+        create: true
+        mode: '0644'
+
+    - name: 5. Verify Rust installation
+      shell: |
+        . "$HOME/.cargo/env"
+        rustc --version
+      args:
+        executable: /bin/bash
+      register: rustc_version
+      changed_when: false
+
+    - name: 6. Verify Cargo installation
+      shell: |
+        . "$HOME/.cargo/env"
+        cargo --version
+      args:
+        executable: /bin/bash
+      register: cargo_version
+      changed_when: false
+
+    - name: 7. Print installed versions and instructions
+      debug:
+        msg:
+          - "Rust version: {{ rustc_version.stdout }}"
+          - "Cargo version: {{ cargo_version.stdout }}"
+          - ""
+          - "Rust has been installed via rustup in ~/.cargo"
+          - "To activate in current shell: source ~/.bashrc"
+          - ""
+          - "Common Rust commands:"
+          - "  rustc --version         - Show Rust compiler version"
+          - "  cargo --version         - Show Cargo version"
+          - "  cargo new <project>     - Create a new Rust project"
+          - "  cargo build             - Build the current project"
+          - "  cargo run               - Build and run the current project"
+          - "  cargo test              - Run tests"
+          - "  cargo check             - Check code without building"
+          - "  rustup update           - Update Rust toolchain"
+          - "  rustup component add clippy rustfmt - Add useful tools"

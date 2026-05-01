@@ -1,0 +1,44 @@
+---
+- name: Setup Homebrew on Ubuntu 24.04 (Local)
+  hosts: localhost
+  connection: local
+  vars:
+    # Get the current local user executing the playbook
+    brew_user: "{{ lookup('env', 'USER') }}"
+    
+  tasks:
+    - name: Install Homebrew dependencies
+      become: true
+      ansible.builtin.apt:
+        name:
+          - build-essential
+          - procps
+          - curl
+          - file
+          - git
+        state: present
+        update_cache: true
+
+    - name: Check if Homebrew is already installed
+      ansible.builtin.stat:
+        path: /home/linuxbrew/.linuxbrew/bin/brew
+      register: brew_check
+
+    - name: Install Homebrew
+      become: true
+      become_user: "{{ brew_user }}"
+      # NONINTERACTIVE=1 skips the "Press ENTER to continue" prompt
+      ansible.builtin.shell: >
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      when: not brew_check.stat.exists
+
+    - name: Add Homebrew environment variables to ~/.bashrc
+      become: true
+      become_user: "{{ brew_user }}"
+      ansible.builtin.blockinfile:
+        path: "/home/{{ brew_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: Homebrew"
+        block: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        create: true
+        mode: '0644'

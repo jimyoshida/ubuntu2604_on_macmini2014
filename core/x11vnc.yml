@@ -1,0 +1,208 @@
+---
+- name: x11vnc VNC Server Setup
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_prompt:
+    - name: vnc_password
+      prompt: "Enter the password for VNC"
+      private: yes
+
+  vars:
+    current_user: "{{ lookup('env', 'USER') }}"
+    vnc_dir: "/home/{{ current_user }}/.vnc"
+    systemd_user_dir: "/home/{{ current_user }}/.config/systemd/user"
+
+  tasks:
+    - name: 1. Stop old system-level x11vnc service (if exists)
+      become: yes
+      systemd:
+        name: x11vnc
+        state: stopped
+      ignore_errors: yes
+
+    - name: 2. Disable old system-level x11vnc service (if exists)
+      become: yes
+      systemd:
+        name: x11vnc
+        enabled: no
+      ignore_errors: yes
+
+    - name: 3. Remove old system-level service file (if exists)
+      become: yes
+      file:
+        path: /etc/systemd/system/x11vnc.service
+        state: absent
+      ignore_errors: yes
+
+    - name: 4. Remove old system-level startup script (if exists)
+      become: yes
+      file:
+        path: /usr/local/bin/start-x11vnc.sh
+        state: absent
+      ignore_errors: yes
+
+    - name: 5. Remove old system-level password file (if exists)
+      become: yes
+      file:
+        path: /etc/x11vnc.pass
+        state: absent
+      ignore_errors: yes
+
+    - name: 5a. Reload systemd daemon after cleanup
+      become: yes
+      systemd:
+        daemon_reload: yes
+      ignore_errors: yes
+
+    - name: 6. Install x11vnc and required packages
+      become: yes
+      apt:
+        name:
+          - x11vnc
+          - x11-xserver-utils
+          - xvfb
+          - openbox
+          - xauth
+        state: present
+        update_cache: yes
+
+    - name: 7. Create VNC directory
+      file:
+        path: "{{ vnc_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: 8. Create VNC password file
+      shell: "x11vnc -storepasswd {{ vnc_password }} {{ vnc_dir }}/passwd"
+      args:
+        creates: "{{ vnc_dir }}/passwd"
+
+    - name: 9. Set permissions for VNC password file
+      file:
+        path: "{{ vnc_dir }}/passwd"
+        mode: '0600'
+
+    - name: 10. Create VNC startup script
+      copy:
+        dest: "/home/{{ current_user }}/.vnc/start-x11vnc.sh"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+
+          DISPLAY_NUM=1
+          DISPLAY=":${DISPLAY_NUM}"
+          SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM}"
+          AUTH_FILE="${HOME}/.vnc/Xvfb-auth"
+
+          # Start Xvfb if display socket is absent
+          if [ ! -e "$SOCKET" ]; then
+              rm -f "$AUTH_FILE"
+              cookie=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+              /usr/bin/xauth -f "$AUTH_FILE" add "$DISPLAY" . "$cookie"
+
+              /usr/bin/Xvfb "$DISPLAY" -screen 0 1920x1080x24 -auth "$AUTH_FILE" &
+
+              for i in $(seq 1 20); do
+                  [ -e "$SOCKET" ] && break
+                  sleep 0.5
+              done
+
+              if [ ! -e "$SOCKET" ]; then
+                  echo "Error: Xvfb failed to start on $DISPLAY" >&2
+                  exit 1
+              fi
+          fi
+
+          export DISPLAY XAUTHORITY="${AUTH_FILE}"
+
+          DISPLAY="${DISPLAY}" XAUTHORITY="${AUTH_FILE}" /usr/bin/openbox &>/dev/null &
+          disown
+
+          exec /usr/bin/x11vnc \
+            -display "${DISPLAY}" \
+            -auth "${AUTH_FILE}" \
+            -forever \
+            -loop \
+            -noxdamage \
+            -repeat \
+            -rfbauth "${HOME}/.vnc/passwd" \
+            -rfbport 5900 \
+            -shared \
+            -xkb
+
+    - name: 11. Create systemd user directory
+      file:
+        path: "{{ systemd_user_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: 12. Create systemd user service file for x11vnc
+      copy:
+        dest: "{{ systemd_user_dir }}/x11vnc.service"
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=x11vnc VNC server (Xvfb virtual display :1)
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=%h/.vnc/start-x11vnc.sh
+          Restart=on-failure
+          RestartSec=3
+
+          [Install]
+          WantedBy=default.target
+
+    - name: 13. Enable systemd lingering
+      become: yes
+      command: loginctl enable-linger {{ current_user }}
+      changed_when: false
+
+    - name: 14. Reload systemd user daemon
+      systemd:
+        daemon_reload: yes
+        scope: user
+
+    - name: 15. Enable and start x11vnc user service
+      systemd:
+        name: x11vnc
+        scope: user
+        enabled: yes
+        state: started
+
+    - name: 16. Print instructions
+      debug:
+        msg:
+          - "x11vnc VNC server setup is complete."
+          - ""
+          - "Running as user: {{ current_user }}"
+          - "VNC password stored in: {{ vnc_dir }}/passwd"
+          - "Startup script: {{ vnc_dir }}/start-x11vnc.sh"
+          - "Service file: {{ systemd_user_dir }}/x11vnc.service"
+          - "VNC port: 5900"
+          - ""
+          - "Service management (user-level daemon):"
+          - "  Start:   systemctl --user start x11vnc"
+          - "  Stop:    systemctl --user stop x11vnc"
+          - "  Restart: systemctl --user restart x11vnc"
+          - "  Status:  systemctl --user status x11vnc"
+          - "  Logs:    journalctl --user -u x11vnc -f"
+          - ""
+          - "Security notes:"
+          - "  - Virtual display :1 is created by Xvfb (no physical screen required)"
+          - "  - VNC password file is restricted to user access only (mode 0600)"
+          - "  - Service runs with your user permissions (not root)"
+          - "  - Systemd lingering enabled (service persists after logout)"
+          - ""
+          - "To change VNC password:"
+          - "  x11vnc -storepasswd {{ vnc_dir }}/passwd"
+          - "  systemctl --user restart x11vnc"
+          - ""
+          - "To test manually (without systemd):"
+          - "  {{ vnc_dir }}/start-x11vnc.sh"
+          - ""
+          - "To connect:"
+          - "  Use any VNC client to connect to <this-machine-ip>:5900"

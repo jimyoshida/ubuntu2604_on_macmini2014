@@ -1,0 +1,59 @@
+---
+- name: Install kubectl
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    kubectl_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: yes
+
+    - name: 2. Create keyrings directory
+      become: yes
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: 3. Download and add Kubernetes apt key
+      become: yes
+      shell: curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: 4. Add Kubernetes apt repository
+      become: yes
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /"
+        state: present
+        filename: kubernetes
+        update_cache: yes
+
+    - name: 5. Install kubectl
+      become: yes
+      apt:
+        name: kubectl
+        state: present
+        update_cache: yes
+
+    - name: 6. Add kubectl bash completion to ~/.bashrc
+      blockinfile:
+        path: "/home/{{ kubectl_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: kubectl"
+        block: |
+          # kubectl bash completion
+          source <(kubectl completion bash)
+          alias k=kubectl
+          complete -o default -F __start_kubectl k
+        create: true
+        mode: '0644'

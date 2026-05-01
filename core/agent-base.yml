@@ -1,0 +1,233 @@
+---
+- name: General Agent Base Setup (SSH, Samba, Avahi)
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  vars_prompt:
+    - name: hostname
+      prompt: "Please enter the hostname"
+      default: "ubuntu-vm.local"
+      private: no
+
+    - name: samba_password
+      prompt: "Enter the password for Samba"
+      private: yes
+
+    - name: samba_interfaces
+      prompt: "Enter the interfaces for Samba to bind (space-separated, leave empty for all)"
+      default: ""
+      private: no
+
+    - name: avahi_interfaces
+      prompt: "Enter the interfaces for Avahi to allow (comma-separated, leave empty for all)"
+      default: ""
+      private: no
+
+  vars:
+    target_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Update /etc/hosts with new hostname
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1 {{ hostname }}"
+        state: present
+
+    - name: 2. Set hostname
+      hostname:
+        name: "{{ hostname }}"
+
+    - name: 3. Disable OS-level sleep/suspend (for headless operation)
+      systemd:
+        name: "{{ item }}"
+        masked: yes
+      loop:
+        - sleep.target
+        - suspend.target
+        - hibernate.target
+        - hybrid-sleep.target
+
+    - name: 4. Install required system packages (SSH, Samba, etc.)
+      apt:
+        name:
+          - openssh-server
+          - avahi-daemon
+          - samba
+          - keychain
+          - net-tools
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - git
+        state: present
+        update_cache: yes
+
+    - name: 5. Enable and start SSH service
+      systemd:
+        name: ssh
+        enabled: yes
+        state: started
+
+    - name: 6. Configure SSH ClientAliveInterval
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?ClientAliveInterval'
+        line: 'ClientAliveInterval 60'
+      notify: restart ssh
+
+    - name: 7. Configure SSH ClientAliveCountMax
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?ClientAliveCountMax'
+        line: 'ClientAliveCountMax 720'
+      notify: restart ssh
+
+    - name: 8. Set Samba password for target user
+      shell: "(echo {{ samba_password }}; echo {{ samba_password }}) | smbpasswd -s -a {{ target_user }}"
+      no_log: true
+
+    - name: 9. Configure Samba global settings (interfaces)
+      blockinfile:
+        path: /etc/samba/smb.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (global)"
+        insertafter: '^\[global\]'
+        block: |
+          interfaces = {{ samba_interfaces }}
+          bind interfaces only = yes
+      when: samba_interfaces != ""
+      notify: restart samba
+
+    - name: 10. Configure Samba [homes] share
+      blockinfile:
+        path: /etc/samba/smb.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (homes)"
+        block: |
+          [homes]
+             comment = Home Directories
+             browseable = no
+             read only = no
+             create mask = 0700
+             directory mask = 0700
+             valid users = %S
+      notify: restart samba
+
+    - name: 11. Enable and start Samba services
+      systemd:
+        name: "{{ item }}"
+        enabled: yes
+        state: started
+      loop:
+        - smbd
+        - nmbd
+
+    - name: 12. Configure systemd logind to ignore idle and lid actions
+      lineinfile:
+        path: /etc/systemd/logind.conf
+        regexp: "^#?{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+      loop:
+        - { key: "IdleAction", value: "ignore" }
+        - { key: "LidSwitchIgnoreInhibited", value: "no" }
+        - { key: "HandleLidSwitch", value: "ignore" }
+        - { key: "HandleLidSwitchExternalPower", value: "ignore" }
+        - { key: "HandleLidSwitchDocked", value: "ignore" }
+
+    - name: 13. Configure Avahi daemon (allow-interfaces)
+      lineinfile:
+        path: /etc/avahi/avahi-daemon.conf
+        regexp: '^#?allow-interfaces='
+        line: "allow-interfaces={{ avahi_interfaces }}"
+      when: avahi_interfaces != ""
+      notify: restart avahi
+
+    - name: 14. Enable and start Avahi service
+      systemd:
+        name: avahi-daemon
+        enabled: yes
+        state: started
+
+    - name: 15. Enable and start systemd-resolved service
+      systemd:
+        name: systemd-resolved
+        enabled: yes
+        state: started
+
+    - name: 16. Disable screen blanking/sleep (X11 settings)
+      become: no
+      copy:
+        dest: "{{ item }}"
+        content: |
+          # Disable automatic screen blanking
+          xset s off
+          xset -dpms
+        mode: '0644'
+      loop:
+        - ~/.xprofile
+        - ~/.xsessionrc
+
+    - name: 17. Disable GNOME screen lock and power management
+      become: no
+      shell: |
+        gsettings set org.gnome.desktop.screensaver lock-enabled false
+        gsettings set org.gnome.desktop.session idle-delay 0
+        gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
+        gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+      ignore_errors: yes
+
+    - name: 18. Add container access permission to X server in .bashrc
+      become: no
+      lineinfile:
+        path: ~/.bashrc
+        line: "xhost +local:docker >/dev/null 2>&1 || true"
+        create: yes
+
+    - name: 19. Add keychain initialization to .bashrc
+      become: no
+      blockinfile:
+        path: ~/.bashrc
+        create: yes
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (keychain)"
+        content: |
+          keychain $HOME/.ssh/id_rsa
+          source $HOME/.keychain/`hostname`-sh
+
+    - name: 20. Add git prompt function to .bashrc
+      become: no
+      blockinfile:
+        path: ~/.bashrc
+        create: yes
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (git-prompt)"
+        block: |
+          # git prompt function
+          parse_git_branch() {
+            git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/(\1)/'
+          }
+          PS1="\[\e]0;\u@\h: \w\a\]${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[33m\] \$(parse_git_branch)\[\033[00m\]$ "
+
+  handlers:
+    - name: restart logind
+      systemd:
+        name: systemd-logind
+        state: restarted
+
+    - name: restart avahi
+      systemd:
+        name: avahi-daemon
+        state: restarted
+
+    - name: restart ssh
+      systemd:
+        name: ssh
+        state: restarted
+
+    - name: restart samba
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - smbd
+        - nmbd
