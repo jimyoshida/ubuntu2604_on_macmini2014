@@ -1,0 +1,40 @@
+---
+- name: Install GitHub CLI
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Download and dearmor GitHub CLI public key
+      shell: curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/githubcli-archive-keyring.gpg
+
+    - name: 3. Set permissions on GitHub CLI keyring
+      file:
+        path: /usr/share/keyrings/githubcli-archive-keyring.gpg
+        mode: '0644'
+
+    - name: 4. Add GitHub CLI repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
+        state: present
+        filename: github-cli
+        update_cache: yes
+
+    - name: 5. Install GitHub CLI
+      apt:
+        name: gh
+        state: present
+        update_cache: yes

@@ -1,0 +1,40 @@
+---
+- name: Install GitLab CLI
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Download and dearmor GitLab CLI public key
+      shell: curl -fsSL https://packages.gitlab.com/gitlab/gitlab-cli/gpgkey | gpg --dearmor -o /usr/share/keyrings/gitlab-cli-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/gitlab-cli-archive-keyring.gpg
+
+    - name: 3. Set permissions on GitLab CLI keyring
+      file:
+        path: /usr/share/keyrings/gitlab-cli-archive-keyring.gpg
+        mode: '0644'
+
+    - name: 4. Add GitLab CLI repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/gitlab-cli-archive-keyring.gpg] https://packages.gitlab.com/gitlab/gitlab-cli/ubuntu/ {{ ansible_distribution_release }} main"
+        state: present
+        filename: gitlab-cli
+        update_cache: yes
+
+    - name: 5. Install GitLab CLI
+      apt:
+        name: gitlab-cli
+        state: present
+        update_cache: yes
