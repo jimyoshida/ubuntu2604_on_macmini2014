@@ -16,41 +16,21 @@
     openclaw_config_dir: "/home/{{ current_user }}/.openclaw"
 
   tasks:
-    - name: 1. Check if nvm is installed
-      stat:
-        path: "/home/{{ current_user }}/.nvm/nvm.sh"
-      register: nvm_installed
-
-    - name: 2. Fail if nvm/Node.js is not installed
-      fail:
-        msg: "nvm/Node.js is not installed. Please run nvm.yml playbook first."
-      when: not nvm_installed.stat.exists
-
-    - name: 3. Check Node.js version
-      shell: |
-        export NVM_DIR="$HOME/.nvm"
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        node --version
-      args:
-        executable: /bin/bash
+    - name: 1. Check Node.js version
+      command: node --version
       register: node_version
       changed_when: false
 
-    - name: 4. Install OpenClaw globally via npm
-      shell: |
-        export NVM_DIR="$HOME/.nvm"
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        npm install -g openclaw@latest
-      args:
-        executable: /bin/bash
+    - name: 2. Install OpenClaw globally via npm
+      command: npm install -g openclaw@latest
 
-    - name: 5. Create OpenClaw config directory
+    - name: 3. Create OpenClaw config directory
       file:
         path: "{{ openclaw_config_dir }}"
         state: directory
         mode: '0755'
 
-    - name: 6. Create environment file for Slack tokens
+    - name: 4. Create environment file for Slack tokens
       copy:
         dest: "/home/{{ current_user }}/.openclaw.env"
         content: |
@@ -59,7 +39,7 @@
           export SLACK_BOT_TOKEN={{ slack_bot_token if slack_bot_token != "" else "xoxb-..." }}
         mode: '0600'
 
-    - name: 7. Add .openclaw.env to .bashrc
+    - name: 5. Add .openclaw.env to .bashrc
       blockinfile:
         path: "/home/{{ current_user }}/.bashrc"
         marker: "# {mark} ANSIBLE MANAGED BLOCK: openclaw"
@@ -69,7 +49,7 @@
         create: true
         mode: '0644'
 
-    - name: 8. Print instructions
+    - name: 6. Print instructions
       block:
         - name: Print OpenClaw setup summary
           debug:
