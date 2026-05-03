@@ -40,6 +40,41 @@ ansible-playbook o11y/loki.yml
 
 Installs Loki from the official Grafana APT repository. Loki listens on `http://localhost:3100` (HTTP) and `9096` (gRPC). Add it as a data source in Grafana using the HTTP URL.
 
+## alloy.yml
+
+Install Grafana Alloy (log shipper)
+
+```bash
+ansible-playbook o11y/alloy.yml
+```
+
+Installs Alloy from the official Grafana APT repository and configures it to ship system logs to Loki (`http://localhost:3100`). Config is written to `/etc/alloy/config.alloy`.
+
+**Pipeline**
+
+```
+loki.source.journal
+  → loki.relabel   (promote __journal_* fields to labels)
+  → loki.process   (drop debug logs)
+  → loki.write     (http://localhost:3100)
+```
+
+The source is the systemd journal only. File sources (`/var/log/syslog`, `auth.log`, `kern.log`) are not used because `ForwardToSyslog=yes` in journald makes them duplicates of the journal.
+
+**Labels set on each log entry**
+
+| Label | Source field | Example |
+|---|---|---|
+| `job` | static | `journal` |
+| `unit` | `_SYSTEMD_UNIT` | `sshd.service` |
+| `transport` | `_TRANSPORT` | `journal`, `stdout`, `syslog`, `kernel` |
+| `service_name` | auto-detected by Loki from `SYSLOG_IDENTIFIER` | `sshd` |
+
+**Filters**
+
+- Drops entries where `service_name="journal"` and `detected_level="debug"`
+- Drops entries containing `level=debug` in the log line
+
 ## tempo.yml
 
 Install Grafana Tempo (distributed tracing)
@@ -94,3 +129,28 @@ ansible-playbook o11y/prometheus.yml
 4. Click **Import**
 
 The dashboard displays CPU usage, memory, disk I/O, filesystem, and network metrics for the host.
+
+---
+
+## Viewing Logs in Grafana
+
+Run the playbooks in order:
+
+```bash
+ansible-playbook o11y/grafana.yml
+ansible-playbook o11y/loki.yml
+ansible-playbook o11y/alloy.yml
+```
+
+**1. Add Loki as a data source**
+
+1. Open Grafana at `http://localhost:3000`
+2. Go to **Connections → Data Sources → Add new data source**
+3. Select **Loki**
+4. Set URL to `http://localhost:3100`
+5. Click **Save & test**
+
+**2. Explore logs**
+
+1. Go to **Explore** and select the Loki data source
+2. Use the label browser to filter by `unit`, `transport`, or `service_name`

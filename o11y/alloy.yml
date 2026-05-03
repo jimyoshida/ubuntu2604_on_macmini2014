@@ -1,0 +1,102 @@
+---
+- name: Install Grafana Alloy (log shipper)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Download and dearmor Grafana GPG key
+      shell: curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /usr/share/keyrings/grafana.gpg
+      args:
+        creates: /usr/share/keyrings/grafana.gpg
+
+    - name: 3. Set permissions on Grafana keyring
+      file:
+        path: /usr/share/keyrings/grafana.gpg
+        mode: '0644'
+
+    - name: 4. Add Grafana repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main"
+        state: present
+        filename: grafana
+        update_cache: yes
+
+    - name: 5. Install Alloy
+      apt:
+        name: alloy
+        state: present
+        update_cache: yes
+
+    - name: 6. Add alloy user to adm group
+      user:
+        name: alloy
+        groups: adm
+        append: yes
+
+    - name: 7. Write Alloy config
+      copy:
+        dest: /etc/alloy/config.alloy
+        content: |
+          loki.relabel "journal_rules" {
+            forward_to = []
+
+            rule {
+              source_labels = ["__journal__systemd_unit"]
+              target_label  = "unit"
+            }
+
+            rule {
+              source_labels = ["__journal__transport"]
+              target_label  = "transport"
+            }
+          }
+
+          loki.source.journal "journal" {
+            forward_to    = [loki.process.drop_journal_debug.receiver]
+            relabel_rules = loki.relabel.journal_rules.rules
+            labels        = {job = "journal"}
+          }
+
+          loki.process "drop_journal_debug" {
+            forward_to = [loki.write.local.receiver]
+
+            stage.match {
+              selector = `{service_name="journal", detected_level="debug"}`
+              action   = "drop"
+            }
+
+            stage.drop {
+              expression = `\blevel=debug\b`
+            }
+          }
+
+          loki.write "local" {
+            endpoint {
+              url = "http://localhost:3100/loki/api/v1/push"
+            }
+          }
+      notify: Restart Alloy
+
+    - name: 8. Enable and start Alloy service
+      systemd:
+        name: alloy
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Restart Alloy
+      systemd:
+        name: alloy
+        state: restarted
