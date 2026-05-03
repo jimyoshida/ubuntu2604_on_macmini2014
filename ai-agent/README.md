@@ -9,7 +9,7 @@ ansible-playbook ai-agent/openclaw.yml
 ```
 
 **Prerequisites:**
-- Run `nvm.yml` first to install Node.js LTS
+- Run `mise.yml` first to install Node.js LTS
 - Slack App Token and Bot Token (see below for setup instructions)
 
 This playbook:

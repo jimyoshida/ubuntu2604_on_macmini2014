@@ -1,0 +1,59 @@
+---
+- name: Install mise (runtime version manager)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+          - gpg
+          - wget
+        state: present
+        update_cache: yes
+
+    - name: 2. Download and add mise GPG key
+      become: yes
+      shell: wget -qO - https://mise.jdx.dev/gpg-key.pub | gpg --dearmor -o /usr/share/keyrings/mise-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/mise-archive-keyring.gpg
+
+    - name: 3. Set permissions on mise keyring
+      become: yes
+      file:
+        path: /usr/share/keyrings/mise-archive-keyring.gpg
+        mode: '0644'
+
+    - name: 4. Add mise repository
+      become: yes
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/mise-archive-keyring.gpg arch=amd64] https://mise.jdx.dev/deb stable main"
+        state: present
+        filename: mise
+        update_cache: yes
+
+    - name: 5. Install mise
+      become: yes
+      apt:
+        name: mise
+        state: present
+        update_cache: yes
+
+    - name: 6. Add mise activation to .bashrc
+      blockinfile:
+        path: ~/.bashrc
+        create: yes
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: mise"
+        block: |
+          eval "$(mise activate bash)"
+
+    - name: 7. Install Node.js LTS via mise
+      shell: |
+        eval "$(mise activate bash)"
+        mise use --global node@lts
+      args:
+        executable: /bin/bash
+        creates: ~/.local/share/mise/installs/node
