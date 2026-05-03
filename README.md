@@ -40,10 +40,13 @@ This playbook configures:
 - SSH server with keep-alive (12h sessions)
 - Samba with home directory sharing
 - Avahi daemon for mDNS
+- systemd-resolved for DNS
 - System sleep/suspend/lid handling disabled
+- Screen blanking and GNOME lock disabled
+- macfanctld fan control (Mac hardware)
 - Keychain for SSH key management
-- X11 permissions for container access
 - Git branch display in bash prompt
+- `s` alias for `systemctl`
 
 #### docker.yml
 

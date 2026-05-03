@@ -196,7 +196,16 @@
           keychain $HOME/.ssh/id_rsa
           source $HOME/.keychain/`hostname`-sh
 
-    - name: 20. Add git prompt function to .bashrc
+    - name: 20. Add systemctl alias to .bashrc
+      become: no
+      blockinfile:
+        path: ~/.bashrc
+        create: yes
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (systemctl-alias)"
+        block: |
+          alias s=systemctl
+
+    - name: 21. Add git prompt function to .bashrc
       become: no
       blockinfile:
         path: ~/.bashrc
