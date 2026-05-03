@@ -1,5 +1,5 @@
 ---
-- name: General Agent Base Setup (SSH, Samba, Avahi)
+- name: General Agent Base Setup (SSH, Avahi)
   hosts: localhost
   connection: local
   gather_facts: yes
@@ -9,15 +9,6 @@
     - name: hostname
       prompt: "Please enter the hostname"
       default: "ubuntu-vm.local"
-      private: no
-
-    - name: samba_password
-      prompt: "Enter the password for Samba"
-      private: yes
-
-    - name: samba_interfaces
-      prompt: "Enter the interfaces for Samba to bind (space-separated, leave empty for all)"
-      default: ""
       private: no
 
     - name: avahi_interfaces
@@ -50,12 +41,11 @@
         - hibernate.target
         - hybrid-sleep.target
 
-    - name: 4. Install required system packages (SSH, Samba, etc.)
+    - name: 4. Install required system packages (SSH, Avahi, etc.)
       apt:
         name:
           - openssh-server
           - avahi-daemon
-          - samba
           - keychain
           - net-tools
           - ca-certificates
@@ -88,51 +78,13 @@
         line: 'ClientAliveCountMax 720'
       notify: restart ssh
 
-    - name: 8. Set Samba password for target user
-      shell: "(echo {{ samba_password }}; echo {{ samba_password }}) | smbpasswd -s -a {{ target_user }}"
-      no_log: true
-
-    - name: 9. Configure Samba global settings (interfaces)
-      blockinfile:
-        path: /etc/samba/smb.conf
-        marker: "# {mark} ANSIBLE MANAGED BLOCK (global)"
-        insertafter: '^\[global\]'
-        block: |
-          interfaces = {{ samba_interfaces }}
-          bind interfaces only = yes
-      when: samba_interfaces != ""
-      notify: restart samba
-
-    - name: 10. Configure Samba [homes] share
-      blockinfile:
-        path: /etc/samba/smb.conf
-        marker: "# {mark} ANSIBLE MANAGED BLOCK (homes)"
-        block: |
-          [homes]
-             comment = Home Directories
-             browseable = no
-             read only = no
-             create mask = 0700
-             directory mask = 0700
-             valid users = %S
-      notify: restart samba
-
-    - name: 11. Enable and start Samba services
-      systemd:
-        name: "{{ item }}"
-        enabled: yes
-        state: started
-      loop:
-        - smbd
-        - nmbd
-
-    - name: 12. Enable and start macfanctld service
+    - name: 8. Enable and start macfanctld service
       systemd:
         name: macfanctld
         enabled: yes
         state: started
 
-    - name: 13. Configure systemd logind to ignore idle and lid actions
+    - name: 9. Configure systemd logind to ignore idle and lid actions
       lineinfile:
         path: /etc/systemd/logind.conf
         regexp: "^#?{{ item.key }}="
@@ -144,7 +96,7 @@
         - { key: "HandleLidSwitchExternalPower", value: "ignore" }
         - { key: "HandleLidSwitchDocked", value: "ignore" }
 
-    - name: 14. Configure Avahi daemon (allow-interfaces)
+    - name: 10. Configure Avahi daemon (allow-interfaces)
       lineinfile:
         path: /etc/avahi/avahi-daemon.conf
         regexp: '^#?allow-interfaces='
@@ -152,19 +104,19 @@
       when: avahi_interfaces != ""
       notify: restart avahi
 
-    - name: 15. Enable and start Avahi service
+    - name: 11. Enable and start Avahi service
       systemd:
         name: avahi-daemon
         enabled: yes
         state: started
 
-    - name: 16. Enable and start systemd-resolved service
+    - name: 12. Enable and start systemd-resolved service
       systemd:
         name: systemd-resolved
         enabled: yes
         state: started
 
-    - name: 17. Disable screen blanking/sleep (X11 settings)
+    - name: 13. Disable screen blanking/sleep (X11 settings)
       become: no
       copy:
         dest: "{{ item }}"
@@ -177,7 +129,7 @@
         - ~/.xprofile
         - ~/.xsessionrc
 
-    - name: 18. Disable GNOME screen lock and power management
+    - name: 14. Disable GNOME screen lock and power management
       become: no
       shell: |
         gsettings set org.gnome.desktop.screensaver lock-enabled false
@@ -186,7 +138,7 @@
         gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
       ignore_errors: yes
 
-    - name: 19. Add keychain initialization to .bashrc
+    - name: 15. Add keychain initialization to .bashrc
       become: no
       blockinfile:
         path: ~/.bashrc
@@ -196,7 +148,7 @@
           keychain $HOME/.ssh/id_rsa
           source $HOME/.keychain/`hostname`-sh
 
-    - name: 20. Add systemctl alias to .bashrc
+    - name: 16. Add systemctl alias to .bashrc
       become: no
       blockinfile:
         path: ~/.bashrc
@@ -205,7 +157,7 @@
         block: |
           alias s=systemctl
 
-    - name: 21. Add git prompt function to .bashrc
+    - name: 17. Add git prompt function to .bashrc
       become: no
       blockinfile:
         path: ~/.bashrc
@@ -233,11 +185,3 @@
       systemd:
         name: ssh
         state: restarted
-
-    - name: restart samba
-      systemd:
-        name: "{{ item }}"
-        state: restarted
-      loop:
-        - smbd
-        - nmbd

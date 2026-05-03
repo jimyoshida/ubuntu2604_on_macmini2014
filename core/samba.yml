@@ -1,0 +1,73 @@
+---
+- name: Samba Setup
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  vars_prompt:
+    - name: samba_password
+      prompt: "Enter the password for Samba"
+      private: yes
+
+    - name: samba_interfaces
+      prompt: "Enter the interfaces for Samba to bind (space-separated, leave empty for all)"
+      default: ""
+      private: no
+
+  vars:
+    target_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Install Samba
+      apt:
+        name: samba
+        state: present
+        update_cache: yes
+
+    - name: 2. Set Samba password for target user
+      shell: "(echo {{ samba_password }}; echo {{ samba_password }}) | smbpasswd -s -a {{ target_user }}"
+      no_log: true
+
+    - name: 3. Configure Samba global settings (interfaces)
+      blockinfile:
+        path: /etc/samba/smb.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (global)"
+        insertafter: '^\[global\]'
+        block: |
+          interfaces = {{ samba_interfaces }}
+          bind interfaces only = yes
+      when: samba_interfaces != ""
+      notify: restart samba
+
+    - name: 4. Configure Samba [homes] share
+      blockinfile:
+        path: /etc/samba/smb.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (homes)"
+        block: |
+          [homes]
+             comment = Home Directories
+             browseable = no
+             read only = no
+             create mask = 0700
+             directory mask = 0700
+             valid users = %S
+      notify: restart samba
+
+    - name: 5. Enable and start Samba services
+      systemd:
+        name: "{{ item }}"
+        enabled: yes
+        state: started
+      loop:
+        - smbd
+        - nmbd
+
+  handlers:
+    - name: restart samba
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - smbd
+        - nmbd

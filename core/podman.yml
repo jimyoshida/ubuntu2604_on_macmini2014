@@ -1,0 +1,29 @@
+---
+- name: Podman Setup
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  vars:
+    target_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 1. Install Podman
+      apt:
+        name:
+          - podman
+          - podman-compose
+        state: present
+        update_cache: yes
+
+    - name: 2. Enable lingering for rootless Podman (survive logout)
+      command: loginctl enable-linger {{ target_user }}
+      changed_when: false
+
+    - name: 3. Add container access permission to X server in .bashrc
+      become: no
+      lineinfile:
+        path: ~/.bashrc
+        line: "xhost +local:podman >/dev/null 2>&1 || true"
+        create: yes

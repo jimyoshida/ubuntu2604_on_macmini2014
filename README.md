@@ -29,7 +29,7 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 
 #### agent-base.yml
 
-General agent base setup (SSH, Samba, Avahi)
+General agent base setup (SSH, Avahi)
 
 ```bash
 ansible-playbook core/agent-base.yml
@@ -38,7 +38,6 @@ ansible-playbook core/agent-base.yml
 This playbook configures:
 - Hostname and network settings
 - SSH server with keep-alive (12h sessions)
-- Samba with home directory sharing
 - Avahi daemon for mDNS
 - systemd-resolved for DNS
 - System sleep/suspend/lid handling disabled
@@ -47,6 +46,31 @@ This playbook configures:
 - Keychain for SSH key management
 - Git branch display in bash prompt
 - `s` alias for `systemctl`
+
+#### samba.yml
+
+Samba file sharing setup
+
+```bash
+ansible-playbook core/samba.yml
+```
+
+This playbook configures:
+- Samba with home directory sharing
+- Optional interface binding
+
+#### podman.yml
+
+Podman container runtime setup
+
+```bash
+ansible-playbook core/podman.yml
+```
+
+This playbook configures:
+- Podman and podman-compose from the Ubuntu default repository
+- Loginctl lingering for rootless containers (survive logout)
+- X server access for containers
 
 #### docker.yml
 
