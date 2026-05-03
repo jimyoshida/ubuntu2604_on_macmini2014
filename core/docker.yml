@@ -43,3 +43,10 @@
         name: "{{ target_user }}"
         groups: docker
         append: yes
+
+    - name: 6. Add container access permission to X server in .bashrc
+      become: no
+      lineinfile:
+        path: ~/.bashrc
+        line: "xhost +local:docker >/dev/null 2>&1 || true"
+        create: yes

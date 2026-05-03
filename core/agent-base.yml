@@ -63,6 +63,8 @@
           - gnupg
           - lsb-release
           - git
+          - macfanctld
+          - lm-sensors
         state: present
         update_cache: yes
 
@@ -124,7 +126,13 @@
         - smbd
         - nmbd
 
-    - name: 12. Configure systemd logind to ignore idle and lid actions
+    - name: 12. Enable and start macfanctld service
+      systemd:
+        name: macfanctld
+        enabled: yes
+        state: started
+
+    - name: 13. Configure systemd logind to ignore idle and lid actions
       lineinfile:
         path: /etc/systemd/logind.conf
         regexp: "^#?{{ item.key }}="
@@ -136,7 +144,7 @@
         - { key: "HandleLidSwitchExternalPower", value: "ignore" }
         - { key: "HandleLidSwitchDocked", value: "ignore" }
 
-    - name: 13. Configure Avahi daemon (allow-interfaces)
+    - name: 14. Configure Avahi daemon (allow-interfaces)
       lineinfile:
         path: /etc/avahi/avahi-daemon.conf
         regexp: '^#?allow-interfaces='
@@ -144,19 +152,19 @@
       when: avahi_interfaces != ""
       notify: restart avahi
 
-    - name: 14. Enable and start Avahi service
+    - name: 15. Enable and start Avahi service
       systemd:
         name: avahi-daemon
         enabled: yes
         state: started
 
-    - name: 15. Enable and start systemd-resolved service
+    - name: 16. Enable and start systemd-resolved service
       systemd:
         name: systemd-resolved
         enabled: yes
         state: started
 
-    - name: 16. Disable screen blanking/sleep (X11 settings)
+    - name: 17. Disable screen blanking/sleep (X11 settings)
       become: no
       copy:
         dest: "{{ item }}"
@@ -169,7 +177,7 @@
         - ~/.xprofile
         - ~/.xsessionrc
 
-    - name: 17. Disable GNOME screen lock and power management
+    - name: 18. Disable GNOME screen lock and power management
       become: no
       shell: |
         gsettings set org.gnome.desktop.screensaver lock-enabled false
@@ -177,13 +185,6 @@
         gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
         gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
       ignore_errors: yes
-
-    - name: 18. Add container access permission to X server in .bashrc
-      become: no
-      lineinfile:
-        path: ~/.bashrc
-        line: "xhost +local:docker >/dev/null 2>&1 || true"
-        create: yes
 
     - name: 19. Add keychain initialization to .bashrc
       become: no
