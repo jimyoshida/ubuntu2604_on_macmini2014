@@ -39,8 +39,46 @@
         state: present
         update_cache: yes
 
-    - name: 6. Enable and start Mimir service
+    - name: 6. Configure Mimir for single-node deployment
+      copy:
+        dest: /etc/mimir/config.yml
+        content: |
+          server:
+            http_listen_port: 9009
+
+          common:
+            storage:
+              backend: filesystem
+              filesystem:
+                dir: /var/lib/mimir
+
+          ingester:
+            ring:
+              replication_factor: 1
+
+          blocks_storage:
+            filesystem:
+              dir: /var/lib/mimir/blocks
+
+          compactor:
+            data_dir: /var/lib/mimir/compactor
+
+          ruler_storage:
+            filesystem:
+              dir: /var/lib/mimir/rules
+        owner: mimir
+        group: mimir
+        mode: '0644'
+      notify: Restart Mimir
+
+    - name: 7. Enable and start Mimir service
       systemd:
         name: mimir
         enabled: yes
         state: started
+
+  handlers:
+    - name: Restart Mimir
+      systemd:
+        name: mimir
+        state: restarted

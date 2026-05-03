@@ -1,0 +1,19 @@
+---
+- name: Install Prometheus Node Exporter
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install Node Exporter
+      apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: yes
+
+    - name: 2. Enable and start Node Exporter service
+      systemd:
+        name: prometheus-node-exporter
+        enabled: yes
+        state: started

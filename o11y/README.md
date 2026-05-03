@@ -1,5 +1,25 @@
 # Observability (o11y) Tools
 
+#### node_exporter.yml
+
+Install Prometheus Node Exporter (host metrics collector)
+
+```bash
+ansible-playbook o11y/node_exporter.yml
+```
+
+Installs `prometheus-node-exporter` from the Ubuntu apt repository. Node Exporter exposes host metrics (CPU, memory, disk, network) at `http://localhost:9100/metrics`.
+
+#### prometheus.yml
+
+Install Prometheus (metrics scraper and Mimir forwarder)
+
+```bash
+ansible-playbook o11y/prometheus.yml
+```
+
+Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) every 15 seconds and remote-write metrics to Mimir (`http://localhost:9009/api/v1/push`) with the required `X-Scope-OrgID: anonymous` header.
+
 #### grafana.yml
 
 Install Grafana
@@ -40,4 +60,37 @@ Install Grafana Mimir (metrics backend)
 ansible-playbook o11y/mimir.yml
 ```
 
-Installs Mimir from the official Grafana APT repository. Mimir listens on `http://localhost:9009` (HTTP) and `9095` (gRPC), and accepts Prometheus remote-write at `/api/v1/push`.
+Installs Mimir from the official Grafana APT repository and configures it for single-node deployment (`replication_factor: 1`). Mimir listens on `http://localhost:9009` (HTTP) and `9095` (gRPC), and accepts Prometheus remote-write at `/api/v1/push`.
+
+---
+
+## Viewing Host Metrics in Grafana
+
+Run the playbooks in order:
+
+```bash
+ansible-playbook o11y/grafana.yml
+ansible-playbook o11y/mimir.yml
+ansible-playbook o11y/node_exporter.yml
+ansible-playbook o11y/prometheus.yml
+```
+
+**1. Add Mimir as a data source**
+
+1. Open Grafana at `http://localhost:3000` (default credentials: `admin` / `admin`)
+2. Go to **Connections → Data Sources → Add new data source**
+3. Select **Prometheus**
+4. Set URL to `http://localhost:9009/prometheus`
+5. Expand **Custom HTTP Headers**, click **Add header**:
+   - **Header:** `X-Scope-OrgID`
+   - **Value:** `anonymous`
+6. Click **Save & test**
+
+**2. Import the Node Exporter Full dashboard**
+
+1. Go to **Dashboards → New → Import**
+2. Enter dashboard ID `1860` and click **Load**
+3. Select the Mimir data source added above
+4. Click **Import**
+
+The dashboard displays CPU usage, memory, disk I/O, filesystem, and network metrics for the host.

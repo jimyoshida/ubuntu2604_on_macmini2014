@@ -1,0 +1,46 @@
+---
+- name: Install Prometheus
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install Prometheus
+      apt:
+        name: prometheus
+        state: present
+        update_cache: yes
+
+    - name: 2. Configure Prometheus (scrape Node Exporter, remote-write to Mimir)
+      copy:
+        dest: /etc/prometheus/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+
+          scrape_configs:
+            - job_name: node
+              static_configs:
+                - targets: ['localhost:9100']
+
+          remote_write:
+            - url: http://localhost:9009/api/v1/push
+              headers:
+                X-Scope-OrgID: anonymous
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+      notify: Restart Prometheus
+
+    - name: 3. Enable and start Prometheus service
+      systemd:
+        name: prometheus
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Restart Prometheus
+      systemd:
+        name: prometheus
+        state: restarted
