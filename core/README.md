@@ -1,6 +1,6 @@
 # Core System Setup
 
-#### agent-base.yml
+## agent-base.yml
 
 General agent base setup (SSH, Avahi)
 
@@ -20,7 +20,7 @@ This playbook configures:
 - Git branch display in bash prompt
 - `s` alias for `systemctl`
 
-#### samba.yml
+## samba.yml
 
 Samba file sharing setup
 
@@ -32,7 +32,7 @@ This playbook configures:
 - Samba with home directory sharing
 - Optional interface binding
 
-#### podman.yml
+## podman.yml
 
 Podman container runtime setup
 
@@ -45,7 +45,7 @@ This playbook configures:
 - Loginctl lingering for rootless containers (survive logout)
 - X server access for containers
 
-#### docker.yml
+## docker.yml
 
 Docker Engine setup
 
@@ -59,7 +59,7 @@ This playbook configures:
 - Docker buildx plugin and docker-compose plugin
 - User group permissions for non-root Docker access
 
-#### x11vnc.yml
+## x11vnc.yml
 
 VNC server setup (optional)
 
@@ -88,7 +88,7 @@ Test manually (without systemd):
 ~/.vnc/start-x11vnc.sh
 ```
 
-#### homebrew.yml
+## homebrew.yml
 
 Install Homebrew package manager
 
@@ -100,7 +100,7 @@ After installation, use Homebrew to install additional tools:
 - kind (Kubernetes in Docker)
 - K9s, KDash
 
-#### mise.yml
+## mise.yml
 
 Install mise (polyglot runtime version manager)
 
@@ -118,7 +118,7 @@ mise use --global node@22      # Install and set a specific version
 mise ls-remote node            # List available Node.js versions
 ```
 
-#### golang.yml
+## golang.yml
 
 Install Go (Golang) programming language
 
@@ -139,7 +139,7 @@ source ~/.bashrc
 go version
 ```
 
-#### rust.yml
+## rust.yml
 
 Install Rust programming language
 
@@ -164,4 +164,22 @@ cargo --version
 Common post-install steps:
 ```bash
 rustup component add clippy rustfmt  # Add linter and formatter
+```
+
+---
+
+## chrony (NTP) — Ubuntu 26.04 default (no playbook needed)
+
+Ubuntu 26.04 ships chrony pre-installed, enabled, and well-configured. No playbook is needed. Before 26.04, chrony had to be installed and configured manually.
+
+Default configuration highlights:
+- NTS (Network Time Security) enabled — authenticated NTP over TLS, unlike plain NTP used in older setups
+- Time sources: Canonical's NTP pool (`ntp.ubuntu.com`, Stratum 2)
+- `makestep 1 3` — steps the clock on large initial offsets at boot instead of slewing slowly
+- `rtcsync` — syncs hardware clock every 11 minutes
+
+Check sync status:
+```bash
+chronyc tracking    # Current sync status and offset
+chronyc sources -v  # Active time sources
 ```

@@ -1,6 +1,6 @@
 # Observability (o11y) Tools
 
-#### node_exporter.yml
+## node_exporter.yml
 
 Install Prometheus Node Exporter (host metrics collector)
 
@@ -10,7 +10,7 @@ ansible-playbook o11y/node_exporter.yml
 
 Installs `prometheus-node-exporter` from the Ubuntu apt repository. Node Exporter exposes host metrics (CPU, memory, disk, network) at `http://localhost:9100/metrics`.
 
-#### prometheus.yml
+## prometheus.yml
 
 Install Prometheus (metrics scraper and Mimir forwarder)
 
@@ -20,7 +20,7 @@ ansible-playbook o11y/prometheus.yml
 
 Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) every 15 seconds and remote-write metrics to Mimir (`http://localhost:9009/api/v1/push`) with the required `X-Scope-OrgID: anonymous` header.
 
-#### grafana.yml
+## grafana.yml
 
 Install Grafana
 
@@ -30,7 +30,7 @@ ansible-playbook o11y/grafana.yml
 
 Installs Grafana from the official Grafana APT repository. After installation, Grafana is available at `http://localhost:3000` (default credentials: `admin` / `admin`).
 
-#### loki.yml
+## loki.yml
 
 Install Grafana Loki (log aggregation)
 
@@ -40,7 +40,7 @@ ansible-playbook o11y/loki.yml
 
 Installs Loki from the official Grafana APT repository. Loki listens on `http://localhost:3100` (HTTP) and `9096` (gRPC). Add it as a data source in Grafana using the HTTP URL.
 
-#### tempo.yml
+## tempo.yml
 
 Install Grafana Tempo (distributed tracing)
 
@@ -52,7 +52,7 @@ Installs Tempo from the official Grafana APT repository. Tempo listens on `http:
 
 > **Note:** The playbook sets `grpc_listen_port: 9097` in `/etc/tempo/config.yml` to avoid conflicts with Mimir (`9095`) and Loki (`9096`).
 
-#### mimir.yml
+## mimir.yml
 
 Install Grafana Mimir (metrics backend)
 

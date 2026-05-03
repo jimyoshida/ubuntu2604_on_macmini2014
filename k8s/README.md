@@ -1,6 +1,6 @@
 # K8s Tools
 
-#### kubectl.yml
+## kubectl.yml
 
 Install kubectl (Kubernetes CLI)
 
@@ -10,7 +10,7 @@ ansible-playbook k8s/kubectl.yml
 
 Includes bash completion and `k` alias.
 
-#### helm.yml
+## helm.yml
 
 Install Helm (Kubernetes package manager)
 
@@ -20,7 +20,7 @@ ansible-playbook k8s/helm.yml
 
 Includes bash completion.
 
-#### krew.yml
+## krew.yml
 
 Install Krew (kubectl plugin manager)
 

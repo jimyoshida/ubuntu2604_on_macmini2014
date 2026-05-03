@@ -1,6 +1,6 @@
 # Cloud CLI Tools
 
-#### aws-cli.yml
+## aws-cli.yml
 
 Install AWS CLI
 
@@ -8,7 +8,7 @@ Install AWS CLI
 ansible-playbook cloud-cli/aws-cli.yml
 ```
 
-#### azure-cli.yml
+## azure-cli.yml
 
 Install Azure CLI
 
@@ -16,7 +16,7 @@ Install Azure CLI
 ansible-playbook cloud-cli/azure-cli.yml
 ```
 
-#### gcloud-cli.yml
+## gcloud-cli.yml
 
 Install Google Cloud CLI
 
@@ -24,7 +24,7 @@ Install Google Cloud CLI
 ansible-playbook cloud-cli/gcloud-cli.yml
 ```
 
-#### github-cli.yml
+## github-cli.yml
 
 Install GitHub CLI
 
@@ -32,7 +32,7 @@ Install GitHub CLI
 ansible-playbook cloud-cli/github-cli.yml
 ```
 
-#### gitlab-cli.yml
+## gitlab-cli.yml
 
 Install GitLab CLI
 

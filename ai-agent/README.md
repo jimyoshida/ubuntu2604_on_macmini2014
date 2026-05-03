@@ -1,6 +1,6 @@
 # AI Agent Tools
 
-#### openclaw.yml
+## openclaw.yml
 
 OpenClaw Slack agent setup
 
@@ -80,7 +80,7 @@ npm update -g openclaw
 
 Documentation: https://docs.openclaw.ai/
 
-#### claude-code.yml
+## claude-code.yml
 
 Install Claude Code CLI
 
