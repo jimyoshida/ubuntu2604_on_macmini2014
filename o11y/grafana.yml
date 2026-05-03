@@ -1,0 +1,46 @@
+---
+- name: Install Grafana
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Download and dearmor Grafana GPG key
+      shell: curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /usr/share/keyrings/grafana.gpg
+      args:
+        creates: /usr/share/keyrings/grafana.gpg
+
+    - name: 3. Set permissions on Grafana keyring
+      file:
+        path: /usr/share/keyrings/grafana.gpg
+        mode: '0644'
+
+    - name: 4. Add Grafana repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main"
+        state: present
+        filename: grafana
+        update_cache: yes
+
+    - name: 5. Install Grafana
+      apt:
+        name: grafana
+        state: present
+        update_cache: yes
+
+    - name: 6. Enable and start Grafana service
+      systemd:
+        name: grafana-server
+        enabled: yes
+        state: started
