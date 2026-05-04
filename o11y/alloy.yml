@@ -61,6 +61,11 @@
               source_labels = ["__journal__transport"]
               target_label  = "transport"
             }
+
+            rule {
+              source_labels = ["__journal_syslog_identifier"]
+              target_label  = "app"
+            }
           }
 
           loki.source.journal "journal" {
@@ -73,7 +78,7 @@
             forward_to = [loki.write.local.receiver]
 
             stage.match {
-              selector = `{service_name="journal", detected_level="debug"}`
+              selector = `{detected_level="debug"}`
               action   = "drop"
             }
 
