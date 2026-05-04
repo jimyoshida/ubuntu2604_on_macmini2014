@@ -45,6 +45,7 @@
         content: |
           server:
             http_listen_port: 9009
+            grpc_listen_port: 9095
 
           common:
             storage:
@@ -62,6 +63,9 @@
 
           compactor:
             data_dir: /var/lib/mimir/compactor
+
+          limits:
+            compactor_blocks_retention_period: 30d
 
           ruler_storage:
             filesystem:

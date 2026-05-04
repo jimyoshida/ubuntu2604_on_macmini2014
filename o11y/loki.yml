@@ -39,8 +39,24 @@
         state: present
         update_cache: yes
 
-    - name: 6. Enable and start Loki service
+    - name: 6. Set HTTP and gRPC listen ports
+      lineinfile:
+        path: /etc/loki/config.yml
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: "http_listen_port:", line: "  http_listen_port: 3100" }
+        - { regexp: "grpc_listen_port:", line: "  grpc_listen_port: 9096" }
+      notify: Restart Loki
+
+    - name: 7. Enable and start Loki service
       systemd:
         name: loki
         enabled: yes
         state: started
+
+  handlers:
+    - name: Restart Loki
+      systemd:
+        name: loki
+        state: restarted

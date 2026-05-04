@@ -12,8 +12,24 @@
         state: present
         update_cache: yes
 
-    - name: 2. Enable and start Node Exporter service
+    - name: 2. Set listen port
+      copy:
+        dest: /etc/default/prometheus-node-exporter
+        content: |
+          ARGS="--web.listen-address=:9100"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart Node Exporter
+
+    - name: 3. Enable and start Node Exporter service
       systemd:
         name: prometheus-node-exporter
         enabled: yes
         state: started
+
+  handlers:
+    - name: Restart Node Exporter
+      systemd:
+        name: prometheus-node-exporter
+        state: restarted

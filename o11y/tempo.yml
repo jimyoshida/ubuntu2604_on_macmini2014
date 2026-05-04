@@ -39,15 +39,29 @@
         state: present
         update_cache: yes
 
-    - name: 6. Set gRPC port to avoid conflict with Mimir (9095) and Loki (9096)
+    - name: 6. Set HTTP listen port
+      lineinfile:
+        path: /etc/tempo/config.yml
+        regexp: "http_listen_port:"
+        line: "  http_listen_port: 3200"
+      notify: Restart Tempo
+
+    - name: 7. Set gRPC port to avoid conflict with Mimir (9095) and Loki (9096)
       lineinfile:
         path: /etc/tempo/config.yml
         insertafter: "http_listen_port:"
         line: "  grpc_listen_port: 9097"
         regexp: "grpc_listen_port:"
+      notify: Restart Tempo
 
-    - name: 7. Enable and start Tempo service
+    - name: 8. Enable and start Tempo service
       systemd:
         name: tempo
         enabled: yes
         state: started
+
+  handlers:
+    - name: Restart Tempo
+      systemd:
+        name: tempo
+        state: restarted

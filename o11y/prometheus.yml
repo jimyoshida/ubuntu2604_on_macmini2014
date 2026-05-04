@@ -33,7 +33,17 @@
         mode: '0644'
       notify: Restart Prometheus
 
-    - name: 3. Enable and start Prometheus service
+    - name: "3. Set retention period (default: 15d)"
+      copy:
+        dest: /etc/default/prometheus
+        content: |
+          ARGS="--storage.tsdb.retention.time=15d --web.listen-address=:9090"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart Prometheus
+
+    - name: 4. Enable and start Prometheus service
       systemd:
         name: prometheus
         enabled: yes

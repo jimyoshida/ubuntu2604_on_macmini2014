@@ -89,7 +89,14 @@
           }
       notify: Restart Alloy
 
-    - name: 8. Enable and start Alloy service
+    - name: 8. Set HTTP listen port
+      lineinfile:
+        path: /etc/default/alloy
+        regexp: "CUSTOM_ARGS="
+        line: 'CUSTOM_ARGS="--server.http.listen-addr=:12345"'
+      notify: Restart Alloy
+
+    - name: 9. Enable and start Alloy service
       systemd:
         name: alloy
         enabled: yes

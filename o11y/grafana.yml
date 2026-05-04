@@ -39,8 +39,21 @@
         state: present
         update_cache: yes
 
-    - name: 6. Enable and start Grafana service
+    - name: 6. Set HTTP port
+      lineinfile:
+        path: /etc/grafana/grafana.ini
+        regexp: "^;?http_port"
+        line: "http_port = 3000"
+      notify: Restart Grafana
+
+    - name: 7. Enable and start Grafana service
       systemd:
         name: grafana-server
         enabled: yes
         state: started
+
+  handlers:
+    - name: Restart Grafana
+      systemd:
+        name: grafana-server
+        state: restarted

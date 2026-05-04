@@ -18,7 +18,7 @@ Install Prometheus (metrics scraper and Mimir forwarder)
 ansible-playbook o11y/prometheus.yml
 ```
 
-Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) every 15 seconds and remote-write metrics to Mimir (`http://localhost:9009/api/v1/push`) with the required `X-Scope-OrgID: anonymous` header.
+Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) every 15 seconds and remote-write metrics to Mimir (`http://localhost:9009/api/v1/push`) with the required `X-Scope-OrgID: anonymous` header. Prometheus UI/API is available at `http://localhost:9090`. Local storage retention is **15 days**.
 
 ## grafana.yml
 
@@ -48,7 +48,7 @@ Install Grafana Alloy (log shipper)
 ansible-playbook o11y/alloy.yml
 ```
 
-Installs Alloy from the official Grafana APT repository and configures it to ship system logs to Loki (`http://localhost:3100`). Config is written to `/etc/alloy/config.alloy`.
+Installs Alloy from the official Grafana APT repository and configures it to ship system logs to Loki (`http://localhost:3100`). Config is written to `/etc/alloy/config.alloy`. The Alloy UI (component inspection, debugging) is available at `http://localhost:12345`.
 
 **Pipeline**
 
@@ -95,7 +95,24 @@ Install Grafana Mimir (metrics backend)
 ansible-playbook o11y/mimir.yml
 ```
 
-Installs Mimir from the official Grafana APT repository and configures it for single-node deployment (`replication_factor: 1`). Mimir listens on `http://localhost:9009` (HTTP) and `9095` (gRPC), and accepts Prometheus remote-write at `/api/v1/push`.
+Installs Mimir from the official Grafana APT repository and configures it for single-node deployment (`replication_factor: 1`). Mimir listens on `http://localhost:9009` (HTTP) and `9095` (gRPC), and accepts Prometheus remote-write at `/api/v1/push`. Metrics retention is **30 days**.
+
+---
+
+## Ports & Retention Reference
+
+| Service | Port | Protocol | Purpose | Retention |
+|---------|------|----------|---------|-----------|
+| Grafana | 3000 | HTTP | UI | — |
+| Loki | 3100 | HTTP | API / log push | — |
+| Tempo | 3200 | HTTP | API | — |
+| Alloy | 12345 | HTTP | UI / debug API | — |
+| Prometheus | 9090 | HTTP | UI / API | 15 days (local) |
+| Mimir | 9009 | HTTP | API / remote-write | 30 days |
+| Mimir | 9095 | gRPC | internal | — |
+| Loki | 9096 | gRPC | internal | — |
+| Tempo | 9097 | gRPC | internal | — |
+| Node Exporter | 9100 | HTTP | metrics endpoint | — |
 
 ---
 
