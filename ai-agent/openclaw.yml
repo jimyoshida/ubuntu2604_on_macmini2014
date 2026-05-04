@@ -1,17 +1,9 @@
 - name: Setup OpenClaw Agent
   hosts: localhost
   connection: local
-  vars_prompt:
-    - name: slack_app_token
-      prompt: "Enter Slack App Token (xapp-...): [Press Enter to skip]"
-      private: no
-      default: ""
-    - name: slack_bot_token
-      prompt: "Enter Slack Bot Token (xoxb-...): [Press Enter to skip]"
-      private: yes
-      default: ""
-
   vars:
+    slack_app_token: "{{ lookup('env', 'SLACK_APP_TOKEN') | default('') }}"
+    slack_bot_token: "{{ lookup('env', 'SLACK_BOT_TOKEN') | default('') }}"
     current_user: "{{ lookup('env', 'USER') }}"
     openclaw_config_dir: "/home/{{ current_user }}/.openclaw"
 

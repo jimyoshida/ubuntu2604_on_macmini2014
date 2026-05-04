@@ -4,12 +4,8 @@
   connection: local
   gather_facts: yes
 
-  vars_prompt:
-    - name: vnc_password
-      prompt: "Enter the password for VNC"
-      private: yes
-
   vars:
+    vnc_password: "{{ lookup('env', 'VNC_PASSWORD') | default('') }}"
     current_user: "{{ lookup('env', 'USER') }}"
     vnc_dir: "/home/{{ current_user }}/.vnc"
     systemd_user_dir: "/home/{{ current_user }}/.config/systemd/user"

@@ -5,17 +5,9 @@
   gather_facts: no
   become: yes
 
-  vars_prompt:
-    - name: samba_password
-      prompt: "Enter the password for Samba"
-      private: yes
-
-    - name: samba_interfaces
-      prompt: "Enter the interfaces for Samba to bind (space-separated, leave empty for all)"
-      default: ""
-      private: no
-
   vars:
+    samba_password: "{{ lookup('env', 'SAMBA_PASSWORD') | default('') }}"
+    samba_interfaces: "{{ lookup('env', 'SAMBA_INTERFACES') | default('') }}"
     target_user: "{{ lookup('env', 'USER') }}"
 
   tasks:

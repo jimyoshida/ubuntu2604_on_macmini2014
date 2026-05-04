@@ -5,18 +5,9 @@
   gather_facts: yes
   become: yes
 
-  vars_prompt:
-    - name: hostname
-      prompt: "Please enter the hostname"
-      default: "ubuntu-vm.local"
-      private: no
-
-    - name: avahi_interfaces
-      prompt: "Enter the interfaces for Avahi to allow (comma-separated, leave empty for all)"
-      default: ""
-      private: no
-
   vars:
+    hostname: "{{ lookup('env', 'HOSTNAME') | default('ubuntu-vm.local') }}"
+    avahi_interfaces: "{{ lookup('env', 'AVAHI_INTERFACES') | default('') }}"
     target_user: "{{ lookup('env', 'USER') }}"
 
   tasks:
