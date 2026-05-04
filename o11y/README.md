@@ -67,6 +67,7 @@ The source is the systemd journal only. File sources (`/var/log/syslog`, `auth.l
 |---|---|---|
 | `job` | static | `journal` |
 | `unit` | `_SYSTEMD_UNIT` | `sshd.service` |
+| `user_unit` | `_SYSTEMD_USER_UNIT` | `openclaw-gateway.service` |
 | `transport` | `_TRANSPORT` | `journal`, `stdout`, `syslog`, `kernel` |
 | `app` | `SYSLOG_IDENTIFIER` (`__journal__syslog_identifier`) | `sshd` |
 | `service_name` | auto-detected by Loki from `app` (falls back to `job`) | `sshd` |
