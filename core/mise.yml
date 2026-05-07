@@ -50,10 +50,3 @@
         block: |
           eval "$(mise activate bash)"
 
-    - name: 7. Install Node.js LTS via mise
-      shell: |
-        eval "$(mise activate bash)"
-        mise use --global node@lts
-      args:
-        executable: /bin/bash
-        creates: ~/.local/share/mise/installs/node

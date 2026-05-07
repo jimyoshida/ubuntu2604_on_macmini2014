@@ -129,6 +129,23 @@ After installation, use Homebrew to install additional tools:
 - kind (Kubernetes in Docker)
 - K9s, KDash
 
+## nodejs.yml
+
+Install Node.js LTS system-wide (via NodeSource)
+
+```bash
+ansible-playbook core/nodejs.yml
+```
+
+Installs Node.js LTS via the official NodeSource APT repository. Required for OpenClaw.
+
+Common commands:
+```bash
+node --version          # Show Node.js version
+npm --version           # Show npm version
+npm install -g <pkg>    # Install a global package
+```
+
 ## mise.yml
 
 Install mise (polyglot runtime version manager)
@@ -137,14 +154,13 @@ Install mise (polyglot runtime version manager)
 ansible-playbook core/mise.yml
 ```
 
-Installs mise via the official APT repository and installs Node.js LTS. Required for OpenClaw.
+Installs mise via the official APT repository for managing language runtimes (Python, Ruby, etc.).
 
 Common mise commands:
 ```bash
 mise ls                        # List installed runtimes
-mise use --global node@lts     # Install and set Node.js LTS globally
-mise use --global node@22      # Install and set a specific version
-mise ls-remote node            # List available Node.js versions
+mise use --global python@3.12  # Install and set Python globally
+mise ls-remote python          # List available Python versions
 ```
 
 ## golang.yml

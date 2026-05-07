@@ -1,0 +1,52 @@
+---
+- name: Install Node.js LTS (via NodeSource)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Run NodeSource LTS setup script
+      become: yes
+      shell: curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.list
+
+    - name: 3. Install Node.js
+      become: yes
+      apt:
+        name: nodejs
+        state: present
+        update_cache: yes
+
+    - name: 4. Verify Node.js installation
+      command: node --version
+      register: node_version_output
+      changed_when: false
+
+    - name: 5. Verify npm installation
+      command: npm --version
+      register: npm_version_output
+      changed_when: false
+
+    - name: 6. Print installed versions and instructions
+      debug:
+        msg:
+          - "Node.js version: {{ node_version_output.stdout }}"
+          - "npm version:     {{ npm_version_output.stdout }}"
+          - ""
+          - "Node.js has been installed system-wide via NodeSource."
+          - ""
+          - "Common commands:"
+          - "  node --version          - Show Node.js version"
+          - "  npm --version           - Show npm version"
+          - "  npm install -g <pkg>    - Install a global package"
+          - "  npm install             - Install project dependencies"
+          - "  node <file.js>          - Run a Node.js script"
