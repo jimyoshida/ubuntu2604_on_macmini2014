@@ -46,6 +46,7 @@
           - git
           - macfanctld
           - lm-sensors
+          - avahi-utils
         state: present
         update_cache: yes
 

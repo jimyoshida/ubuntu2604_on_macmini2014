@@ -27,6 +27,15 @@ This playbook configures:
 | `HOSTNAME` | `ubuntu-vm.local` | Hostname to set on the machine |
 | `AVAHI_INTERFACES` | *(all interfaces)* | Comma-separated list of interfaces for Avahi mDNS |
 
+Also installs `avahi-utils`. Useful commands:
+
+```bash
+avahi-browse -a -t                          # Discover all mDNS services on the LAN (one-shot)
+avahi-browse _ssh._tcp -t                   # Find SSH-advertised hosts
+avahi-resolve-host-name hostname.local      # Resolve a .local hostname to IP
+avahi-resolve-address 192.168.x.x          # Reverse-resolve IP to .local name
+```
+
 ## samba.yml
 
 Samba file sharing setup
