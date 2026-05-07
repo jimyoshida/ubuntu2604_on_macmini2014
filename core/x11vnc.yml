@@ -11,6 +11,12 @@
     systemd_user_dir: "/home/{{ current_user }}/.config/systemd/user"
 
   tasks:
+    - name: 0. Check required variables
+      assert:
+        that:
+          - vnc_password != ""
+        fail_msg: "VNC_PASSWORD must be set"
+
     - name: 1. Stop old system-level x11vnc service (if exists)
       become: yes
       systemd:

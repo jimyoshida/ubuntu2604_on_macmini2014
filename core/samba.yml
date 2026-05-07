@@ -11,6 +11,12 @@
     target_user: "{{ lookup('env', 'USER') }}"
 
   tasks:
+    - name: 0. Check required variables
+      assert:
+        that:
+          - samba_password != ""
+        fail_msg: "SAMBA_PASSWORD must be set"
+
     - name: 1. Install Samba
       apt:
         name: samba

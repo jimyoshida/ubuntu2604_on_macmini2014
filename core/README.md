@@ -20,6 +20,13 @@ This playbook configures:
 - Git branch display in bash prompt
 - `s` alias for `systemctl`
 
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOSTNAME` | `ubuntu-vm.local` | Hostname to set on the machine |
+| `AVAHI_INTERFACES` | *(all interfaces)* | Comma-separated list of interfaces for Avahi mDNS |
+
 ## samba.yml
 
 Samba file sharing setup
@@ -31,6 +38,13 @@ ansible-playbook core/samba.yml
 This playbook configures:
 - Samba with home directory sharing
 - Optional interface binding
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SAMBA_PASSWORD` | **required** | Samba password for the user |
+| `SAMBA_INTERFACES` | *(all interfaces)* | Space-separated list of interfaces to bind Samba to |
 
 ## podman.yml
 
@@ -87,6 +101,12 @@ Test manually (without systemd):
 ```bash
 ~/.vnc/start-x11vnc.sh
 ```
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `VNC_PASSWORD` | **required** | VNC password written to `~/.vnc/passwd` |
 
 ## homebrew.yml
 
