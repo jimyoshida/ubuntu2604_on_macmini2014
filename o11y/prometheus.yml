@@ -1,4 +1,6 @@
 ---
+# DEPENDENCY: This playbook configures Prometheus with remote_write to Mimir.
+# Run mimir.yml BEFORE this playbook to avoid restart failures.
 - name: Install Prometheus
   hosts: localhost
   connection: local
@@ -6,6 +8,17 @@
   become: yes
 
   tasks:
+    - name: 0. Check if Mimir is running (required for remote_write)
+      systemd:
+        name: mimir
+      register: mimir_status
+      failed_when: false
+
+    - name: 0a. Warn if Mimir is not running
+      debug:
+        msg: "WARNING: Mimir is not running. Prometheus remote_write will fail. Run mimir.yml first."
+      when: mimir_status.status.ActiveState != "active"
+
     - name: 1. Install Prometheus
       apt:
         name: prometheus
@@ -26,8 +39,6 @@
 
           remote_write:
             - url: http://localhost:9009/api/v1/push
-              headers:
-                X-Scope-OrgID: anonymous
         owner: prometheus
         group: prometheus
         mode: '0644'

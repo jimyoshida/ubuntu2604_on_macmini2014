@@ -1,4 +1,6 @@
 ---
+# DEPENDENCY: This playbook configures Alloy to ship logs to Loki.
+# Run loki.yml BEFORE this playbook to avoid issues.
 - name: Install Grafana Alloy (log shipper)
   hosts: localhost
   connection: local
@@ -6,6 +8,17 @@
   become: yes
 
   tasks:
+    - name: 0. Check if Loki is running (required for log shipping)
+      systemd:
+        name: loki
+      register: loki_status
+      failed_when: false
+
+    - name: 0a. Warn if Loki is not running
+      debug:
+        msg: "WARNING: Loki is not running. Alloy will fail to ship logs. Run loki.yml first."
+      when: loki_status.status.ActiveState != "active"
+
     - name: 1. Install prerequisites
       apt:
         name:

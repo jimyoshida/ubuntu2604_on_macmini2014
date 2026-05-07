@@ -43,6 +43,12 @@
       copy:
         dest: /etc/mimir/config.yml
         content: |
+          # Run all components in single process (monolithic mode)
+          target: all
+
+          # Disable multitenancy (no X-Scope-OrgID header required)
+          multitenancy_enabled: false
+
           server:
             http_listen_port: 9009
             grpc_listen_port: 9095
@@ -53,11 +59,18 @@
               filesystem:
                 dir: /var/lib/mimir
 
+          # Single-node ring configuration
           ingester:
             ring:
               replication_factor: 1
+              kvstore:
+                store: memberlist
+
+          memberlist:
+            join_members: ['127.0.0.1']
 
           blocks_storage:
+            backend: filesystem
             filesystem:
               dir: /var/lib/mimir/blocks
 
@@ -68,6 +81,7 @@
             compactor_blocks_retention_period: 30d
 
           ruler_storage:
+            backend: filesystem
             filesystem:
               dir: /var/lib/mimir/rules
         owner: mimir

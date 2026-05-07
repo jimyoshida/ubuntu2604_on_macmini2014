@@ -14,11 +14,15 @@ Installs `prometheus-node-exporter` from the Ubuntu apt repository. Node Exporte
 
 Install Prometheus (metrics scraper and Mimir forwarder)
 
+**⚠️ DEPENDENCY:** Run `mimir.yml` BEFORE this playbook. Prometheus is configured with remote_write to Mimir, and restarting Prometheus without Mimir running will cause the service to hang.
+
 ```bash
 ansible-playbook o11y/prometheus.yml
 ```
 
-Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) every 15 seconds and remote-write metrics to Mimir (`http://localhost:9009/api/v1/push`) with the required `X-Scope-OrgID: anonymous` header. Prometheus UI/API is available at `http://localhost:9090`. Local storage retention is **15 days**.
+Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) every 15 seconds and remote-write metrics to Mimir (`http://localhost:9009/api/v1/push`). Prometheus UI/API is available at `http://localhost:9090`. Local storage retention is **15 days**.
+
+> **Note:** No `X-Scope-OrgID` header is needed because Mimir runs with `multitenancy_enabled: false`.
 
 ## grafana.yml
 
@@ -43,6 +47,8 @@ Installs Loki from the official Grafana APT repository. Loki listens on `http://
 ## alloy.yml
 
 Install Grafana Alloy (log shipper)
+
+**⚠️ DEPENDENCY:** Run `loki.yml` BEFORE this playbook. Alloy is configured to ship logs to Loki.
 
 ```bash
 ansible-playbook o11y/alloy.yml
@@ -97,7 +103,7 @@ Install Grafana Mimir (metrics backend)
 ansible-playbook o11y/mimir.yml
 ```
 
-Installs Mimir from the official Grafana APT repository and configures it for single-node deployment (`replication_factor: 1`). Mimir listens on `http://localhost:9009` (HTTP) and `9095` (gRPC), and accepts Prometheus remote-write at `/api/v1/push`. Metrics retention is **30 days**.
+Installs Mimir from the official Grafana APT repository and configures it for single-node deployment (`target: all`, `replication_factor: 1`, `multitenancy_enabled: false`). Mimir listens on `http://localhost:9009` (HTTP) and `9095` (gRPC), and accepts Prometheus remote-write at `/api/v1/push`. Metrics retention is **30 days**.
 
 ---
 
@@ -135,10 +141,7 @@ ansible-playbook o11y/prometheus.yml
 2. Go to **Connections → Data Sources → Add new data source**
 3. Select **Prometheus**
 4. Set URL to `http://localhost:9009/prometheus`
-5. Expand **Custom HTTP Headers**, click **Add header**:
-   - **Header:** `X-Scope-OrgID`
-   - **Value:** `anonymous`
-6. Click **Save & test**
+5. Click **Save & test**
 
 **2. Import the Node Exporter Full dashboard**
 
