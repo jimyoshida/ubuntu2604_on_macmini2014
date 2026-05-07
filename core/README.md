@@ -63,6 +63,8 @@ VNC server with virtual framebuffer (Xvfb) setup (optional)
 ansible-playbook core/x11vnc.yml
 ```
 
+Unlike Mac screen sharing, this does **not** connect to the Ubuntu login screen or physical display. It creates an independent virtual framebuffer (Xvfb) that exists only in memory.
+
 Configures x11vnc as a user-level systemd service:
 - Runs as your user (not root) for better security
 - VNC password stored in `~/.vnc/passwd`

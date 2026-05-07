@@ -25,28 +25,35 @@
           - x11-xserver-utils
           - x11-apps
           - xvfb
-          - openbox
+          - xfce4
+          - xfce4-terminal
           - xauth
         state: present
         update_cache: yes
 
-    - name: 3. Create VNC directory
+    - name: 3. Set xfce4-terminal as default terminal emulator
+      become: yes
+      shell: |
+        update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/xfce4-terminal 50
+        update-alternatives --set x-terminal-emulator /usr/bin/xfce4-terminal
+
+    - name: 4. Create VNC directory
       file:
         path: "{{ vnc_dir }}"
         state: directory
         mode: '0700'
 
-    - name: 4. Create VNC password file
+    - name: 5. Create VNC password file
       shell: "x11vnc -storepasswd {{ vnc_password }} {{ vnc_dir }}/passwd"
       args:
         creates: "{{ vnc_dir }}/passwd"
 
-    - name: 5. Set permissions for VNC password file
+    - name: 6. Set permissions for VNC password file
       file:
         path: "{{ vnc_dir }}/passwd"
         mode: '0600'
 
-    - name: 6. Create VNC startup script
+    - name: 7. Create VNC startup script
       copy:
         dest: "/home/{{ current_user }}/.vnc/start-x11vnc.sh"
         mode: '0755'
@@ -82,7 +89,7 @@
 
           systemctl --user import-environment DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 
-          DISPLAY="${DISPLAY}" XAUTHORITY="${AUTH_FILE}" /usr/bin/openbox &>/dev/null &
+          DISPLAY="${DISPLAY}" XAUTHORITY="${AUTH_FILE}" startxfce4 &>/dev/null &
           disown
 
           exec /usr/bin/x11vnc \
@@ -97,13 +104,13 @@
             -shared \
             -xkb
 
-    - name: 7. Create systemd user directory
+    - name: 8. Create systemd user directory
       file:
         path: "{{ systemd_user_dir }}"
         state: directory
         mode: '0755'
 
-    - name: 8. Create systemd user service file for x11vnc
+    - name: 9. Create systemd user service file for x11vnc
       copy:
         dest: "{{ systemd_user_dir }}/x11vnc.service"
         mode: '0644'
@@ -121,33 +128,32 @@
           [Install]
           WantedBy=default.target
 
-    - name: 9. Add DISPLAY and XAUTHORITY to .bashrc
+    - name: 10. Add DISPLAY and XAUTHORITY to .bashrc
       blockinfile:
         path: "/home/{{ current_user }}/.bashrc"
-        marker: "# {mark} ANSIBLE MANAGED BLOCK: openbox-display"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: xvfb-display"
         block: |
           export DISPLAY=:1
           export XAUTHORITY="${HOME}/.vnc/Xvfb-auth"
         create: yes
 
-    - name: 10. Enable systemd lingering
+    - name: 11. Enable systemd lingering
       become: yes
       command: loginctl enable-linger {{ current_user }}
       changed_when: false
 
-    - name: 11. Reload systemd user daemon
+    - name: 12. Reload systemd user daemon
       systemd:
         daemon_reload: yes
         scope: user
 
-    - name: 12. Enable and start x11vnc user service
+    - name: 13. Enable x11vnc user service
       systemd:
         name: x11vnc
         scope: user
         enabled: yes
-        state: started
 
-    - name: 13. Print instructions
+    - name: 14. Print instructions
       debug:
         msg:
           - "Virtual framebuffer (Xvfb) created and served over VNC (x11vnc) — setup complete."
