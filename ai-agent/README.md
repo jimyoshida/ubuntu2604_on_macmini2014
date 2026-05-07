@@ -91,6 +91,7 @@ ansible-playbook ai-agent/claude-code.yml
 Installs the Claude Code CLI tool using the official installation script. The playbook:
 - Installs prerequisites (curl, ca-certificates)
 - Downloads and runs the official Claude Code installer
+- Ensures `~/.local/bin` is added to PATH in both `.bashrc` and `.profile`
 - Respects `HTTPS_PROXY` environment variable
 - Verifies installation and displays version
 
