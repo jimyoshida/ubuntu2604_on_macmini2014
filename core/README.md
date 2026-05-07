@@ -55,33 +55,6 @@ This playbook configures:
 | `SAMBA_PASSWORD` | **required** | Samba password for the user |
 | `SAMBA_INTERFACES` | *(all interfaces)* | Space-separated list of interfaces to bind Samba to |
 
-## podman.yml
-
-Podman container runtime setup
-
-```bash
-ansible-playbook core/podman.yml
-```
-
-This playbook configures:
-- Podman and podman-compose from the Ubuntu default repository
-- Loginctl lingering for rootless containers (survive logout)
-- X server access for containers
-
-## docker.yml
-
-Docker Engine setup
-
-```bash
-ansible-playbook core/docker.yml
-```
-
-This playbook configures:
-- Docker GPG key and repository
-- Docker Engine, CLI, and containerd
-- Docker buildx plugin and docker-compose plugin
-- User group permissions for non-root Docker access
-
 ## x11vnc.yml
 
 VNC server setup (optional)

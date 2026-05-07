@@ -25,8 +25,8 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 
 | Directory | Description |
 |-----------|-------------|
-| [core/](core/README.md) | Core system setup (SSH, Samba, Docker, Podman, runtimes) |
+| [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
+| [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, Krew) |
 | [cloud-cli/](cloud-cli/README.md) | Cloud provider CLI tools (AWS, Azure, GCP, GitHub, GitLab) |
-| [k8s/](k8s/README.md) | Kubernetes tools (kubectl, Helm, Krew) |
 | [o11y/](o11y/README.md) | Observability tools (Grafana, Loki, Tempo, Mimir) |
 | [ai-agent/](ai-agent/README.md) | AI agent tools (Claude Code, OpenClaw) |
