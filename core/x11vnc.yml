@@ -1,5 +1,5 @@
 ---
-- name: x11vnc VNC Server Setup
+- name: Create virtual framebuffer (Xvfb) and serve it over VNC (x11vnc)
   hosts: localhost
   connection: local
   gather_facts: yes
@@ -11,82 +11,42 @@
     systemd_user_dir: "/home/{{ current_user }}/.config/systemd/user"
 
   tasks:
-    - name: 0. Check required variables
+    - name: 1. Check required variables
       assert:
         that:
           - vnc_password != ""
         fail_msg: "VNC_PASSWORD must be set"
 
-    - name: 1. Stop old system-level x11vnc service (if exists)
-      become: yes
-      systemd:
-        name: x11vnc
-        state: stopped
-      ignore_errors: yes
-
-    - name: 2. Disable old system-level x11vnc service (if exists)
-      become: yes
-      systemd:
-        name: x11vnc
-        enabled: no
-      ignore_errors: yes
-
-    - name: 3. Remove old system-level service file (if exists)
-      become: yes
-      file:
-        path: /etc/systemd/system/x11vnc.service
-        state: absent
-      ignore_errors: yes
-
-    - name: 4. Remove old system-level startup script (if exists)
-      become: yes
-      file:
-        path: /usr/local/bin/start-x11vnc.sh
-        state: absent
-      ignore_errors: yes
-
-    - name: 5. Remove old system-level password file (if exists)
-      become: yes
-      file:
-        path: /etc/x11vnc.pass
-        state: absent
-      ignore_errors: yes
-
-    - name: 5a. Reload systemd daemon after cleanup
-      become: yes
-      systemd:
-        daemon_reload: yes
-      ignore_errors: yes
-
-    - name: 6. Install x11vnc and required packages
+    - name: 2. Install x11vnc and required packages
       become: yes
       apt:
         name:
           - x11vnc
           - x11-xserver-utils
+          - x11-apps
           - xvfb
           - openbox
           - xauth
         state: present
         update_cache: yes
 
-    - name: 7. Create VNC directory
+    - name: 3. Create VNC directory
       file:
         path: "{{ vnc_dir }}"
         state: directory
         mode: '0700'
 
-    - name: 8. Create VNC password file
+    - name: 4. Create VNC password file
       shell: "x11vnc -storepasswd {{ vnc_password }} {{ vnc_dir }}/passwd"
       args:
         creates: "{{ vnc_dir }}/passwd"
 
-    - name: 9. Set permissions for VNC password file
+    - name: 5. Set permissions for VNC password file
       file:
         path: "{{ vnc_dir }}/passwd"
         mode: '0600'
 
-    - name: 10. Create VNC startup script
+    - name: 6. Create VNC startup script
       copy:
         dest: "/home/{{ current_user }}/.vnc/start-x11vnc.sh"
         mode: '0755'
@@ -118,6 +78,9 @@
           fi
 
           export DISPLAY XAUTHORITY="${AUTH_FILE}"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+
+          systemctl --user import-environment DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 
           DISPLAY="${DISPLAY}" XAUTHORITY="${AUTH_FILE}" /usr/bin/openbox &>/dev/null &
           disown
@@ -130,17 +93,17 @@
             -noxdamage \
             -repeat \
             -rfbauth "${HOME}/.vnc/passwd" \
-            -rfbport 5900 \
+            -rfbport 5901 \
             -shared \
             -xkb
 
-    - name: 11. Create systemd user directory
+    - name: 7. Create systemd user directory
       file:
         path: "{{ systemd_user_dir }}"
         state: directory
         mode: '0755'
 
-    - name: 12. Create systemd user service file for x11vnc
+    - name: 8. Create systemd user service file for x11vnc
       copy:
         dest: "{{ systemd_user_dir }}/x11vnc.service"
         mode: '0644'
@@ -158,33 +121,42 @@
           [Install]
           WantedBy=default.target
 
-    - name: 13. Enable systemd lingering
+    - name: 9. Add DISPLAY and XAUTHORITY to .bashrc
+      blockinfile:
+        path: "/home/{{ current_user }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: openbox-display"
+        block: |
+          export DISPLAY=:1
+          export XAUTHORITY="${HOME}/.vnc/Xvfb-auth"
+        create: yes
+
+    - name: 10. Enable systemd lingering
       become: yes
       command: loginctl enable-linger {{ current_user }}
       changed_when: false
 
-    - name: 14. Reload systemd user daemon
+    - name: 11. Reload systemd user daemon
       systemd:
         daemon_reload: yes
         scope: user
 
-    - name: 15. Enable and start x11vnc user service
+    - name: 12. Enable and start x11vnc user service
       systemd:
         name: x11vnc
         scope: user
         enabled: yes
         state: started
 
-    - name: 16. Print instructions
+    - name: 13. Print instructions
       debug:
         msg:
-          - "x11vnc VNC server setup is complete."
+          - "Virtual framebuffer (Xvfb) created and served over VNC (x11vnc) — setup complete."
           - ""
           - "Running as user: {{ current_user }}"
           - "VNC password stored in: {{ vnc_dir }}/passwd"
           - "Startup script: {{ vnc_dir }}/start-x11vnc.sh"
           - "Service file: {{ systemd_user_dir }}/x11vnc.service"
-          - "VNC port: 5900"
+          - "VNC port: 5901"
           - ""
           - "Service management (user-level daemon):"
           - "  Start:   systemctl --user start x11vnc"
@@ -207,4 +179,4 @@
           - "  {{ vnc_dir }}/start-x11vnc.sh"
           - ""
           - "To connect:"
-          - "  Use any VNC client to connect to <this-machine-ip>:5900"
+          - "  Use any VNC client to connect to <this-machine-ip>:5901"

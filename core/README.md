@@ -57,7 +57,7 @@ This playbook configures:
 
 ## x11vnc.yml
 
-VNC server setup (optional)
+VNC server with virtual framebuffer (Xvfb) setup (optional)
 
 ```bash
 ansible-playbook core/x11vnc.yml
@@ -83,6 +83,13 @@ Test manually (without systemd):
 ```bash
 ~/.vnc/start-x11vnc.sh
 ```
+
+Test the virtual display:
+```bash
+xcalc &
+```
+
+**Note:** Snap-based apps (e.g. Firefox) are slow to launch inside the Xvfb session due to snap confinement overhead. Prefer native `.deb` packages for apps you intend to run over VNC.
 
 **Environment variables:**
 
