@@ -9,40 +9,13 @@ ansible-playbook ai-agent/openclaw.yml
 ```
 
 **Prerequisites:**
-- Run `mise.yml` first to install Node.js LTS
-- Slack App Token and Bot Token (see below for setup instructions)
+- System-wide Node.js installed via apt: `sudo apt install nodejs npm`
+  - mise/nvm-managed Node.js will cause the playbook to fail
 
 This playbook:
 - Installs OpenClaw globally via npm (`npm install -g openclaw@latest`)
-- Creates environment file for Slack integration
+- Sets up shell completion (bash/zsh/fish)
 - **Does NOT automatically run onboarding** - manual steps required (see below)
-
-**How to obtain Slack tokens:**
-
-1. **Create a Slack App:**
-   - Go to https://api.slack.com/apps
-   - Click **"Create New App"** → **"From scratch"**
-   - Name it (e.g., "OpenClaw") and select your workspace
-
-2. **Enable Socket Mode (for App Token):**
-   - Go to **"Socket Mode"** under Settings
-   - Enable Socket Mode
-   - Create app-level token with scope: `connections:write`
-   - Copy the token → this is your **`SLACK_APP_TOKEN`** (starts with `xapp-`)
-
-3. **Configure Bot Token:**
-   - Go to **"OAuth & Permissions"** under Features
-   - Add **"Bot Token Scopes"**:
-     - `chat:write`, `files:write`
-     - `channels:history`, `groups:history`, `im:history`, `mpim:history`
-     - `app_mentions:read`
-   - Click **"Install to Workspace"** and authorize
-   - Copy **"Bot User OAuth Token"** → this is your **`SLACK_BOT_TOKEN`** (starts with `xoxb-`)
-
-4. **Enable Event Subscriptions:**
-   - Go to **"Event Subscriptions"** under Features
-   - Toggle **"Enable Events"** to On
-   - Subscribe to bot events: `message.channels`, `message.groups`, `message.im`, `message.mpim`, `app_mention`
 
 **Manual Onboarding Steps (Required):**
 
