@@ -48,9 +48,41 @@
         state: directory
         mode: '0755'
 
-    - name: 4. Print instructions
+    - name: 4. Set up shell completion
       block:
-        - name: Print OpenClaw setup summary
+        - name: 4a. Check for bash config
+          stat:
+            path: "/home/{{ current_user }}/.bashrc"
+          register: bashrc_stat
+
+        - name: 4b. Check for zsh config
+          stat:
+            path: "/home/{{ current_user }}/.zshrc"
+          register: zshrc_stat
+
+        - name: 4c. Check for fish config
+          stat:
+            path: "/home/{{ current_user }}/.config/fish/config.fish"
+          register: fish_stat
+
+        - name: 4d. Install bash completion
+          command: openclaw completion --shell bash --install --yes
+          when: bashrc_stat.stat.exists
+          changed_when: true
+
+        - name: 4e. Install zsh completion
+          command: openclaw completion --shell zsh --install --yes
+          when: zshrc_stat.stat.exists
+          changed_when: true
+
+        - name: 4f. Install fish completion
+          command: openclaw completion --shell fish --install --yes
+          when: fish_stat.stat.exists
+          changed_when: true
+
+    - name: 5. Print instructions
+      block:
+        - name: 5a. Print OpenClaw setup summary
           debug:
             msg:
               - "OpenClaw setup is complete."
@@ -59,7 +91,7 @@
               - "Installation: npm global package (openclaw@latest)"
               - "Config directory: {{ openclaw_config_dir }}"
 
-        - name: Print onboarding instructions
+        - name: 5b. Print onboarding instructions
           debug:
             msg:
               - ""
@@ -76,7 +108,7 @@
               - "  To view logs: journalctl --user -u openclaw-gateway -f"
               - "  To stop: systemctl --user stop openclaw-gateway"
 
-        - name: Print final instructions
+        - name: 5c. Print final instructions
           debug:
             msg:
               - ""
