@@ -47,6 +47,18 @@ ansible-playbook container/helm.yml
 
 Includes bash completion.
 
+## kind.yml
+
+Install Kind (Kubernetes in Docker)
+
+```bash
+ansible-playbook container/kind.yml
+```
+
+Runs local Kubernetes clusters inside Docker containers. Includes bash completion.
+
+**Prerequisites:** Docker must be installed and the user added to the `docker` group (run `docker.yml` first).
+
 ## krew.yml
 
 Install Krew (kubectl plugin manager)
