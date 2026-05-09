@@ -8,13 +8,41 @@
     openclaw_config_dir: "/home/{{ current_user }}/.openclaw"
 
   tasks:
-    - name: 1. Check Node.js version
+    - name: 1. Check system-wide Node.js is installed via apt
+      command: dpkg -s nodejs
+      register: nodejs_dpkg
+      changed_when: false
+      ignore_errors: true
+
+    - name: 1a. Fail if Node.js is not installed as a system package
+      fail:
+        msg: >-
+          System-wide Node.js is not installed (openclaw requires it — mise/nvm-managed Node.js
+          causes version mismatch issues during npm global package updates).
+          Run: sudo apt install nodejs npm
+      when: nodejs_dpkg.rc != 0
+
+    - name: 1b. Resolve node binary path
+      command: which node
+      register: node_path
+      changed_when: false
+
+    - name: 1c. Fail if node in PATH is managed by mise or nvm
+      fail:
+        msg: >-
+          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by mise/nvm.
+          openclaw warns that this causes update timing issues.
+          Ensure /usr/bin/node takes precedence, or unset mise/nvm shims for this session.
+      when: "'/usr/' not in node_path.stdout"
+
+    - name: 1d. Show Node.js version
       command: node --version
       register: node_version
       changed_when: false
 
     - name: 2. Install OpenClaw globally via npm
       command: npm install -g openclaw@latest
+      become: true
 
     - name: 3. Create OpenClaw config directory
       file:
