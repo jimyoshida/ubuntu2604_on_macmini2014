@@ -87,13 +87,43 @@
           }
 
           loki.source.journal "journal" {
-            forward_to    = [loki.process.drop_journal_debug.receiver]
+            forward_to    = [loki.process.system_journal.receiver, loki.process.user_journal.receiver]
             relabel_rules = loki.relabel.journal_rules.rules
-            labels        = {job = "journal"}
           }
 
-          loki.process "drop_journal_debug" {
+          loki.process "system_journal" {
             forward_to = [loki.write.local.receiver]
+
+            stage.match {
+              selector = `{user_unit=""}`
+              action   = "keep"
+
+              stage.static_labels {
+                values = {job = "journal"}
+              }
+            }
+
+            stage.match {
+              selector = `{detected_level="debug"}`
+              action   = "drop"
+            }
+
+            stage.drop {
+              expression = `\blevel=debug\b`
+            }
+          }
+
+          loki.process "user_journal" {
+            forward_to = [loki.write.local.receiver]
+
+            stage.match {
+              selector = `{user_unit!=""}`
+              action   = "keep"
+
+              stage.static_labels {
+                values = {job = "user_journal"}
+              }
+            }
 
             stage.match {
               selector = `{detected_level="debug"}`
