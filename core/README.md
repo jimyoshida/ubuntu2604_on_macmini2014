@@ -130,7 +130,6 @@ ansible-playbook core/homebrew.yml
 ```
 
 After installation, use Homebrew to install additional tools:
-- kind (Kubernetes in Docker)
 - K9s, KDash
 
 ## nodejs.yml

@@ -60,9 +60,10 @@ Installs Alloy from the official Grafana APT repository and configures it to shi
 
 ```
 loki.source.journal
-  → loki.relabel   (promote __journal_* fields to labels)
-  → loki.process   (drop debug logs)
-  → loki.write     (http://localhost:3100)
+  → loki.relabel          (promote __journal_* fields to labels)
+  ├→ loki.process "system_journal"   (user_unit="",  job="journal",       drop debug)
+  └→ loki.process "user_journal"     (user_unit!="", job="user_journal",  drop debug)
+       └→ loki.write      (http://localhost:3100)
 ```
 
 The source is the systemd journal only. File sources (`/var/log/syslog`, `auth.log`, `kern.log`) are not used because `ForwardToSyslog=yes` in journald makes them duplicates of the journal.
@@ -71,11 +72,11 @@ The source is the systemd journal only. File sources (`/var/log/syslog`, `auth.l
 
 | Label | Source field | Example |
 |---|---|---|
-| `job` | static | `journal` |
+| `job` | static — `"journal"` for system units, `"user_journal"` for user units | `journal` |
 | `unit` | `_SYSTEMD_UNIT` | `sshd.service` |
 | `user_unit` | `_SYSTEMD_USER_UNIT` | `openclaw-gateway.service` |
 | `transport` | `_TRANSPORT` | `journal`, `stdout`, `syslog`, `kernel` |
-| `app` | `SYSLOG_IDENTIFIER` (`__journal__syslog_identifier`) | `sshd` |
+| `app` | `SYSLOG_IDENTIFIER` (`__journal_syslog_identifier`) | `sshd` |
 | `service_name` | auto-detected by Loki from `app` (falls back to `job`) | `sshd` |
 
 **Filters**

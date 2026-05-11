@@ -30,12 +30,12 @@ UI is available at `http://127.0.0.1:8200/ui`.
 > **Note:** TLS is disabled in the default config. For production use, configure a certificate in `/etc/vault.d/vault.hcl` and remove `tls_disable = 1`.
 
 
-### vscode.yml
-Installs Visual Studio Code from the official Microsoft repository.
+## vscode.yml
 
-**Usage:**
+Install Visual Studio Code
+
 ```bash
-ansible-playbook tools/vscode.yml --connection=local
+ansible-playbook tool/vscode.yml
 ```
 
 **What it does:**
