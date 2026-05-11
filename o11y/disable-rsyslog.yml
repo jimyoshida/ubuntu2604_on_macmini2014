@@ -1,0 +1,55 @@
+---
+# Stops rsyslog from duplicating journal logs to /var/log/syslog.
+# With alloy.yml shipping the journal directly to Loki, the legacy
+# journald -> syslog.socket -> rsyslog -> /var/log/syslog path is redundant.
+- name: Disable rsyslog and journal-to-syslog forwarding
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Check whether rsyslog is installed
+      stat:
+        path: /usr/sbin/rsyslogd
+      register: rsyslogd_bin
+
+    - name: 2. Stop and disable rsyslog.service
+      systemd:
+        name: rsyslog.service
+        state: stopped
+        enabled: no
+      when: rsyslogd_bin.stat.exists
+
+    - name: 3. Stop syslog.socket
+      systemd:
+        name: syslog.socket
+        state: stopped
+
+    - name: 4. Mask syslog.socket (static unit cannot be disabled)
+      systemd:
+        name: syslog.socket
+        masked: yes
+
+    # /var/log/cloud-init.log is written by cloud-init directly, not rsyslog,
+    # and is intentionally excluded from the cleanup below.
+    - name: 5. Find stale rsyslog log files
+      find:
+        paths: /var/log
+        patterns:
+          - "syslog"
+          - "syslog.*"
+          - "auth.log"
+          - "auth.log.*"
+          - "kern.log"
+          - "kern.log.*"
+        file_type: file
+      register: stale_syslog_files
+
+    - name: 6. Delete stale rsyslog log files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ stale_syslog_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
