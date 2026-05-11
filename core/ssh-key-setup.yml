@@ -1,0 +1,82 @@
+---
+- name: SSH Public Key Authentication Setup
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: no
+
+  vars:
+    target_user: "{{ lookup('env', 'USER') }}"
+    ssh_dir: "{{ lookup('env', 'HOME') }}/.ssh"
+
+  tasks:
+    - name: 1. Ensure .ssh directory exists
+      file:
+        path: "{{ ssh_dir }}"
+        state: directory
+        mode: '0700'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+
+    - name: 2. Check if id_rsa exists
+      stat:
+        path: "{{ ssh_dir }}/id_rsa"
+      register: id_rsa_stat
+
+    - name: 3. Set proper permissions on id_rsa (private key)
+      file:
+        path: "{{ ssh_dir }}/id_rsa"
+        mode: '0600'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+      when: id_rsa_stat.stat.exists
+
+    - name: 4. Check if id_rsa.pub exists
+      stat:
+        path: "{{ ssh_dir }}/id_rsa.pub"
+      register: id_rsa_pub_stat
+
+    - name: 5. Set proper permissions on id_rsa.pub (public key)
+      file:
+        path: "{{ ssh_dir }}/id_rsa.pub"
+        mode: '0644'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+      when: id_rsa_pub_stat.stat.exists
+
+    - name: 6. Ensure authorized_keys file exists
+      file:
+        path: "{{ ssh_dir }}/authorized_keys"
+        state: touch
+        mode: '0600'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        modification_time: preserve
+        access_time: preserve
+
+    - name: 7. Read public key content
+      slurp:
+        src: "{{ ssh_dir }}/id_rsa.pub"
+      register: public_key_content
+      when: id_rsa_pub_stat.stat.exists
+
+    - name: 8. Add public key to authorized_keys
+      lineinfile:
+        path: "{{ ssh_dir }}/authorized_keys"
+        line: "{{ public_key_content['content'] | b64decode | trim }}"
+        state: present
+        create: yes
+        mode: '0600'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+      when: id_rsa_pub_stat.stat.exists
+
+    - name: 9. Display status
+      debug:
+        msg: "SSH public key authentication setup completed for {{ target_user }}"
+      when: id_rsa_pub_stat.stat.exists
+
+    - name: 10. Warn if keys not found
+      debug:
+        msg: "WARNING: id_rsa and/or id_rsa.pub not found in {{ ssh_dir }}. Please upload the keys first."
+      when: not id_rsa_stat.stat.exists or not id_rsa_pub_stat.stat.exists

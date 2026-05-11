@@ -24,7 +24,7 @@ This playbook configures:
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOSTNAME` | `ubuntu-vm.local` | Hostname to set on the machine |
+| `HOSTNAME` | **required** | Hostname to set on the machine |
 | `AVAHI_INTERFACES` | *(all interfaces)* | Comma-separated list of interfaces for Avahi mDNS |
 
 Also installs `avahi-utils`. Useful commands:
@@ -36,17 +36,39 @@ avahi-resolve-host-name hostname.local      # Resolve a .local hostname to IP
 avahi-resolve-address 192.168.x.x          # Reverse-resolve IP to .local name
 ```
 
+## ssh-key-setup.yml
+
+SSH public key authentication setup
+
+```bash
+ansible-playbook core/ssh-key-setup.yml
+```
+
+This playbook configures SSH key permissions and authorized_keys after `id_rsa` and `id_rsa.pub` have been uploaded to the machine. It:
+- Sets proper permissions on `.ssh/` directory (700)
+- Sets proper permissions on `id_rsa` private key (600)
+- Sets proper permissions on `id_rsa.pub` public key (644)
+- Creates and configures `authorized_keys` file (600)
+- Appends public key to authorized_keys if not already present
+- Validates key files exist before processing
+
+Run this playbook after `agent-base.yml` to complete SSH setup for remote access.
+
 ## samba.yml
 
-Samba file sharing setup
+Samba file sharing setup (optional)
 
 ```bash
 ansible-playbook core/samba.yml
 ```
 
-This playbook configures:
-- Samba with home directory sharing
-- Optional interface binding
+Only needed if you require Windows file sharing (SMB/CIFS) for home directory access over the network. Not required for typical development workflows.
+
+Configures Samba with home directory sharing:
+- Installs and enables Samba (smbd, nmbd)
+- Sets Samba password for the current user
+- Creates [homes] share with secure permissions (0700)
+- Optional interface binding for multi-network setups
 
 **Environment variables:**
 

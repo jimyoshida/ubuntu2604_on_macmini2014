@@ -37,23 +37,63 @@
         update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/xfce4-terminal 50
         update-alternatives --set x-terminal-emulator /usr/bin/xfce4-terminal
 
-    - name: 4. Create VNC directory
+    - name: 4. Disable GDM and set multi-user target (prevents I/O conflicts)
+      become: yes
+      block:
+        - name: Stop GDM service
+          systemd:
+            name: gdm
+            state: stopped
+          ignore_errors: yes
+
+        - name: Disable GDM service
+          systemd:
+            name: gdm
+            enabled: no
+          ignore_errors: yes
+
+        - name: Set default target to multi-user (text mode)
+          command: systemctl set-default multi-user.target
+
+    - name: 5. Disable light-locker (causes crashes in virtual display)
+      block:
+        - name: Create autostart directory
+          file:
+            path: "/home/{{ current_user }}/.config/autostart"
+            state: directory
+            mode: '0755'
+
+        - name: Copy light-locker desktop file
+          copy:
+            src: /etc/xdg/autostart/light-locker.desktop
+            dest: "/home/{{ current_user }}/.config/autostart/light-locker.desktop"
+            mode: '0644'
+            remote_src: yes
+          ignore_errors: yes
+
+        - name: Disable light-locker autostart
+          lineinfile:
+            path: "/home/{{ current_user }}/.config/autostart/light-locker.desktop"
+            line: "Hidden=true"
+            create: yes
+
+    - name: 6. Create VNC directory
       file:
         path: "{{ vnc_dir }}"
         state: directory
         mode: '0700'
 
-    - name: 5. Create VNC password file
+    - name: 7. Create VNC password file
       shell: "x11vnc -storepasswd {{ vnc_password }} {{ vnc_dir }}/passwd"
       args:
         creates: "{{ vnc_dir }}/passwd"
 
-    - name: 6. Set permissions for VNC password file
+    - name: 8. Set permissions for VNC password file
       file:
         path: "{{ vnc_dir }}/passwd"
         mode: '0600'
 
-    - name: 7. Create VNC startup script
+    - name: 9. Create VNC startup script
       copy:
         dest: "/home/{{ current_user }}/.vnc/start-x11vnc.sh"
         mode: '0755'
@@ -104,13 +144,13 @@
             -shared \
             -xkb
 
-    - name: 8. Create systemd user directory
+    - name: 10. Create systemd user directory
       file:
         path: "{{ systemd_user_dir }}"
         state: directory
         mode: '0755'
 
-    - name: 9. Create systemd user service file for x11vnc
+    - name: 11. Create systemd user service file for x11vnc
       copy:
         dest: "{{ systemd_user_dir }}/x11vnc.service"
         mode: '0644'
@@ -128,7 +168,7 @@
           [Install]
           WantedBy=default.target
 
-    - name: 10. Add DISPLAY and XAUTHORITY to .bashrc
+    - name: 12. Add DISPLAY and XAUTHORITY to .bashrc
       blockinfile:
         path: "/home/{{ current_user }}/.bashrc"
         marker: "# {mark} ANSIBLE MANAGED BLOCK: xvfb-display"
@@ -137,23 +177,23 @@
           export XAUTHORITY="${HOME}/.vnc/Xvfb-auth"
         create: yes
 
-    - name: 11. Enable systemd lingering
+    - name: 13. Enable systemd lingering
       become: yes
       command: loginctl enable-linger {{ current_user }}
       changed_when: false
 
-    - name: 12. Reload systemd user daemon
+    - name: 14. Reload systemd user daemon
       systemd:
         daemon_reload: yes
         scope: user
 
-    - name: 13. Enable x11vnc user service
+    - name: 15. Ensure x11vnc user service is not enabled by default
       systemd:
         name: x11vnc
         scope: user
-        enabled: yes
+        enabled: no
 
-    - name: 14. Print instructions
+    - name: 16. Print instructions
       debug:
         msg:
           - "Virtual framebuffer (Xvfb) created and served over VNC (x11vnc) — setup complete."
@@ -176,6 +216,8 @@
           - "  - VNC password file is restricted to user access only (mode 0600)"
           - "  - Service runs with your user permissions (not root)"
           - "  - Systemd lingering enabled (service persists after logout)"
+          - "  - GDM disabled and system set to multi-user.target (text mode boot)"
+          - "  - light-locker disabled (prevents crashes in virtual display environment)"
           - ""
           - "To change VNC password:"
           - "  x11vnc -storepasswd {{ vnc_dir }}/passwd"
@@ -186,3 +228,5 @@
           - ""
           - "To connect:"
           - "  Use any VNC client to connect to <this-machine-ip>:5901"
+          - ""
+          - "Note: A reboot is recommended to fully apply the multi-user.target change."
