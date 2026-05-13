@@ -73,10 +73,10 @@ This playbook:
 
 **Required setup before starting the service:**
 
-`vertex-ai-config` must be run once to configure the proxy (Google Cloud project, credentials, etc.) before the systemd service will work:
+`vertex-ai-proxy config` must be run once to configure the proxy (Google Cloud project, credentials, etc.) before the systemd service will work:
 
 ```bash
-vertex-ai-config
+vertex-ai-proxy config
 ```
 
 Also ensure gcloud ADC credentials are valid:

@@ -18,7 +18,7 @@ This playbook configures:
 - macfanctld fan control (Mac hardware)
 - Keychain for SSH key management
 - Git branch display in bash prompt
-- `s` alias for `systemctl`
+- `s` alias for `systemctl --user`
 
 **Environment variables:**
 

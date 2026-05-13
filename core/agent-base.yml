@@ -160,7 +160,7 @@
         create: yes
         marker: "# {mark} ANSIBLE MANAGED BLOCK (systemctl-alias)"
         block: |
-          alias s=systemctl
+          alias s='systemctl --user'
 
     - name: 17. Add git prompt function to .bashrc
       become: no
