@@ -1,0 +1,56 @@
+---
+- name: Install Prometheus Process Exporter
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install Process Exporter
+      apt:
+        name: prometheus-process-exporter
+        state: present
+        update_cache: yes
+
+    - name: 2. Create config directory
+      file:
+        path: /etc/prometheus-process-exporter
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: 3. Write process group config
+      copy:
+        dest: /etc/prometheus-process-exporter/config.yaml
+        content: !unsafe |
+          process_names:
+            - name: "{{.Comm}}"
+              cmdline:
+                - '.+'
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart Process Exporter
+
+    - name: 4. Set listen port and config path
+      copy:
+        dest: /etc/default/prometheus-process-exporter
+        content: |
+          ARGS="--web.listen-address=:9256 --config.path=/etc/prometheus-process-exporter/config.yaml"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart Process Exporter
+
+    - name: 5. Enable and start Process Exporter service
+      systemd:
+        name: prometheus-process-exporter
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Restart Process Exporter
+      systemd:
+        name: prometheus-process-exporter
+        state: restarted

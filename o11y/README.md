@@ -92,6 +92,18 @@ The source is the systemd journal only. File sources (`/var/log/syslog`, `auth.l
 - Drops entries where `detected_level="debug"` (all services)
 - Drops entries containing `level=debug` in the log line
 
+## process_exporter.yml
+
+Install Prometheus Process Exporter (per-process metrics)
+
+```bash
+ansible-playbook o11y/process_exporter.yml
+```
+
+Installs `prometheus-process-exporter` from the Ubuntu apt repository. Process Exporter scrapes `/proc` and exposes per-process metrics (CPU, memory, I/O, threads, open file descriptors) grouped by process name at `http://localhost:9256/metrics`. The config uses `{{.Comm}}` matching, so every named process (e.g. `openclaw-gateway`, `alloy`, `loki`, `grafana-server`) is tracked automatically without explicit enumeration.
+
+After running this playbook, re-run `prometheus.yml` to pick up the new `process` scrape job added to its config.
+
 ## disable-rsyslog.yml
 
 Stop rsyslog from duplicating journal logs to `/var/log/syslog`
@@ -150,6 +162,7 @@ Installs Mimir from the official Grafana APT repository and configures it for si
 | Loki | 9096 | gRPC | internal | — |
 | Tempo | 9097 | gRPC | internal | — |
 | Node Exporter | 9100 | HTTP | metrics endpoint | — |
+| Process Exporter | 9256 | HTTP | per-process metrics | — |
 
 ---
 
@@ -161,6 +174,7 @@ Run the playbooks in order:
 ansible-playbook o11y/grafana.yml
 ansible-playbook o11y/mimir.yml
 ansible-playbook o11y/node_exporter.yml
+ansible-playbook o11y/process_exporter.yml
 ansible-playbook o11y/prometheus.yml
 ```
 
@@ -180,6 +194,17 @@ ansible-playbook o11y/prometheus.yml
 4. Click **Import**
 
 The dashboard displays CPU usage, memory, disk I/O, filesystem, and network metrics for the host.
+
+**3. Import the named-processes dashboard (Process Exporter)**
+
+Requires `process_exporter.yml` to have been run first.
+
+1. Go to **Dashboards → New → Import**
+2. Enter dashboard ID `249` and click **Load**
+3. Select the Mimir data source added above
+4. Click **Import**
+
+The dashboard displays per-process CPU, memory (RSS), thread count, and open file descriptors, grouped by process name (e.g. `openclaw-gateway`, `alloy`, `loki`).
 
 ---
 
