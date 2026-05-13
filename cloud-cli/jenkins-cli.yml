@@ -1,0 +1,62 @@
+---
+- name: Install Jenkins CLI
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+  vars:
+    jenkins_url: "{{ lookup('env', 'JENKINS_URL') | default('http://localhost:8080', true) }}"
+    jenkins_cli_jar: /usr/local/lib/jenkins-cli.jar
+    jenkins_cli_wrapper: /usr/local/bin/jenkins-cli
+
+  tasks:
+    - name: 1. Install Java (required to run jenkins-cli.jar)
+      apt:
+        name: default-jre-headless
+        state: present
+        update_cache: yes
+
+    - name: 2. Download jenkins-cli.jar from Jenkins server
+      get_url:
+        url: "{{ jenkins_url }}/jnlpJars/jenkins-cli.jar"
+        dest: "{{ jenkins_cli_jar }}"
+        mode: '0644'
+        force: yes
+
+    - name: 3. Create jenkins-cli wrapper script
+      copy:
+        dest: "{{ jenkins_cli_wrapper }}"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          exec java -jar {{ jenkins_cli_jar }} -s "${JENKINS_URL:-{{ jenkins_url }}}" "$@"
+
+    - name: 4. Verify installation
+      become: no
+      command: jenkins-cli help
+      register: cli_help
+      changed_when: false
+      failed_when: false
+
+    - name: 5. Print installed info and instructions
+      debug:
+        msg:
+          - "jenkins-cli.jar installed at: {{ jenkins_cli_jar }}"
+          - "Wrapper script:               {{ jenkins_cli_wrapper }}"
+          - ""
+          - "Jenkins URL used: {{ jenkins_url }}"
+          - "Override at runtime by setting: export JENKINS_URL=http://<host>:8080"
+          - ""
+          - "Authentication:"
+          - "  jenkins-cli -auth <user>:<api-token> <command>"
+          - "  Or set:  export JENKINS_USER_ID=<user>"
+          - "           export JENKINS_API_TOKEN=<api-token>"
+          - ""
+          - "Common commands:"
+          - "  jenkins-cli help                          - List all commands"
+          - "  jenkins-cli who-am-i                      - Check authentication"
+          - "  jenkins-cli build <job>                   - Trigger a build"
+          - "  jenkins-cli list-jobs                     - List all jobs"
+          - "  jenkins-cli get-job <job>                 - Get job XML config"
+          - "  jenkins-cli console <job> [build-number]  - Fetch build console output"
+          - "  jenkins-cli groovy = < script.groovy      - Run Groovy script"

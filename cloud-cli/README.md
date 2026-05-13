@@ -39,3 +39,23 @@ Install GitLab CLI
 ```bash
 ansible-playbook cloud-cli/gitlab-cli.yml
 ```
+
+## jenkins-cli.yml
+
+Install Jenkins CLI (`jenkins-cli.jar`) from a running Jenkins instance, with a wrapper script at `/usr/local/bin/jenkins-cli`.
+
+```bash
+# Default (http://localhost:8080)
+ansible-playbook cloud-cli/jenkins-cli.yml
+
+# Custom Jenkins URL
+JENKINS_URL=http://jenkins.example.com:8080 ansible-playbook cloud-cli/jenkins-cli.yml
+```
+
+## jira-cli.yml
+
+Install Jira CLI (`ankitpokhrel/jira-cli`) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
+
+```bash
+ansible-playbook cloud-cli/jira-cli.yml
+```
