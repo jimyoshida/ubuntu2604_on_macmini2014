@@ -140,6 +140,31 @@
               url = "http://localhost:3100/loki/api/v1/push"
             }
           }
+
+          otelcol.receiver.otlp "claude_code" {
+            http {
+              endpoint = "0.0.0.0:4318"
+            }
+
+            output {
+              logs    = [otelcol.exporter.loki.claude_code.input]
+              metrics = [otelcol.exporter.prometheus.claude_code.input]
+            }
+          }
+
+          otelcol.exporter.loki "claude_code" {
+            forward_to = [loki.write.local.receiver]
+          }
+
+          otelcol.exporter.prometheus "claude_code" {
+            forward_to = [prometheus.remote_write.mimir.receiver]
+          }
+
+          prometheus.remote_write "mimir" {
+            endpoint {
+              url = "http://localhost:9009/api/v1/push"
+            }
+          }
       notify: Restart Alloy
 
     - name: 8. Set HTTP listen port

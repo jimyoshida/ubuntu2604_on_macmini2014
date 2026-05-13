@@ -58,3 +58,16 @@
       debug:
         msg: "Claude Code installed: {{ claude_version.stdout }}"
       when: claude_version.rc == 0
+
+    - name: 8. Configure OpenTelemetry for Claude Code
+      lineinfile:
+        path: "{{ user_home }}/.bashrc"
+        line: "{{ item.line }}"
+        regexp: "{{ item.regexp }}"
+        state: present
+      loop:
+        - { line: 'export CLAUDE_CODE_ENABLE_TELEMETRY=1',             regexp: '^export CLAUDE_CODE_ENABLE_TELEMETRY=' }
+        - { line: 'export OTEL_METRICS_EXPORTER=otlp',                 regexp: '^export OTEL_METRICS_EXPORTER=' }
+        - { line: 'export OTEL_LOGS_EXPORTER=otlp',                    regexp: '^export OTEL_LOGS_EXPORTER=' }
+        - { line: 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf',  regexp: '^export OTEL_EXPORTER_OTLP_PROTOCOL=' }
+        - { line: 'export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318', regexp: '^export OTEL_EXPORTER_OTLP_ENDPOINT=' }

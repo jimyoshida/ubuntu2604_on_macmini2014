@@ -56,6 +56,8 @@ ansible-playbook o11y/alloy.yml
 
 Installs Alloy from the official Grafana APT repository and configures it to ship system logs to Loki (`http://localhost:3100`). Config is written to `/etc/alloy/config.alloy`. The Alloy UI (component inspection, debugging) is available at `http://localhost:12345`.
 
+Alloy also listens for OTLP/HTTP on `http://localhost:4318` to receive structured logs and metrics from Claude Code, forwarding logs to Loki and metrics directly to Mimir.
+
 **Pipeline**
 
 ```
@@ -64,6 +66,12 @@ loki.source.journal
   ├→ loki.process "system_journal"   (user_unit="",  job="journal",       drop debug)
   └→ loki.process "user_journal"     (user_unit!="", job="user_journal",  drop debug)
        └→ loki.write      (http://localhost:3100)
+
+otelcol.receiver.otlp   (:4318 HTTP)
+  ├→ otelcol.exporter.loki
+  │      └→ loki.write           (http://localhost:3100)
+  └→ otelcol.exporter.prometheus
+         └→ prometheus.remote_write  (http://localhost:9009/api/v1/push)
 ```
 
 The source is the systemd journal only. File sources (`/var/log/syslog`, `auth.log`, `kern.log`) are not used because `ForwardToSyslog=yes` in journald makes them duplicates of the journal.
@@ -134,6 +142,7 @@ Installs Mimir from the official Grafana APT repository and configures it for si
 | Grafana | 3000 | HTTP | UI | — |
 | Loki | 3100 | HTTP | API / log push | — |
 | Tempo | 3200 | HTTP | API | — |
+| Alloy | 4318 | HTTP | OTLP receiver (Claude Code logs) | — |
 | Alloy | 12345 | HTTP | UI / debug API | — |
 | Prometheus | 9090 | HTTP | UI / API | 15 days (local) |
 | Mimir | 9009 | HTTP | API / remote-write | 30 days |
