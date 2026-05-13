@@ -36,17 +36,47 @@
       register: npm_version_output
       changed_when: false
 
-    - name: 6. Print installed versions and instructions
+    - name: 6. Install Yarn Classic globally
+      become: yes
+      command: npm install -g yarn
+      args:
+        creates: /usr/bin/yarn
+
+    - name: 7. Verify Yarn installation
+      command: yarn --version
+      register: yarn_version_output
+      changed_when: false
+
+    - name: 8. Install pnpm globally
+      become: yes
+      command: npm install -g pnpm
+      args:
+        creates: /usr/bin/pnpm
+
+    - name: 9. Verify pnpm installation
+      command: pnpm --version
+      register: pnpm_version_output
+      changed_when: false
+
+    - name: 10. Print installed versions and instructions
       debug:
         msg:
           - "Node.js version: {{ node_version_output.stdout }}"
           - "npm version:     {{ npm_version_output.stdout }}"
+          - "Yarn version:    {{ yarn_version_output.stdout }}"
+          - "pnpm version:    {{ pnpm_version_output.stdout }}"
           - ""
-          - "Node.js has been installed system-wide via NodeSource."
+          - "Node.js, Yarn, and pnpm have been installed system-wide."
           - ""
           - "Common commands:"
           - "  node --version          - Show Node.js version"
           - "  npm --version           - Show npm version"
+          - "  yarn --version          - Show Yarn version"
+          - "  pnpm --version          - Show pnpm version"
           - "  npm install -g <pkg>    - Install a global package"
+          - "  yarn global add <pkg>   - Install a global package with Yarn"
+          - "  pnpm add -g <pkg>       - Install a global package with pnpm"
           - "  npm install             - Install project dependencies"
+          - "  yarn install            - Install project dependencies with Yarn"
+          - "  pnpm install            - Install project dependencies with pnpm"
           - "  node <file.js>          - Run a Node.js script"

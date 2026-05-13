@@ -6,7 +6,7 @@
   become: yes
 
   vars:
-    hostname: "{{ lookup('env', 'HOSTNAME') | default('ubuntu-vm.local') }}"
+    hostname: "{{ lookup('env', 'HOSTNAME') }}"
     avahi_interfaces: "{{ lookup('env', 'AVAHI_INTERFACES') | default('') }}"
     target_user: "{{ lookup('env', 'USER') }}"
 
@@ -37,16 +37,29 @@
         name:
           - openssh-server
           - avahi-daemon
+          - avahi-utils
           - keychain
           - net-tools
+          - ncat
           - ca-certificates
           - curl
           - gnupg
           - lsb-release
           - git
+          - git-lfs
+          - git-secret
+          - python3-pip
+          - jq
+          - zip
+          - unzip
+          - vim
+          - figlet
+          - cowsay
+          - make
+          - dos2unix
+          - aha
           - macfanctld
           - lm-sensors
-          - avahi-utils
         state: present
         update_cache: yes
 
