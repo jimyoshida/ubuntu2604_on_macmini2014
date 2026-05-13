@@ -53,6 +53,45 @@ npm update -g openclaw
 
 Documentation: https://docs.openclaw.ai/
 
+## vertex-ai-proxy.yml
+
+Install vertex-ai-proxy and run it as a user-level systemd service
+
+```bash
+ansible-playbook ai-agent/vertex-ai-proxy.yml
+```
+
+**Prerequisites:**
+- System-wide Node.js installed via apt: `sudo apt install nodejs npm`
+  - mise/nvm-managed Node.js will cause the playbook to fail
+
+This playbook:
+- Installs `vertex-ai-proxy` globally via npm
+- Creates `~/.config/systemd/user/vertex-ai-proxy.service`
+- Enables systemd lingering so the service survives logout
+- Enables and starts the service immediately
+
+**Required setup before starting the service:**
+
+`vertex-ai-config` must be run once to configure the proxy (Google Cloud project, credentials, etc.) before the systemd service will work:
+
+```bash
+vertex-ai-config
+```
+
+Also ensure gcloud ADC credentials are valid:
+```bash
+gcloud auth application-default login
+```
+
+**Managing the service:**
+```bash
+systemctl --user status vertex-ai-proxy   # Check status
+systemctl --user restart vertex-ai-proxy  # Restart
+journalctl --user -u vertex-ai-proxy -f   # View logs
+systemctl --user stop vertex-ai-proxy     # Stop
+```
+
 ## claude-code.yml
 
 Install Claude Code CLI

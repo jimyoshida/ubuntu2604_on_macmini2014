@@ -1,0 +1,94 @@
+- name: Install and configure vertex-ai-proxy as a user systemd service
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    current_user: "{{ lookup('env', 'USER') }}"
+    user_home: "{{ lookup('env', 'HOME') }}"
+    systemd_user_dir: "{{ lookup('env', 'HOME') }}/.config/systemd/user"
+
+  tasks:
+    - name: 1. Check system-wide Node.js is installed via apt
+      command: dpkg -s nodejs
+      register: nodejs_dpkg
+      changed_when: false
+      ignore_errors: true
+
+    - name: 1a. Fail if Node.js is not installed as a system package
+      fail:
+        msg: >-
+          System-wide Node.js is not installed.
+          Run: sudo apt install nodejs npm
+      when: nodejs_dpkg.rc != 0
+
+    - name: 1b. Resolve node binary path
+      command: which node
+      register: node_path
+      changed_when: false
+
+    - name: 1c. Fail if node in PATH is managed by mise or nvm
+      fail:
+        msg: >-
+          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by mise/nvm.
+          Ensure /usr/bin/node takes precedence, or unset mise/nvm shims for this session.
+      when: "'/usr/' not in node_path.stdout"
+
+    - name: 2. Install vertex-ai-proxy globally via npm
+      command: npm install -g vertex-ai-proxy@latest
+      become: true
+
+    - name: 3. Resolve vertex-ai-proxy binary path
+      command: which vertex-ai-proxy
+      register: proxy_bin
+      changed_when: false
+
+    - name: 4. Create systemd user directory
+      file:
+        path: "{{ systemd_user_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: 5. Install systemd user service unit
+      copy:
+        dest: "{{ systemd_user_dir }}/vertex-ai-proxy.service"
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Vertex AI Proxy
+          After=network.target
+
+          [Service]
+          Type=forking
+          ExecStart={{ proxy_bin.stdout }} start
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=default.target
+
+    - name: 6. Enable systemd lingering so the service starts at boot
+      command: loginctl enable-linger {{ current_user }}
+      become: true
+      changed_when: true
+
+    - name: 7. Reload systemd user daemon
+      command: systemctl --user daemon-reload
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ lookup('pipe', 'id -u') }}"
+
+    - name: 8. Enable and start vertex-ai-proxy service
+      command: systemctl --user enable --now vertex-ai-proxy
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ lookup('pipe', 'id -u') }}"
+
+    - name: 9. Show service status
+      command: systemctl --user status vertex-ai-proxy
+      register: svc_status
+      changed_when: false
+      failed_when: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ lookup('pipe', 'id -u') }}"
+
+    - name: 10. Display status
+      debug:
+        msg: "{{ svc_status.stdout_lines }}"
