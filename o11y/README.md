@@ -32,7 +32,9 @@ Install Grafana
 ansible-playbook o11y/grafana.yml
 ```
 
-Installs Grafana from the official Grafana APT repository. After installation, Grafana is available at `http://localhost:3000` (default credentials: `admin` / `admin`).
+Installs Grafana from the official Grafana APT repository. After installation, Grafana is available at `http://localhost:3030` (default credentials: `admin` / `admin`).
+
+> **Note:** Port 3030 is used instead of the default 3000 to avoid conflicts with Node.js webapp testing, which commonly uses port 3000.
 
 ## loki.yml
 
@@ -151,7 +153,7 @@ Installs Mimir from the official Grafana APT repository and configures it for si
 
 | Service | Port | Protocol | Purpose | Retention |
 |---------|------|----------|---------|-----------|
-| Grafana | 3000 | HTTP | UI | — |
+| Grafana | 3030 | HTTP | UI | — |
 | Loki | 3100 | HTTP | API / log push | — |
 | Tempo | 3200 | HTTP | API | — |
 | Alloy | 4318 | HTTP | OTLP receiver (Claude Code logs) | — |
@@ -180,7 +182,7 @@ ansible-playbook o11y/prometheus.yml
 
 **1. Add Mimir as a data source**
 
-1. Open Grafana at `http://localhost:3000` (default credentials: `admin` / `admin`)
+1. Open Grafana at `http://localhost:3030` (default credentials: `admin` / `admin`)
 2. Go to **Connections → Data Sources → Add new data source**
 3. Select **Prometheus**
 4. Set URL to `http://localhost:9009/prometheus`
@@ -220,7 +222,7 @@ ansible-playbook o11y/alloy.yml
 
 **1. Add Loki as a data source**
 
-1. Open Grafana at `http://localhost:3000`
+1. Open Grafana at `http://localhost:3030`
 2. Go to **Connections → Data Sources → Add new data source**
 3. Select **Loki**
 4. Set URL to `http://localhost:3100`

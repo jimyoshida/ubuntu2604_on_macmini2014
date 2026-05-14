@@ -43,7 +43,7 @@
       lineinfile:
         path: /etc/grafana/grafana.ini
         regexp: "^;?http_port"
-        line: "http_port = 3000"
+        line: "http_port = 3030"
       notify: Restart Grafana
 
     - name: 7. Enable and start Grafana service
