@@ -72,6 +72,35 @@ proxy_set_header Connection "upgrade";
 
 Without these, the CLI handshake fails with HTTP 400.
 
+## azure-devops-cli.yml
+
+Install Azure DevOps CLI (the `azure-devops` extension for Azure CLI). Installs Azure CLI as a prerequisite.
+
+```bash
+# Basic install
+ansible-playbook cloud-cli/azure-devops-cli.yml
+
+# With default org and project pre-configured
+AZURE_DEVOPS_ORG=https://dev.azure.com/YOUR_ORG \
+AZURE_DEVOPS_PROJECT=YOUR_PROJECT \
+ansible-playbook cloud-cli/azure-devops-cli.yml
+```
+
+After installation, authenticate and configure defaults:
+
+```bash
+az login
+az devops configure --defaults organization=https://dev.azure.com/YOUR_ORG project=YOUR_PROJECT
+```
+
+The following environment variables are supported:
+
+| Variable                  | Description                              |
+| ------------------------- | ---------------------------------------- |
+| `AZURE_DEVOPS_ORG`        | Default organization URL (configure step) |
+| `AZURE_DEVOPS_PROJECT`    | Default project name (configure step)    |
+| `AZURE_DEVOPS_EXT_PAT`    | Personal access token for non-interactive auth |
+
 ## jira-cli.yml
 
 Install Jira CLI (`ankitpokhrel/jira-cli`) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
@@ -79,3 +108,17 @@ Install Jira CLI (`ankitpokhrel/jira-cli`) via Homebrew. Requires Homebrew (`cor
 ```bash
 ansible-playbook cloud-cli/jira-cli.yml
 ```
+
+After installation, run `jira init` to configure your instance interactively:
+
+```bash
+jira init --installation cloud --server https://YOUR_ORG.atlassian.net --login your@email.com --project YOUR_PROJECT
+```
+
+The following environment variables are supported:
+
+| Variable             | Description                                                |
+| -------------------- | ---------------------------------------------------------- |
+| `JIRA_API_TOKEN`     | API token (basic auth) or PAT (bearer auth) — required     |
+| `JIRA_AUTH_TYPE`     | `basic` (default), `bearer` (PAT), or `mtls`               |
+| `JIRA_CONFIG_FILE`   | Path to config file (default: `~/.config/.jira/.config.yml`) |

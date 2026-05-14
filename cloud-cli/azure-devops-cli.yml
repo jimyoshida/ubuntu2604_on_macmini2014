@@ -1,0 +1,110 @@
+---
+- name: Install Azure DevOps CLI
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+  vars:
+    az_devops_org: "{{ lookup('env', 'AZURE_DEVOPS_ORG') | default('', true) }}"
+    az_devops_project: "{{ lookup('env', 'AZURE_DEVOPS_PROJECT') | default('', true) }}"
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: yes
+
+    - name: 2. Create directory for apt keyrings
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: 3. Download and dearmor Microsoft signing key
+      shell: curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+      args:
+        creates: /etc/apt/keyrings/microsoft.gpg
+
+    - name: 4. Determine Azure CLI repository codename
+      set_fact:
+        azure_cli_codename: >-
+          {{
+            'noble' if ansible_facts.distribution_release in ['resolute', 'plucky']
+            else ansible_facts.distribution_release
+          }}
+
+    - name: 5. Add Azure CLI software repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ {{ azure_cli_codename }} main"
+        state: present
+        filename: azure-cli
+        update_cache: yes
+
+    - name: 6. Install Azure CLI
+      apt:
+        name: azure-cli
+        state: present
+        update_cache: yes
+
+    - name: 7. Install azure-devops extension
+      become: no
+      shell: |
+        if az extension show --name azure-devops &>/dev/null; then
+          echo "already installed"
+        else
+          az extension add --name azure-devops --yes
+        fi
+      register: ext_result
+      changed_when: "'already installed' not in ext_result.stdout"
+
+    - name: 8. Configure default organization
+      become: no
+      command: az devops configure --defaults "organization={{ az_devops_org }}"
+      when: az_devops_org != ''
+
+    - name: 9. Configure default project
+      become: no
+      command: az devops configure --defaults "project={{ az_devops_project }}"
+      when: az_devops_project != ''
+
+    - name: 10. Get azure-devops extension version
+      become: no
+      command: az extension show --name azure-devops --query version -o tsv
+      register: ext_version
+      changed_when: false
+      failed_when: false
+
+    - name: 11. Print installed info and instructions
+      debug:
+        msg:
+          - "azure-devops CLI extension installed: {{ ext_version.stdout | default('unknown') }}"
+          - ""
+          - "Authentication:"
+          - "  az login                                        - Interactive browser login"
+          - "  export AZURE_DEVOPS_EXT_PAT=<personal-access-token>  - PAT-based auth (non-interactive)"
+          - ""
+          - "Configure defaults (one-time setup):"
+          - "  az devops configure --defaults organization=https://dev.azure.com/YOUR_ORG"
+          - "  az devops configure --defaults project=YOUR_PROJECT"
+          - "  Or set at runtime:"
+          - "    export AZURE_DEVOPS_ORG=https://dev.azure.com/YOUR_ORG"
+          - "    export AZURE_DEVOPS_PROJECT=YOUR_PROJECT"
+          - "    ansible-playbook azure-devops-cli.yml"
+          - ""
+          - "Common commands:"
+          - "  az devops project list                          - List all projects"
+          - "  az repos list                                   - List Git repositories"
+          - "  az repos pr list --status active               - List active pull requests"
+          - "  az repos pr create --title 'title' --source-branch feat/x  - Create a PR"
+          - "  az pipelines list                              - List pipelines"
+          - "  az pipelines run --name my-pipeline           - Trigger a pipeline"
+          - "  az pipelines build list                        - List recent builds"
+          - "  az boards work-item show --id 123             - Show a work item"
+          - "  az boards work-item create --title 'x' --type Task  - Create a work item"
+          - "  az artifacts feed list                         - List artifact feeds"
