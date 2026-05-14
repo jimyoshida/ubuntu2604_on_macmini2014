@@ -52,6 +52,26 @@ ansible-playbook cloud-cli/jenkins-cli.yml
 JENKINS_URL=http://jenkins.example.com:8080 ansible-playbook cloud-cli/jenkins-cli.yml
 ```
 
+The wrapper reads the following environment variables:
+
+| Variable            | Description                        |
+| ------------------- | ---------------------------------- |
+| `JENKINS_URL`       | Jenkins server URL                 |
+| `JENKINS_USER_ID`   | Jenkins username                   |
+| `JENKINS_API_TOKEN` | Jenkins API token                  |
+
+### nginx proxy requirement
+
+Jenkins CLI uses WebSocket by default (modern Jenkins 2.x). If Jenkins is behind an nginx reverse proxy, the proxy config must forward WebSocket upgrade headers:
+
+```nginx
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+```
+
+Without these, the CLI handshake fails with HTTP 400.
+
 ## jira-cli.yml
 
 Install Jira CLI (`ankitpokhrel/jira-cli`) via Homebrew. Requires Homebrew (`core/homebrew.yml`).

@@ -29,7 +29,11 @@
         mode: '0755'
         content: |
           #!/bin/bash
-          exec java -jar {{ jenkins_cli_jar }} -s "${JENKINS_URL:-{{ jenkins_url }}}" "$@"
+          AUTH_ARGS=()
+          if [ -n "${JENKINS_USER_ID}" ] && [ -n "${JENKINS_API_TOKEN}" ]; then
+            AUTH_ARGS=(-auth "${JENKINS_USER_ID}:${JENKINS_API_TOKEN}")
+          fi
+          exec java -jar {{ jenkins_cli_jar }} -s "${JENKINS_URL:-{{ jenkins_url }}}" "${AUTH_ARGS[@]}" "$@"
 
     - name: 4. Verify installation
       become: no
