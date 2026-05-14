@@ -19,6 +19,7 @@ This playbook configures:
 - Keychain for SSH key management
 - Git branch display in bash prompt
 - `s` alias for `systemctl --user`
+- IPv6 disabled on the specified NetworkManager connection
 
 **Environment variables:**
 
@@ -26,6 +27,7 @@ This playbook configures:
 |---|---|---|
 | `HOSTNAME` | **required** | Hostname to set on the machine |
 | `AVAHI_INTERFACES` | *(all interfaces)* | Comma-separated list of interfaces for Avahi mDNS |
+| `NM_CONNECTION` | `netplan-enp3s0f0` | NetworkManager connection name to disable IPv6 on |
 
 Also installs `avahi-utils`. Useful commands:
 

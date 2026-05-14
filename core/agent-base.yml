@@ -9,6 +9,7 @@
     hostname: "{{ lookup('env', 'HOSTNAME') }}"
     avahi_interfaces: "{{ lookup('env', 'AVAHI_INTERFACES') | default('') }}"
     target_user: "{{ lookup('env', 'USER') }}"
+    nm_connection: "{{ lookup('env', 'NM_CONNECTION') | default('netplan-enp3s0f0') }}"
 
   tasks:
     - name: 1. Update /etc/hosts with new hostname
@@ -174,6 +175,12 @@
             git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/(\1)/'
           }
           PS1="\[\e]0;\u@\h: \w\a\]${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[33m\] \$(parse_git_branch)\[\033[00m\]$ "
+
+    - name: 18. Disable IPv6 on the specified NetworkManager connection
+      shell: |
+        nmcli connection modify "{{ nm_connection }}" ipv6.method disabled
+        nmcli connection up "{{ nm_connection }}"
+      changed_when: false
 
   handlers:
     - name: restart logind
