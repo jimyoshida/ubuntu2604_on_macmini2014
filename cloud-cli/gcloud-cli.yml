@@ -4,6 +4,9 @@
   connection: local
   gather_facts: no
   become: yes
+  vars:
+    gcloud_project: "{{ lookup('env', 'GOOGLE_CLOUD_PROJECT') }}"
+    gcloud_location: "{{ lookup('env', 'GOOGLE_CLOUD_LOCATION') }}"
 
   tasks:
     - name: 1. Install prerequisites
@@ -33,3 +36,13 @@
         name: google-cloud-cli
         state: present
         update_cache: yes
+
+    - name: 5. Print post-install instructions
+      ansible.builtin.debug:
+        msg:
+          - "Google Cloud CLI has been successfully installed."
+          - ""
+          - "Authenticate and configure defaults:"
+          - "  gcloud auth login"
+          - "  gcloud config set project {{ gcloud_project | default('YOUR_PROJECT', true) }}"
+          - "  gcloud config set compute/region {{ gcloud_location | default('YOUR_LOCATION', true) }}"

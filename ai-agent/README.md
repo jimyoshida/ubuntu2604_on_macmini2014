@@ -92,6 +92,50 @@ journalctl --user -u vertex-ai-proxy -f   # View logs
 systemctl --user stop vertex-ai-proxy     # Stop
 ```
 
+## gemini-cli.yml
+
+Install Gemini CLI
+
+```bash
+ansible-playbook ai-agent/gemini-cli.yml
+```
+
+**Prerequisites:**
+- System-wide Node.js installed via apt: `sudo apt install nodejs npm`
+  - mise/nvm-managed Node.js will cause the playbook to fail
+- `gcloud` CLI installed and authenticated
+
+This playbook:
+- Installs `@google/gemini-cli` globally via npm
+- Sets `GOOGLE_GENAI_USE_VERTEXAI=true` in `.bashrc`
+
+**Required setup before use:**
+
+Authenticate with Google Cloud ADC so Gemini CLI can access Vertex AI:
+
+```bash
+gcloud auth application-default login
+```
+
+Also ensure the target project has the Vertex AI API enabled:
+
+```bash
+gcloud services enable aiplatform.googleapis.com --project $GOOGLE_CLOUD_PROJECT
+```
+
+**Usage:**
+
+```bash
+gemini
+```
+
+**Updating Gemini CLI:**
+```bash
+sudo npm update -g @google/gemini-cli
+```
+
+Documentation: https://github.com/google-gemini/gemini-cli
+
 ## claude-code.yml
 
 Install Claude Code CLI
