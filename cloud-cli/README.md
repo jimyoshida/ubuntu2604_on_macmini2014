@@ -52,14 +52,6 @@ ansible-playbook cloud-cli/jenkins-cli.yml
 JENKINS_URL=http://jenkins.example.com:8080 ansible-playbook cloud-cli/jenkins-cli.yml
 ```
 
-The wrapper reads the following environment variables:
-
-| Variable            | Description                        |
-| ------------------- | ---------------------------------- |
-| `JENKINS_URL`       | Jenkins server URL                 |
-| `JENKINS_USER_ID`   | Jenkins username                   |
-| `JENKINS_API_TOKEN` | Jenkins API token                  |
-
 ### nginx proxy requirement
 
 Jenkins CLI uses WebSocket by default (modern Jenkins 2.x). If Jenkins is behind an nginx reverse proxy, the proxy config must forward WebSocket upgrade headers:
@@ -93,14 +85,6 @@ az login
 az devops configure --defaults organization=https://dev.azure.com/YOUR_ORG project=YOUR_PROJECT
 ```
 
-The following environment variables are supported:
-
-| Variable                  | Description                              |
-| ------------------------- | ---------------------------------------- |
-| `AZURE_DEVOPS_ORG`        | Default organization URL (configure step) |
-| `AZURE_DEVOPS_PROJECT`    | Default project name (configure step)    |
-| `AZURE_DEVOPS_EXT_PAT`    | Personal access token for non-interactive auth |
-
 ## jira-cli.yml
 
 Install Jira CLI (`ankitpokhrel/jira-cli`) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
@@ -115,10 +99,3 @@ After installation, run `jira init` to configure your instance interactively:
 jira init --installation cloud --server https://YOUR_ORG.atlassian.net --login your@email.com --project YOUR_PROJECT
 ```
 
-The following environment variables are supported:
-
-| Variable             | Description                                                |
-| -------------------- | ---------------------------------------------------------- |
-| `JIRA_API_TOKEN`     | API token (basic auth) or PAT (bearer auth) — required     |
-| `JIRA_AUTH_TYPE`     | `basic` (default), `bearer` (PAT), or `mtls`               |
-| `JIRA_CONFIG_FILE`   | Path to config file (default: `~/.config/.jira/.config.yml`) |

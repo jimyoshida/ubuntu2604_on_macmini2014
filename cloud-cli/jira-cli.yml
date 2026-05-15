@@ -6,6 +6,7 @@
   vars:
     brew_user: "{{ lookup('env', 'USER') }}"
     brew_bin: /home/linuxbrew/.linuxbrew/bin/brew
+    jira_url: "{{ lookup('env', 'JIRA_URL') }}"
 
   tasks:
     - name: 1. Check if Homebrew is installed
@@ -51,7 +52,7 @@
           - "jira-cli has been successfully installed."
           - ""
           - "Initial setup:"
-          - "  jira init                     - Configure your Jira instance interactively"
+          - "  jira init --installation cloud --server {{ jira_url | default('https://YOUR_ORG.atlassian.net', true) }} --login your@email.com --project YOUR_PROJECT"
           - ""
           - "Common commands:"
           - "  jira issue list               - List issues"
