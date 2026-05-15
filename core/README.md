@@ -21,14 +21,6 @@ This playbook configures:
 - `s` alias for `systemctl --user`
 - IPv6 disabled on the specified NetworkManager connection
 
-**Environment variables:**
-
-| Variable | Default | Description |
-|---|---|---|
-| `HOSTNAME` | **required** | Hostname to set on the machine |
-| `AVAHI_INTERFACES` | *(all interfaces)* | Comma-separated list of interfaces for Avahi mDNS |
-| `NM_CONNECTION` | `netplan-enp3s0f0` | NetworkManager connection name to disable IPv6 on |
-
 Also installs `avahi-utils`. Useful commands:
 
 ```bash
@@ -72,13 +64,6 @@ Configures Samba with home directory sharing:
 - Creates [homes] share with secure permissions (0700)
 - Optional interface binding for multi-network setups
 
-**Environment variables:**
-
-| Variable | Default | Description |
-|---|---|---|
-| `SAMBA_PASSWORD` | **required** | Samba password for the user |
-| `SAMBA_INTERFACES` | *(all interfaces)* | Space-separated list of interfaces to bind Samba to |
-
 ## x11vnc.yml
 
 VNC server with virtual framebuffer (Xvfb) setup (optional)
@@ -116,12 +101,6 @@ xcalc &
 ```
 
 **Note:** Snap-based apps (e.g. Firefox) are slow to launch inside the Xvfb session due to snap confinement overhead. Prefer native `.deb` packages for apps you intend to run over VNC.
-
-**Environment variables:**
-
-| Variable | Default | Description |
-|---|---|---|
-| `VNC_PASSWORD` | **required** | VNC password written to `~/.vnc/passwd` |
 
 ## homebrew.yml
 
@@ -180,7 +159,6 @@ Installs Go from the official Go binary distribution with minimal dependencies. 
 - Downloads the official Go tarball from go.dev
 - Extracts to `/usr/local/go`
 - Adds Go to PATH and sets up GOPATH in `~/.bashrc`
-- Respects `HTTPS_PROXY` environment variable
 - Supports version upgrades by updating the `go_version` variable
 
 After installation, activate in current shell:
@@ -201,7 +179,6 @@ Installs Rust via rustup (official Rust toolchain installer) with minimal depend
 - Downloads and runs the official rustup installer from sh.rustup.rs
 - Installs the stable toolchain to `~/.cargo`
 - Adds Cargo bin directory to PATH in `~/.bashrc`
-- Respects `HTTPS_PROXY` environment variable
 - Includes rustc (compiler) and cargo (package manager)
 
 After installation, activate in current shell:
