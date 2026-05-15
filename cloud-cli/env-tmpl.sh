@@ -16,6 +16,5 @@ export AZURE_DEVOPS_EXT_PAT=   # Personal access token for non-interactive auth
 
 # jira-cli.yml
 export JIRA_URL=          # Jira server URL (e.g. https://YOUR_ORG.atlassian.net)
-export JIRA_API_TOKEN=    # API token (basic auth) or PAT (bearer auth) — required
-export JIRA_AUTH_TYPE=    # basic (default), bearer (PAT), or mtls
-export JIRA_CONFIG_FILE=  # Path to config file (default: ~/.config/.jira/.config.yml)
+export JIRA_LOGIN=        # Login email — required by jira init even with PAT auth
+export JIRA_API_TOKEN=    # Atlassian API token — used with basic auth on Jira Cloud
