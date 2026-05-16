@@ -137,9 +137,11 @@ This playbook:
 - Enables systemd lingering so the service survives logout
 - Enables and starts the service immediately
 
+The service listens on **port 8001** and passes `$GOOGLE_CLOUD_LOCATION` (set in `cloud-cli/env-tmpl.sh`) as the Gemini region.
+
 **Required setup before starting the service:**
 
-`vertex-ai-proxy config` must be run once to configure the proxy (Google Cloud project, credentials, etc.) before the systemd service will work:
+Ensure `GOOGLE_CLOUD_LOCATION` is exported in your environment (via `cloud-cli/env-tmpl.sh`), then run `vertex-ai-proxy config` once to configure the proxy (Google Cloud project, credentials, etc.):
 
 ```bash
 vertex-ai-proxy config

@@ -59,7 +59,7 @@
 
           [Service]
           Type=forking
-          ExecStart={{ proxy_bin.stdout }} start
+          ExecStart={{ proxy_bin.stdout }} start --port 8001 --region us-east5 --google-region ${GOOGLE_CLOUD_LOCATION}
           Restart=on-failure
           RestartSec=5
 
