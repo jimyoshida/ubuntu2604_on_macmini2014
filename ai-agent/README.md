@@ -53,6 +53,72 @@ npm update -g openclaw
 
 Documentation: https://docs.openclaw.ai/
 
+## nanoclaw.yml
+
+NanoClaw agent setup (Docker-based, lightweight OpenClaw alternative)
+
+```bash
+ansible-playbook ai-agent/nanoclaw.yml
+```
+
+**Prerequisites:**
+- Docker installed and current user in the `docker` group:
+  ```bash
+  ansible-playbook container/docker.yml
+  ```
+  The playbook will fail with a clear message if Docker is missing or the user is not in the `docker` group.
+
+This playbook:
+- Installs `build-essential`, `python3`, `curl`, `git` via apt
+- Clones `https://github.com/nanocoai/nanoclaw.git` to `~/nanoclaw`
+- Enables systemd lingering
+- **Does NOT run the interactive installer** — manual steps required (see below)
+
+**Manual Onboarding Steps (Required):**
+
+After running the playbook, open a new shell and run:
+
+```bash
+cd ~/nanoclaw
+bash nanoclaw.sh
+```
+
+The installer handles:
+- Node 22 via nvm and pnpm 10 via corepack
+- Building the agent container image
+- Registering your Anthropic API key with OneCLI vault
+- Pairing a messaging channel (Slack, WhatsApp, Telegram, etc.)
+- Installing the `nanoclaw-v2-<slug>` systemd user service
+
+After onboarding, manage the service (replace `<slug>` with your agent slug):
+```bash
+systemctl --user start nanoclaw-v2-<slug>     # Start
+systemctl --user status nanoclaw-v2-<slug>    # Check status
+journalctl --user -u nanoclaw-v2-<slug> -f   # View logs
+systemctl --user stop nanoclaw-v2-<slug>      # Stop
+```
+
+**Troubleshooting:**
+```bash
+# sqlite3 build failure
+cd ~/nanoclaw && pnpm rebuild better-sqlite3
+
+# Container build issue
+cd ~/nanoclaw && docker builder prune -f && ./container/build.sh
+```
+
+Installer log: `~/nanoclaw/logs/setup.log`
+Service error log: `~/nanoclaw/logs/nanoclaw.error.log`
+
+**Updating NanoClaw:**
+```bash
+cd ~/nanoclaw && git pull && bash nanoclaw.sh
+```
+
+Documentation: https://docs.nanoclaw.dev/
+
+---
+
 ## vertex-ai-proxy.yml
 
 Install vertex-ai-proxy and run it as a user-level systemd service

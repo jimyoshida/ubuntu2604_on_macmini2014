@@ -1,0 +1,102 @@
+- name: Setup NanoClaw Agent
+  hosts: localhost
+  connection: local
+  vars:
+    current_user: "{{ lookup('env', 'USER') }}"
+    nanoclaw_dir: "/home/{{ current_user }}/nanoclaw"
+
+  tasks:
+    - name: 1. Check Docker is installed
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: 1a. Fail if Docker is not installed
+      fail:
+        msg: >-
+          Docker is not installed.
+          Run: ansible-playbook container/docker.yml
+      when: docker_check.rc != 0
+
+    - name: 1b. Check current user is in the docker group
+      command: id -nG {{ current_user }}
+      register: user_groups
+      changed_when: false
+
+    - name: 1c. Fail if user is not in the docker group
+      fail:
+        msg: >-
+          User '{{ current_user }}' is not in the docker group.
+          Run: ansible-playbook container/docker.yml
+          Then log out and back in (or run: newgrp docker).
+      when: "'docker' not in user_groups.stdout.split()"
+
+    - name: 2. Install system prerequisites
+      apt:
+        name:
+          - build-essential
+          - python3
+          - curl
+          - git
+        state: present
+        update_cache: true
+      become: true
+
+    - name: 3. Clone NanoClaw repository
+      git:
+        repo: "https://github.com/nanocoai/nanoclaw.git"
+        dest: "{{ nanoclaw_dir }}"
+        version: main
+        update: true
+
+    - name: 4. Enable systemd lingering for current user
+      command: loginctl enable-linger {{ current_user }}
+      become: true
+      changed_when: true
+
+    - name: 5. Print instructions
+      block:
+        - name: 5a. Print NanoClaw setup summary
+          debug:
+            msg:
+              - "NanoClaw prerequisites installed."
+              - ""
+              - "User: {{ current_user }}"
+              - "Repository: {{ nanoclaw_dir }}"
+
+        - name: 5b. Print onboarding instructions
+          debug:
+            msg:
+              - ""
+              - "Next steps (interactive onboarding required):"
+              - "  1. Open a new shell and run:"
+              - "     cd {{ nanoclaw_dir }}"
+              - "     bash nanoclaw.sh"
+              - ""
+              - "  The installer will:"
+              - "    - Install Node 22 via nvm"
+              - "    - Install pnpm 10 via corepack"
+              - "    - Build the agent container image"
+              - "    - Register your Anthropic API key with OneCLI vault"
+              - "    - Set up your messaging channel (Slack, WhatsApp, Telegram, etc.)"
+              - "    - Install the nanoclaw-v2-<slug> systemd user service"
+              - ""
+              - "After onboarding, manage the service (replace <slug> with your agent slug):"
+              - "  To start:   systemctl --user start nanoclaw-v2-<slug>"
+              - "  To status:  systemctl --user status nanoclaw-v2-<slug>"
+              - "  To logs:    journalctl --user -u nanoclaw-v2-<slug> -f"
+              - "  To stop:    systemctl --user stop nanoclaw-v2-<slug>"
+
+        - name: 5c. Print troubleshooting and update tips
+          debug:
+            msg:
+              - ""
+              - "Troubleshooting:"
+              - "  sqlite3 build failure:  cd {{ nanoclaw_dir }} && pnpm rebuild better-sqlite3"
+              - "  Container build issue:  cd {{ nanoclaw_dir }} && docker builder prune -f && ./container/build.sh"
+              - "  Installer log:          {{ nanoclaw_dir }}/logs/setup.log"
+              - "  Service error log:      {{ nanoclaw_dir }}/logs/nanoclaw.error.log"
+              - ""
+              - "Updating: cd {{ nanoclaw_dir }} && git pull && bash nanoclaw.sh"
+              - "Documentation: https://docs.nanoclaw.dev/"
