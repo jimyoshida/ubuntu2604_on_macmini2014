@@ -25,8 +25,6 @@
 
     - name: 3. Download and dearmor Microsoft signing key
       shell: curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
-      args:
-        creates: /etc/apt/keyrings/microsoft.gpg
 
     - name: 4. Determine Azure CLI repository codename
       set_fact:

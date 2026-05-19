@@ -18,8 +18,6 @@
     - name: 2. Download and add mise GPG key
       become: yes
       shell: wget -qO - https://mise.jdx.dev/gpg-key.pub | gpg --dearmor -o /usr/share/keyrings/mise-archive-keyring.gpg
-      args:
-        creates: /usr/share/keyrings/mise-archive-keyring.gpg
 
     - name: 3. Set permissions on mise keyring
       become: yes

@@ -31,8 +31,6 @@
 
     - name: 2. Download and dearmor Grafana GPG key
       shell: curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /usr/share/keyrings/grafana.gpg
-      args:
-        creates: /usr/share/keyrings/grafana.gpg
 
     - name: 3. Set permissions on Grafana keyring
       file:
