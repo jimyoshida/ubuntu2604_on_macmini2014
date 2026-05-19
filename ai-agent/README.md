@@ -117,6 +117,23 @@ cd ~/nanoclaw && git pull && bash nanoclaw.sh
 
 Documentation: https://docs.nanoclaw.dev/
 
+**Using the `claw` CLI (optional):**
+
+After onboarding, you can install the `claw` CLI to send prompts to the agent directly from the terminal — no chat app required. Open Claude Code in `~/nanoclaw` and run:
+
+```
+/claw
+```
+
+This installs `~/bin/claw` and symlinks it from the NanoClaw scripts. Then you can chat with the agent from any terminal:
+
+```bash
+claw "What's on my calendar today?"
+claw --list-groups          # show registered groups
+claw -g "dev" "Deploy status?"
+cat report.txt | claw --pipe "Summarize this"
+```
+
 ---
 
 ## vertex-ai-proxy.yml
