@@ -113,6 +113,79 @@ ansible-playbook core/homebrew.yml
 After installation, use Homebrew to install additional tools:
 - K9s, KDash
 
+## modern-cli-tools.yml
+
+Install modern CLI tools via Homebrew
+
+```bash
+ansible-playbook core/modern-cli-tools.yml
+```
+
+**Prerequisite:** Requires Homebrew to be installed first (run `homebrew.yml` first).
+
+Installs the following modern CLI tools:
+- **gum** — Charming CLI for building interactive shell scripts
+- **fzf** — Fuzzy finder for command-line (with bash key bindings)
+  - `Ctrl+R` — fuzzy search command history
+  - `Ctrl+T` — fuzzy search files in current directory
+  - `Alt+C` — fuzzy search directories and cd into them
+- **jq** — JSON processor (brew version, newer than apt)
+- **yq** — YAML processor (like jq but for YAML)
+- **jsonnet** — Data templating language
+- **bat** — Cat clone with syntax highlighting and Git integration
+- **eza** — Modern replacement for `ls` with colors and icons
+- **lsd** — LSDeluxe, another modern `ls` replacement with icons
+- **duf** — Modern replacement for `df` (disk usage with better formatting)
+- **dust** — Modern replacement for `du` (directory usage analyzer)
+- **procs** — Modern replacement for `ps` with colored output
+- **gdu** — Fast disk usage analyzer with TUI (ncurses interface)
+- **htop** — Interactive process viewer (better than top)
+- **glow** — Markdown renderer for the terminal
+
+After installation, source your bashrc to enable fzf key bindings:
+```bash
+source ~/.bashrc
+```
+
+## test-and-security.yml
+
+Install testing and security tools via Homebrew
+
+```bash
+ansible-playbook core/test-and-security.yml
+```
+
+**Prerequisite:** Requires Homebrew to be installed first (run `homebrew.yml` first).
+
+Installs the following testing and security tools:
+
+**Testing Tools:**
+- **bats-core** — Bash Automated Testing System
+- **shellcheck** — Shell script static analysis and linter
+
+**Security & Linting Tools:**
+- **trivy** — Comprehensive vulnerability scanner for containers and dependencies
+- **grype** — Vulnerability scanner for container images and filesystems
+- **syft** — SBOM (Software Bill of Materials) generator for supply chain security
+- **hadolint** — Dockerfile best practices linter
+- **markdownlint-cli** — Markdown linter and formatter
+
+**Note:** Bats helper libraries (bats-assert, bats-support, bats-file) are not available via Homebrew. If you need these libraries for your tests, install them manually from their GitHub repositories:
+- https://github.com/bats-core/bats-assert
+- https://github.com/bats-core/bats-support
+- https://github.com/bats-core/bats-file
+
+Usage examples:
+```bash
+bats test.bats              # Run Bats tests
+shellcheck script.sh        # Lint shell scripts
+trivy image nginx:latest    # Scan container image for vulnerabilities
+grype dir:.                 # Scan current directory for vulnerabilities
+syft packages dir:.         # Generate Software Bill of Materials
+hadolint Dockerfile         # Lint Dockerfile for best practices
+markdownlint '**/*.md'      # Lint all markdown files
+```
+
 ## nodejs.yml
 
 Install Node.js LTS system-wide (via NodeSource)

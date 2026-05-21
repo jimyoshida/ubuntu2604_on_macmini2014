@@ -1,0 +1,73 @@
+---
+- name: Install Testing and Security Tools via Homebrew
+  hosts: localhost
+  connection: local
+  vars:
+    brew_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: Check if Homebrew is installed
+      ansible.builtin.stat:
+        path: /home/linuxbrew/.linuxbrew/bin/brew
+      register: brew_check
+
+    - name: Fail if Homebrew is not installed
+      ansible.builtin.fail:
+        msg: "Homebrew is not installed. Please run homebrew.yml playbook first."
+      when: not brew_check.stat.exists
+
+    - name: Update Homebrew
+      become: true
+      become_user: "{{ brew_user }}"
+      ansible.builtin.command:
+        cmd: /home/linuxbrew/.linuxbrew/bin/brew update
+      changed_when: false
+      environment:
+        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_env.PATH }}"
+
+    - name: Install testing and security tools via Homebrew
+      become: true
+      become_user: "{{ brew_user }}"
+      community.general.homebrew:
+        name:
+          - bats-core         # Bash Automated Testing System
+          - shellcheck        # Shell script static analysis tool
+          - trivy             # Vulnerability scanner for containers and dependencies
+          - grype             # Vulnerability scanner for container images and filesystems
+          - syft              # SBOM (Software Bill of Materials) generator
+          - hadolint          # Dockerfile linter
+          - markdownlint-cli  # Markdown linter
+        state: present
+      environment:
+        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_env.PATH }}"
+
+    - name: Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "Testing and security tools installed successfully!"
+          - ""
+          - "Testing Tools:"
+          - "  - bats-core: Bash Automated Testing System"
+          - "  - shellcheck: Shell script static analysis and linter"
+          - ""
+          - "Security & Linting Tools:"
+          - "  - trivy: Comprehensive vulnerability scanner"
+          - "  - grype: Vulnerability scanner for containers"
+          - "  - syft: SBOM generator for software supply chain"
+          - "  - hadolint: Dockerfile best practices linter"
+          - "  - markdownlint-cli: Markdown linter and formatter"
+          - ""
+          - "Usage examples:"
+          - "  bats test.bats              # Run Bats tests"
+          - "  shellcheck script.sh        # Lint shell scripts"
+          - "  trivy image nginx:latest    # Scan container image"
+          - "  grype dir:.                 # Scan current directory"
+          - "  syft packages dir:.         # Generate SBOM"
+          - "  hadolint Dockerfile         # Lint Dockerfile"
+          - "  markdownlint '**/*.md'      # Lint markdown files"
+          - ""
+          - "Note: Bats helper libraries (bats-assert, bats-support, bats-file)"
+          - "are not available via Homebrew. Install manually from GitHub if needed:"
+          - "  https://github.com/bats-core/bats-assert"
+          - "  https://github.com/bats-core/bats-support"
+          - "  https://github.com/bats-core/bats-file"
