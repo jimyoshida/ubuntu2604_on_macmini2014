@@ -36,7 +36,6 @@
           - grype             # Vulnerability scanner for container images and filesystems
           - syft              # SBOM (Software Bill of Materials) generator
           - hadolint          # Dockerfile linter
-          - markdownlint-cli  # Markdown linter
         state: present
       environment:
         PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
@@ -55,7 +54,6 @@
           - "  - grype: Vulnerability scanner for containers"
           - "  - syft: SBOM generator for software supply chain"
           - "  - hadolint: Dockerfile best practices linter"
-          - "  - markdownlint-cli: Markdown linter and formatter"
           - ""
           - "Usage examples:"
           - "  bats test.bats              # Run Bats tests"
@@ -64,7 +62,6 @@
           - "  grype dir:.                 # Scan current directory"
           - "  syft packages dir:.         # Generate SBOM"
           - "  hadolint Dockerfile         # Lint Dockerfile"
-          - "  markdownlint '**/*.md'      # Lint markdown files"
           - ""
           - "Note: Bats helper libraries (bats-assert, bats-support, bats-file)"
           - "are not available via Homebrew. Install manually from GitHub if needed:"

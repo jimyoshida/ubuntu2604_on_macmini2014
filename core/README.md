@@ -168,7 +168,6 @@ Installs the following testing and security tools:
 - **grype** — Vulnerability scanner for container images and filesystems
 - **syft** — SBOM (Software Bill of Materials) generator for supply chain security
 - **hadolint** — Dockerfile best practices linter
-- **markdownlint-cli** — Markdown linter and formatter
 
 **Note:** Bats helper libraries (bats-assert, bats-support, bats-file) are not available via Homebrew. If you need these libraries for your tests, install them manually from their GitHub repositories:
 - https://github.com/bats-core/bats-assert
@@ -183,7 +182,6 @@ trivy image nginx:latest    # Scan container image for vulnerabilities
 grype dir:.                 # Scan current directory for vulnerabilities
 syft packages dir:.         # Generate Software Bill of Materials
 hadolint Dockerfile         # Lint Dockerfile for best practices
-markdownlint '**/*.md'      # Lint all markdown files
 ```
 
 ## nodejs.yml

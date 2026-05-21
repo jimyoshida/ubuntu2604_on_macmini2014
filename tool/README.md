@@ -1,5 +1,57 @@
 # Tools
 
+## devcontainers.yml
+
+Install Devcontainers CLI
+
+```bash
+ansible-playbook tool/devcontainers.yml
+```
+
+**Prerequisites:**
+- System-wide Node.js installed via apt: `sudo apt install nodejs npm`
+  - version manager-managed Node.js will cause the playbook to fail
+
+This playbook:
+- Installs Devcontainers CLI globally via npm (`npm install -g @devcontainers/cli@latest`)
+- Verifies the installation
+
+After installation, use Devcontainers CLI to manage development containers:
+```bash
+devcontainer build                      # Build a container image
+devcontainer run-user-commands          # Run user commands in container
+devcontainer up                         # Create and start a dev container
+devcontainer open                       # Open a folder in a dev container
+devcontainer features log               # Show installed features
+```
+
+Documentation: https://containers.dev
+
+## markdownlint.yml
+
+Install Markdownlint CLI
+
+```bash
+ansible-playbook tool/markdownlint.yml
+```
+
+**Prerequisites:**
+- System-wide Node.js installed via apt: `sudo apt install nodejs npm`
+  - version manager-managed Node.js will cause the playbook to fail
+
+This playbook:
+- Installs Markdownlint CLI globally via npm (`npm install -g markdownlint-cli@latest`)
+- Verifies the installation
+
+After installation, use Markdownlint to lint and fix markdown files:
+```bash
+markdownlint '**/*.md'              # Lint all markdown files
+markdownlint --fix '**/*.md'        # Automatically fix fixable issues
+markdownlint --config .markdownlintrc.json '**/*.md'  # Use custom config
+```
+
+Documentation: https://github.com/igorshubovych/markdownlint-cli
+
 ## vault.yml
 
 Install HashiCorp Vault OSS
