@@ -15,7 +15,7 @@
     - name: 1a. Fail if Node.js is not installed as a system package
       fail:
         msg: >-
-          System-wide Node.js is not installed (openclaw requires it — mise/nvm-managed Node.js
+          System-wide Node.js is not installed (openclaw requires it — version manager-managed Node.js
           causes version mismatch issues during npm global package updates).
           Run: sudo apt install nodejs npm
       when: nodejs_dpkg.rc != 0
@@ -25,12 +25,12 @@
       register: node_path
       changed_when: false
 
-    - name: 1c. Fail if node in PATH is managed by mise or nvm
+    - name: 1c. Fail if node in PATH is managed by a version manager
       fail:
         msg: >-
-          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by mise/nvm.
+          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by a version manager.
           openclaw warns that this causes update timing issues.
-          Ensure /usr/bin/node takes precedence, or unset mise/nvm shims for this session.
+          Ensure /usr/bin/node takes precedence, or unset version manager shims for this session.
       when: "'/usr/' not in node_path.stdout"
 
     - name: 1d. Show Node.js version

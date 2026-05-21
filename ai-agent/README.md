@@ -10,7 +10,7 @@ ansible-playbook ai-agent/openclaw.yml
 
 **Prerequisites:**
 - System-wide Node.js installed via apt: `sudo apt install nodejs npm`
-  - mise/nvm-managed Node.js will cause the playbook to fail
+  - version manager-managed Node.js will cause the playbook to fail
 
 This playbook:
 - Installs OpenClaw globally via npm (`npm install -g openclaw@latest`)
@@ -84,7 +84,7 @@ bash nanoclaw.sh
 ```
 
 The installer handles:
-- Node 22 via nvm and pnpm 10 via corepack
+- Node 22 and pnpm 10 via corepack
 - Building the agent container image
 - Registering your Anthropic API key with OneCLI vault
 - Pairing a messaging channel (Slack, WhatsApp, Telegram, etc.)
@@ -146,7 +146,7 @@ ansible-playbook ai-agent/vertex-ai-proxy.yml
 
 **Prerequisites:**
 - System-wide Node.js installed via apt: `sudo apt install nodejs npm`
-  - mise/nvm-managed Node.js will cause the playbook to fail
+  - version manager-managed Node.js will cause the playbook to fail
 
 This playbook:
 - Installs `vertex-ai-proxy` globally via npm
@@ -187,7 +187,7 @@ ansible-playbook ai-agent/gemini-cli.yml
 
 **Prerequisites:**
 - System-wide Node.js installed via apt: `sudo apt install nodejs npm`
-  - mise/nvm-managed Node.js will cause the playbook to fail
+  - version manager-managed Node.js will cause the playbook to fail
 - `gcloud` CLI installed and authenticated
 
 This playbook:

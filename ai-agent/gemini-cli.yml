@@ -25,11 +25,11 @@
       register: node_path
       changed_when: false
 
-    - name: 1c. Fail if node in PATH is managed by mise or nvm
+    - name: 1c. Fail if node in PATH is managed by a version manager
       fail:
         msg: >-
-          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by mise/nvm.
-          Ensure /usr/bin/node takes precedence, or unset mise/nvm shims for this session.
+          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by a version manager.
+          Ensure /usr/bin/node takes precedence, or unset version manager shims for this session.
       when: "'/usr/' not in node_path.stdout"
 
     - name: 2. Check if Gemini CLI is already installed

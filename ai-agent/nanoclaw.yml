@@ -75,7 +75,7 @@
               - "     bash nanoclaw.sh"
               - ""
               - "  The installer will:"
-              - "    - Install Node 22 via nvm"
+              - "    - Install Node 22"
               - "    - Install pnpm 10 via corepack"
               - "    - Build the agent container image"
               - "    - Register your Anthropic API key with OneCLI vault"
