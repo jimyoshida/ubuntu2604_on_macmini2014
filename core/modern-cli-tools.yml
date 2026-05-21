@@ -23,7 +23,7 @@
         cmd: /home/linuxbrew/.linuxbrew/bin/brew update
       changed_when: false
       environment:
-        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_env.PATH }}"
+        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
 
     - name: Install modern CLI tools via Homebrew
       become: true
@@ -46,7 +46,7 @@
           - glow          # Markdown renderer for the terminal
         state: present
       environment:
-        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_env.PATH }}"
+        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
 
     - name: Add fzf key bindings and completion to ~/.bashrc
       become: true

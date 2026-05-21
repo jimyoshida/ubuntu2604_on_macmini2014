@@ -34,7 +34,7 @@
       args:
         executable: /bin/bash
       environment:
-        PATH: "/home/{{ krew_user }}/.krew/bin:{{ ansible_env.PATH }}"
+        PATH: "/home/{{ krew_user }}/.krew/bin:{{ lookup('env', 'PATH') }}"
       when: not krew_check.stat.exists
 
     - name: 4. Add Krew to PATH in ~/.bashrc

@@ -23,7 +23,7 @@
         cmd: /home/linuxbrew/.linuxbrew/bin/brew update
       changed_when: false
       environment:
-        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_env.PATH }}"
+        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
 
     - name: Install testing and security tools via Homebrew
       become: true
@@ -39,7 +39,7 @@
           - markdownlint-cli  # Markdown linter
         state: present
       environment:
-        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_env.PATH }}"
+        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
 
     - name: Display installation summary
       ansible.builtin.debug:
