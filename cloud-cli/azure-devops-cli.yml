@@ -26,8 +26,14 @@
         state: directory
         mode: '0755'
 
-    - name: 3. Download and dearmor Microsoft signing key
-      shell: curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+    - name: 3. Download Microsoft signing key
+      get_url:
+        url: https://packages.microsoft.com/keys/microsoft.asc
+        dest: /tmp/microsoft.asc
+        force: true
+
+    - name: 3a. Dearmor Microsoft signing key
+      shell: gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg < /tmp/microsoft.asc
 
     - name: 4. Determine Azure CLI repository codename
       set_fact:

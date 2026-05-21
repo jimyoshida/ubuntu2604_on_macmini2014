@@ -16,8 +16,11 @@
         state: present
         update_cache: yes
 
-    - name: 2. Download and dearmor GitHub CLI public key
-      shell: curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    - name: 2. Download GitHub CLI public key
+      get_url:
+        url: https://cli.github.com/packages/githubcli-archive-keyring.gpg
+        dest: /usr/share/keyrings/githubcli-archive-keyring.gpg
+        force: true
 
     - name: 3. Set permissions on GitHub CLI keyring
       file:

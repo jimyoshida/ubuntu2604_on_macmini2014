@@ -25,9 +25,16 @@
         state: directory
         mode: '0755'
 
-    - name: 3. Download and add Kubernetes apt key
+    - name: 3. Download Kubernetes apt key
       become: yes
-      shell: curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+        dest: /tmp/kubernetes-release.key
+        force: true
+
+    - name: 3a. Dearmor Kubernetes apt key
+      become: yes
+      shell: gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg < /tmp/kubernetes-release.key
 
     - name: 4. Add Kubernetes apt repository
       become: yes

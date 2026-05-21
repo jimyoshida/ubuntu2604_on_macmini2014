@@ -15,9 +15,16 @@
         state: present
         update_cache: yes
 
-    - name: 2. Download and add mise GPG key
+    - name: 2. Download mise GPG key
       become: yes
-      shell: wget -qO - https://mise.jdx.dev/gpg-key.pub | gpg --dearmor -o /usr/share/keyrings/mise-archive-keyring.gpg
+      get_url:
+        url: https://mise.jdx.dev/gpg-key.pub
+        dest: /tmp/mise-gpg-key.pub
+        force: true
+
+    - name: 2a. Dearmor mise GPG key
+      become: yes
+      shell: gpg --dearmor -o /usr/share/keyrings/mise-archive-keyring.gpg < /tmp/mise-gpg-key.pub
 
     - name: 3. Set permissions on mise keyring
       become: yes

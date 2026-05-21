@@ -30,6 +30,7 @@
         url: https://packages.microsoft.com/keys/microsoft.asc
         dest: /tmp/microsoft.asc
         mode: '0644'
+        force: true
       environment:
         HTTPS_PROXY: "{{ lookup('env', 'HTTPS_PROXY') | default('') }}"
       when: vscode_check.rc != 0

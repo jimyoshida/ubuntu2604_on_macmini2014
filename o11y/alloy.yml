@@ -29,8 +29,14 @@
         state: present
         update_cache: yes
 
-    - name: 2. Download and dearmor Grafana GPG key
-      shell: curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /usr/share/keyrings/grafana.gpg
+    - name: 2. Download Grafana GPG key
+      get_url:
+        url: https://apt.grafana.com/gpg.key
+        dest: /tmp/grafana.key
+        force: true
+
+    - name: 2a. Dearmor Grafana GPG key
+      shell: gpg --dearmor -o /usr/share/keyrings/grafana.gpg < /tmp/grafana.key
 
     - name: 3. Set permissions on Grafana keyring
       file:
