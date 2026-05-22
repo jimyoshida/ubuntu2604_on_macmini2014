@@ -36,6 +36,7 @@
           - yq            # YAML processor like jq
           - jsonnet       # Data templating language
           - bat           # Cat clone with syntax highlighting
+          - llhttp        # HTTP parser library (dependency for eza)
           - eza           # Modern replacement for ls
           - lsd           # LSDeluxe - another modern ls replacement
           - duf           # Modern replacement for df (disk usage)
@@ -47,6 +48,13 @@
         state: present
       environment:
         PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
+
+    - name: Ensure libllhttp.so.9.3 symlink is available for eza compatibility
+      ansible.builtin.file:
+        src: /home/linuxbrew/.linuxbrew/Cellar/llhttp/9.3.1/lib/libllhttp.so.9.3
+        dest: /home/linuxbrew/.linuxbrew/lib/libllhttp.so.9.3
+        state: link
+        force: true
 
     - name: Add fzf key bindings and completion to ~/.bashrc
       become: true
@@ -71,6 +79,7 @@
           - "  - yq: YAML processor"
           - "  - jsonnet: Data templating language"
           - "  - bat: Enhanced cat with syntax highlighting"
+          - "  - llhttp: HTTP parser library"
           - "  - eza: Modern replacement for ls"
           - "  - lsd: LSDeluxe - modern ls replacement"
           - "  - duf: Modern replacement for df (disk usage)"
