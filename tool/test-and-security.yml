@@ -33,6 +33,7 @@
           - bats-core         # Bash Automated Testing System
           - bats-assert       # Bats assertion library
           - bats-support      # Bats support library
+          - shellspec         # BDD unit testing framework for shell scripts
           - shellcheck        # Shell script static analysis tool
           - trivy             # Vulnerability scanner for containers and dependencies
           - grype             # Vulnerability scanner for container images and filesystems
@@ -51,6 +52,7 @@
           - "  - bats-core: Bash Automated Testing System"
           - "  - bats-assert: Assertion library for Bats tests"
           - "  - bats-support: Support library for Bats tests"
+          - "  - shellspec: BDD unit testing framework for shell scripts"
           - "  - shellcheck: Shell script static analysis and linter"
           - ""
           - "Security & Linting Tools:"
@@ -61,6 +63,7 @@
           - ""
           - "Usage examples:"
           - "  bats test.bats              # Run Bats tests"
+          - "  shellspec                   # Run ShellSpec tests"
           - "  shellcheck script.sh        # Lint shell scripts"
           - "  trivy image nginx:latest    # Scan container image"
           - "  grype dir:.                 # Scan current directory"
