@@ -29,5 +29,5 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 | [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, Krew) |
 | [cloud-cli/](cloud-cli/README.md) | Cloud provider CLI tools (AWS, Azure, GCP, GitHub, GitLab) |
 | [o11y/](o11y/README.md) | Observability tools (Grafana, Loki, Tempo, Mimir) |
-| [ai-agent/](ai-agent/README.md) | AI agent tools (Claude Code, OpenClaw) |
+| [ai-agent/](ai-agent/README.md) | AI agent tools (Claude Code, Antigravity CLI, OpenClaw) |
 | [tool/](tool/README.md) | Developer tools (Vault, VS Code) |

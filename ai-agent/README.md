@@ -242,3 +242,25 @@ claude auth login
 ```
 
 Documentation: https://claude.ai/code
+
+## antigravity-cli.yml
+
+Install Antigravity CLI
+
+```bash
+ansible-playbook ai-agent/antigravity-cli.yml
+```
+
+Installs the Antigravity CLI tool (`agy`) using the official installation script. The playbook:
+- Installs prerequisites (curl, ca-certificates, libsecret-1-0)
+- Downloads and runs the official Antigravity installer
+- Ensures `~/.local/bin` is added to PATH in both `.bashrc` and `.profile`
+- Respects `HTTPS_PROXY` environment variable
+- Verifies installation and displays version
+
+After installation, authenticate with:
+```bash
+agy auth login
+```
+
+Documentation: https://antigravity.google
