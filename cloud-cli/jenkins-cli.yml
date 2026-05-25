@@ -35,32 +35,39 @@
           fi
           exec java -jar {{ jenkins_cli_jar }} -s "${JENKINS_URL:-{{ jenkins_url }}}" "${AUTH_ARGS[@]}" "$@"
 
-    - name: 4. Verify installation
+    - name: 4. Create 'jenkins' alias symlink
+      file:
+        src: "{{ jenkins_cli_wrapper }}"
+        dest: /usr/local/bin/jenkins
+        state: link
+
+    - name: 5. Verify installation
       become: no
       command: jenkins-cli help
       register: cli_help
       changed_when: false
       failed_when: false
 
-    - name: 5. Print installed info and instructions
+    - name: 6. Print installed info and instructions
       debug:
         msg:
           - "jenkins-cli.jar installed at: {{ jenkins_cli_jar }}"
           - "Wrapper script:               {{ jenkins_cli_wrapper }}"
+          - "Alias:                        /usr/local/bin/jenkins -> jenkins-cli"
           - ""
           - "Jenkins URL used: {{ jenkins_url }}"
           - "Override at runtime by setting: export JENKINS_URL=http://<host>:8080"
           - ""
           - "Authentication:"
-          - "  jenkins-cli -auth <user>:<api-token> <command>"
+          - "  jenkins -auth <user>:<api-token> <command>"
           - "  Or set:  export JENKINS_USER_ID=<user>"
           - "           export JENKINS_API_TOKEN=<api-token>"
           - ""
-          - "Common commands:"
-          - "  jenkins-cli help                          - List all commands"
-          - "  jenkins-cli who-am-i                      - Check authentication"
-          - "  jenkins-cli build <job>                   - Trigger a build"
-          - "  jenkins-cli list-jobs                     - List all jobs"
-          - "  jenkins-cli get-job <job>                 - Get job XML config"
-          - "  jenkins-cli console <job> [build-number]  - Fetch build console output"
-          - "  jenkins-cli groovy = < script.groovy      - Run Groovy script"
+          - "Common commands (use 'jenkins' or 'jenkins-cli'):"
+          - "  jenkins help                          - List all commands"
+          - "  jenkins who-am-i                      - Check authentication"
+          - "  jenkins build <job>                   - Trigger a build"
+          - "  jenkins list-jobs                     - List all jobs"
+          - "  jenkins get-job <job>                 - Get job XML config"
+          - "  jenkins console <job> [build-number]  - Fetch build console output"
+          - "  jenkins groovy = < script.groovy      - Run Groovy script"
