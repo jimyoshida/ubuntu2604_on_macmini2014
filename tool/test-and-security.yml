@@ -25,6 +25,15 @@
       environment:
         PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
 
+    - name: Add bats-core tap for bats-assert and bats-support
+      become: true
+      become_user: "{{ brew_user }}"
+      community.general.homebrew_tap:
+        name: bats-core/bats-core
+        state: present
+      environment:
+        PATH: "/home/linuxbrew/.linuxbrew/bin:{{ ansible_facts.env.PATH }}"
+
     - name: Install testing and security tools via Homebrew
       become: true
       become_user: "{{ brew_user }}"
