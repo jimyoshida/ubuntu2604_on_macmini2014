@@ -48,22 +48,6 @@ This playbook configures SSH key permissions and authorized_keys after `id_rsa` 
 
 Run this playbook after `agent-base.yml` to complete SSH setup for remote access.
 
-## samba.yml
-
-Samba file sharing setup (optional)
-
-```bash
-ansible-playbook core/samba.yml
-```
-
-Only needed if you require Windows file sharing (SMB/CIFS) for home directory access over the network. Not required for typical development workflows.
-
-Configures Samba with home directory sharing:
-- Installs and enables Samba (smbd, nmbd)
-- Sets Samba password for the current user
-- Creates [homes] share with secure permissions (0700)
-- Optional interface binding for multi-network setups
-
 ## x11vnc.yml
 
 VNC server with virtual framebuffer (Xvfb) setup (optional)

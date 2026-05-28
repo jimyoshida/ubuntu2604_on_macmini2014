@@ -31,3 +31,4 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 | [o11y/](o11y/README.md) | Observability tools (Grafana, Loki, Tempo, Mimir) |
 | [ai-agent/](ai-agent/README.md) | AI agent tools (Claude Code, Antigravity CLI, OpenClaw) |
 | [tool/](tool/README.md) | Developer tools (Vault, VS Code) |
+| [media/](media/README.md) | Media tools (Jellyfin, Samba) |

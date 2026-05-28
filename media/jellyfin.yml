@@ -1,0 +1,56 @@
+---
+- name: Jellyfin Media Server Setup
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Download Jellyfin GPG key
+      get_url:
+        url: https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key
+        dest: /tmp/jellyfin.key
+        force: true
+
+    - name: 2a. Dearmor Jellyfin GPG key
+      shell: gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg < /tmp/jellyfin.key
+
+    - name: 3. Set permissions on Jellyfin keyring
+      file:
+        path: /usr/share/keyrings/jellyfin.gpg
+        mode: '0644'
+
+    - name: 4. Add Jellyfin repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu {{ ansible_facts['distribution_release'] }} main"
+        state: present
+        filename: jellyfin
+        update_cache: yes
+
+    - name: 5. Install Jellyfin
+      apt:
+        name: jellyfin
+        state: present
+        update_cache: yes
+
+    - name: 6. Enable and start Jellyfin service
+      systemd:
+        name: jellyfin
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Restart Jellyfin
+      systemd:
+        name: jellyfin
+        state: restarted
