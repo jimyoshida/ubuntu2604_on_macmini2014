@@ -44,7 +44,20 @@
         group: "{{ target_user }}"
       when: id_rsa_pub_stat.stat.exists
 
-    - name: 6. Ensure authorized_keys file exists
+    - name: 6. Check if config exists
+      stat:
+        path: "{{ ssh_dir }}/config"
+      register: ssh_config_stat
+
+    - name: 6a. Set proper permissions on config
+      file:
+        path: "{{ ssh_dir }}/config"
+        mode: '0600'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+      when: ssh_config_stat.stat.exists
+
+    - name: 7. Ensure authorized_keys file exists
       file:
         path: "{{ ssh_dir }}/authorized_keys"
         state: touch
@@ -54,13 +67,13 @@
         modification_time: preserve
         access_time: preserve
 
-    - name: 7. Read public key content
+    - name: 8. Read public key content
       slurp:
         src: "{{ ssh_dir }}/id_rsa.pub"
       register: public_key_content
       when: id_rsa_pub_stat.stat.exists
 
-    - name: 8. Add public key to authorized_keys
+    - name: 9. Add public key to authorized_keys
       lineinfile:
         path: "{{ ssh_dir }}/authorized_keys"
         line: "{{ public_key_content['content'] | b64decode | trim }}"
@@ -71,12 +84,12 @@
         group: "{{ target_user }}"
       when: id_rsa_pub_stat.stat.exists
 
-    - name: 9. Display status
+    - name: 10. Display status
       debug:
         msg: "SSH public key authentication setup completed for {{ target_user }}"
       when: id_rsa_pub_stat.stat.exists
 
-    - name: 10. Warn if keys not found
+    - name: 11. Warn if keys not found
       debug:
         msg: "WARNING: id_rsa and/or id_rsa.pub not found in {{ ssh_dir }}. Please upload the keys first."
       when: not id_rsa_stat.stat.exists or not id_rsa_pub_stat.stat.exists
