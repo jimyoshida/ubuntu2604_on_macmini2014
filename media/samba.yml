@@ -47,8 +47,10 @@
              comment = Home Directories
              browseable = no
              read only = no
-             create mask = 0700
-             directory mask = 0700
+             create mask = 0750
+             force create mode = 0550
+             directory mask = 0750
+             force directory mode = 0550
              valid users = %S
       notify: restart samba
 
