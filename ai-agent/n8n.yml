@@ -1,0 +1,87 @@
+---
+- name: n8n Workflow Automation Setup
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  vars:
+    target_user: "{{ lookup('env', 'USER') }}"
+    n8n_port: "{{ lookup('env', 'N8N_PORT') | default('5678', true) }}"
+
+  tasks:
+    - name: 1. Check system-wide Node.js is installed via apt
+      command: dpkg -s nodejs
+      register: nodejs_dpkg
+      changed_when: false
+      ignore_errors: true
+
+    - name: 1a. Fail if Node.js is not installed as a system package
+      fail:
+        msg: >-
+          System-wide Node.js is not installed.
+          Run: ansible-playbook core/nodejs.yml
+      when: nodejs_dpkg.rc != 0
+
+    - name: 1b. Resolve node binary path
+      command: which node
+      register: node_path
+      changed_when: false
+
+    - name: 1c. Fail if node in PATH is managed by a version manager
+      fail:
+        msg: >-
+          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by a version manager.
+          Ensure /usr/bin/node takes precedence, or unset version manager shims for this session.
+      when: "'/usr/' not in node_path.stdout"
+
+    - name: 2. Install n8n globally via npm
+      command: npm install -g n8n
+      args:
+        creates: /usr/bin/n8n
+
+    - name: 3. Create n8n data directory
+      file:
+        path: /var/lib/n8n
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0750'
+
+    - name: 4. Create n8n systemd service
+      copy:
+        dest: /etc/systemd/system/n8n.service
+        content: |
+          [Unit]
+          Description=n8n Workflow Automation
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ target_user }}
+          Environment=N8N_USER_FOLDER=/var/lib/n8n
+          Environment=N8N_PORT={{ n8n_port }}
+          ExecStart=/usr/bin/n8n
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart n8n
+
+    - name: 5. Enable and start n8n service
+      systemd:
+        name: n8n
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: Restart n8n
+      systemd:
+        name: n8n
+        state: restarted
+        daemon_reload: yes
