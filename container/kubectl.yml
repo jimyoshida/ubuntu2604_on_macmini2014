@@ -34,7 +34,7 @@
 
     - name: 3a. Dearmor Kubernetes apt key
       become: yes
-      shell: gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg < /tmp/kubernetes-release.key
+      shell: gpg --batch --no-tty --dearmor < /tmp/kubernetes-release.key > /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
     - name: 4. Add Kubernetes apt repository
       become: yes

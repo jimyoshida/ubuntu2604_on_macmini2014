@@ -23,7 +23,7 @@
         force: true
 
     - name: 2a. Dearmor Jellyfin GPG key
-      shell: gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg < /tmp/jellyfin.key
+      shell: gpg --batch --no-tty --dearmor < /tmp/jellyfin.key > /usr/share/keyrings/jellyfin.gpg
 
     - name: 3. Set permissions on Jellyfin keyring
       file:

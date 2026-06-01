@@ -38,7 +38,7 @@
     - name: 4. Add Microsoft GPG key to apt keyring
       become: yes
       shell: |
-        cat /tmp/microsoft.asc | gpg --dearmor > /usr/share/keyrings/packages.microsoft.gpg
+        gpg --batch --no-tty --dearmor < /tmp/microsoft.asc > /usr/share/keyrings/packages.microsoft.gpg
       when: vscode_check.rc != 0
 
     - name: 5. Clean up temporary GPG key file

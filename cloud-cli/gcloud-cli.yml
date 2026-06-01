@@ -26,7 +26,7 @@
         force: true
 
     - name: 2a. Dearmor Google Cloud public key
-      shell: gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg < /tmp/cloud.google.key
+      shell: gpg --batch --no-tty --dearmor < /tmp/cloud.google.key > /usr/share/keyrings/cloud.google.gpg
 
     - name: 3. Add Google Cloud SDK repository
       apt_repository:

@@ -36,7 +36,7 @@
         force: true
 
     - name: 2a. Dearmor Grafana GPG key
-      shell: gpg --dearmor -o /usr/share/keyrings/grafana.gpg < /tmp/grafana.key
+      shell: gpg --batch --no-tty --dearmor < /tmp/grafana.key > /usr/share/keyrings/grafana.gpg
 
     - name: 3. Set permissions on Grafana keyring
       file:

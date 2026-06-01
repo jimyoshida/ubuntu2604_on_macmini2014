@@ -30,7 +30,7 @@
         force: true
 
     - name: 3a. Dearmor Microsoft signing key
-      shell: gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg < /tmp/microsoft.asc
+      shell: gpg --batch --no-tty --dearmor < /tmp/microsoft.asc > /etc/apt/keyrings/microsoft.gpg
 
     - name: 4. Determine Azure CLI repository codename
       set_fact:

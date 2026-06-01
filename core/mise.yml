@@ -24,7 +24,7 @@
 
     - name: 2a. Dearmor mise GPG key
       become: yes
-      shell: gpg --dearmor -o /usr/share/keyrings/mise-archive-keyring.gpg < /tmp/mise-gpg-key.pub
+      shell: gpg --batch --no-tty --dearmor < /tmp/mise-gpg-key.pub > /usr/share/keyrings/mise-archive-keyring.gpg
 
     - name: 3. Set permissions on mise keyring
       become: yes
