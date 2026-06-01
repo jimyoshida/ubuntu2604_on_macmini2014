@@ -30,20 +30,18 @@
 
     - name: 3. Download Jenkins GPG key
       get_url:
-        url: https://pkg.jenkins.io/debian-stable/jenkins.io.key
-        dest: /etc/apt/keyrings/jenkins-archive-keyring.asc
+        url: https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
+        dest: /tmp/jenkins.io-2026.key
         mode: '0644'
         force: yes
 
-    - name: 4. Add Jenkins GPG key to apt keyring
-      shell: |
-        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 7198F4B714ABFC68
+    - name: 4. Dearmor Jenkins GPG key
+      shell: gpg --batch --dearmor < /tmp/jenkins.io-2026.key > /usr/share/keyrings/jenkins-keyring.gpg
       changed_when: false
-      failed_when: false
 
     - name: 5. Add Jenkins apt repository
       apt_repository:
-        repo: "deb https://pkg.jenkins.io/debian-stable binary/"
+        repo: "deb [signed-by=/usr/share/keyrings/jenkins-keyring.gpg] https://pkg.jenkins.io/debian-stable binary/"
         state: present
         filename: jenkins
 
