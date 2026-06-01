@@ -99,6 +99,16 @@
             forward_to = [loki.write.local.receiver]
 
             stage.match {
+              selector = `{unit="loki.service"}`
+              action   = "drop"
+            }
+
+            stage.match {
+              selector = `{unit="alloy.service"}`
+              action   = "drop"
+            }
+
+            stage.match {
               selector = `{user_unit=""}`
               action   = "keep"
 
