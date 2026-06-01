@@ -31,59 +31,6 @@ journalctl -u n8n -f
 
 > **Note:** Back up `/var/lib/n8n/.n8n/config` — it contains the encryption key for stored credentials.
 
-## openclaw.yml
-
-OpenClaw Slack agent setup
-
-```bash
-ansible-playbook ai-agent/openclaw.yml
-```
-
-**Prerequisites:**
-- System-wide Node.js installed via `core/nodejs.yml`
-  - version manager-managed Node.js will cause the playbook to fail
-
-This playbook:
-- Installs OpenClaw globally via npm (`npm install -g openclaw@latest`)
-- Sets up shell completion (bash/zsh/fish)
-- **Does NOT automatically run onboarding** - manual steps required (see below)
-
-**Manual Onboarding Steps (Required):**
-
-After running the playbook, open a new shell and complete the onboarding manually:
-
-```bash
-openclaw onboard --install-daemon
-sudo loginctl enable-linger $USER
-```
-
-The onboarding command:
-- Installs the OpenClaw systemd service (`openclaw-gateway.service`)
-- Configures the daemon to run at startup
-- Sets up the necessary permissions and environment
-
-After manual onboarding, manage the service:
-```bash
-systemctl --user start openclaw-gateway      # Start
-systemctl --user status openclaw-gateway     # Check status
-journalctl --user -u openclaw-gateway -f     # View logs
-systemctl --user stop openclaw-gateway       # Stop
-```
-
-**Manual usage without daemon:**
-```bash
-openclaw gateway --port 18789 --verbose
-openclaw message send --target <number> --message "Hello"
-openclaw agent --message "Your query" --thinking high
-```
-
-**Updating OpenClaw:**
-```bash
-npm update -g openclaw
-```
-
-Documentation: https://docs.openclaw.ai/
-
 ## nanoclaw.yml
 
 NanoClaw agent setup (Docker-based, lightweight OpenClaw alternative)

@@ -84,7 +84,7 @@ The source is the systemd journal only. File sources (`/var/log/syslog`, `auth.l
 |---|---|---|
 | `job` | static — `"journal"` for system units, `"user_journal"` for user units | `journal` |
 | `unit` | `_SYSTEMD_UNIT` | `sshd.service` |
-| `user_unit` | `_SYSTEMD_USER_UNIT` | `openclaw-gateway.service` |
+| `user_unit` | `_SYSTEMD_USER_UNIT` | `nanoclaw-v2-example.service` |
 | `transport` | `_TRANSPORT` | `journal`, `stdout`, `syslog`, `kernel` |
 | `app` | `SYSLOG_IDENTIFIER` (`__journal_syslog_identifier`) | `sshd` |
 | `service_name` | auto-detected by Loki from `app` (falls back to `job`) | `sshd` |
@@ -102,7 +102,7 @@ Install Prometheus Process Exporter (per-process metrics)
 ansible-playbook o11y/process_exporter.yml
 ```
 
-Installs `prometheus-process-exporter` from the Ubuntu apt repository. Process Exporter scrapes `/proc` and exposes per-process metrics (CPU, memory, I/O, threads, open file descriptors) grouped by process name at `http://localhost:9256/metrics`. The config uses `{{.Comm}}` matching, so every named process (e.g. `openclaw-gateway`, `alloy`, `loki`, `grafana-server`) is tracked automatically without explicit enumeration.
+Installs `prometheus-process-exporter` from the Ubuntu apt repository. Process Exporter scrapes `/proc` and exposes per-process metrics (CPU, memory, I/O, threads, open file descriptors) grouped by process name at `http://localhost:9256/metrics`. The config uses `{{.Comm}}` matching, so every named process (e.g. `alloy`, `loki`, `grafana-server`) is tracked automatically without explicit enumeration.
 
 After running this playbook, re-run `prometheus.yml` to pick up the new `process` scrape job added to its config.
 
@@ -206,7 +206,7 @@ Requires `process_exporter.yml` to have been run first.
 3. Select the Mimir data source added above
 4. Click **Import**
 
-The dashboard displays per-process CPU, memory (RSS), thread count, and open file descriptors, grouped by process name (e.g. `openclaw-gateway`, `alloy`, `loki`).
+The dashboard displays per-process CPU, memory (RSS), thread count, and open file descriptors, grouped by process name (e.g. `alloy`, `loki`).
 
 ---
 
