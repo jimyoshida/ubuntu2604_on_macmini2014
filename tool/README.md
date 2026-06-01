@@ -84,6 +84,25 @@ Web UI is available at `http://127.0.0.1:8080`.
 
 > **Note:** The playbook automatically extracts and displays the initial admin password. Save it securely. To manage Jenkins via CLI, install the jenkins-cli tool using `cloud-cli/jenkins-cli.yml`.
 
+## opentofu.yml
+
+Install OpenTofu
+
+```bash
+ansible-playbook tool/opentofu.yml
+```
+
+Installs OpenTofu from the official apt repository. The apt package name is `tofu`; the binary is available as `tofu` after installation.
+
+**After installation:**
+
+```bash
+tofu version
+tofu init       # Initialize a working directory
+tofu plan       # Preview infrastructure changes
+tofu apply      # Apply changes
+```
+
 ## vault.yml
 
 Install HashiCorp Vault OSS

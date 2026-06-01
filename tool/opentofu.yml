@@ -1,0 +1,61 @@
+---
+- name: Install OpenTofu
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: 2. Download OpenTofu GPG key
+      get_url:
+        url: https://get.opentofu.org/opentofu.gpg
+        dest: /tmp/opentofu.gpg
+        force: true
+
+    - name: 2a. Dearmor OpenTofu GPG key
+      shell: gpg --dearmor -o /usr/share/keyrings/opentofu.gpg < /tmp/opentofu.gpg
+      args:
+        creates: /usr/share/keyrings/opentofu.gpg
+
+    - name: 3. Download OpenTofu repo GPG key
+      get_url:
+        url: https://packages.opentofu.org/opentofu/tofu/gpgkey
+        dest: /tmp/opentofu-repo.gpg
+        force: true
+
+    - name: 3a. Dearmor OpenTofu repo GPG key
+      shell: gpg --dearmor -o /usr/share/keyrings/opentofu-repo.gpg < /tmp/opentofu-repo.gpg
+      args:
+        creates: /usr/share/keyrings/opentofu-repo.gpg
+
+    - name: 4. Add OpenTofu apt repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/opentofu.gpg,/usr/share/keyrings/opentofu-repo.gpg] https://packages.opentofu.org/opentofu/tofu/any/ any main"
+        state: present
+        filename: opentofu
+        update_cache: yes
+
+    - name: 5. Install OpenTofu
+      apt:
+        name: tofu
+        state: present
+        update_cache: yes
+
+    - name: 6. Print post-install instructions
+      ansible.builtin.debug:
+        msg:
+          - "OpenTofu has been successfully installed."
+          - ""
+          - "Get started:"
+          - "  tofu version"
+          - "  tofu init"
