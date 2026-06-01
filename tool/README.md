@@ -132,6 +132,38 @@ ansible-playbook tool/vscode.yml
 
 VSCode is available via the `code` command. You can launch it from the terminal or find it in your application menu.
 
+## freshrss.yml
+
+Install FreshRSS via Docker
+
+```bash
+ansible-playbook tool/freshrss.yml
+```
+
+**Prerequisites:**
+
+- Docker must be installed first (run `container/docker.yml`)
+
+This playbook:
+
+- Verifies Docker is installed
+- Creates persistent storage directories for FreshRSS configuration, data, and extensions
+- Sets up a Docker network for the container
+- Deploys FreshRSS image on port `8081`
+- Waits for the service to be ready before reporting success
+
+**After installation:**
+
+FreshRSS web UI is available at `http://127.0.0.1:8081`. Follow the setup wizard to configure your feeds and preferences. Persistent data is stored at `~/freshrss-data/`.
+
+**Managing the container:**
+
+```bash
+docker stop freshrss      # Stop the container
+docker start freshrss     # Start the container
+docker logs freshrss      # View container logs
+```
+
 ## modern-cli-tools.yml
 
 Install modern CLI tools via Homebrew

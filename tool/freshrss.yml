@@ -1,0 +1,72 @@
+---
+- name: FreshRSS Setup via Docker
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  vars:
+    target_user: "{{ lookup('env', 'USER') }}"
+    freshrss_container_name: freshrss
+    freshrss_port: 8081
+    freshrss_data_dir: "/home/{{ target_user }}/freshrss-data"
+
+  pre_tasks:
+    - name: Check Docker is installed
+      command: docker --version
+      register: docker_version
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if Docker is not installed
+      fail:
+        msg: "Docker is not installed. Please run @container/docker.yml first."
+      when: docker_version.rc != 0
+
+  tasks:
+    - name: 1. Create FreshRSS data directory
+      file:
+        path: "{{ freshrss_data_dir }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+
+    - name: 2. Create Docker network for FreshRSS
+      docker_network:
+        name: freshrss-network
+        state: present
+
+    - name: 3. Create and start FreshRSS container
+      docker_container:
+        name: "{{ freshrss_container_name }}"
+        image: "freshrss/freshrss:latest"
+        state: started
+        restart_policy: always
+        ports:
+          - "{{ freshrss_port }}:80"
+        volumes:
+          - "{{ freshrss_data_dir }}/config:/var/www/FreshRSS/config"
+          - "{{ freshrss_data_dir }}/data:/var/www/FreshRSS/data"
+          - "{{ freshrss_data_dir }}/extensions:/var/www/FreshRSS/extensions"
+        networks:
+          - name: freshrss-network
+        env:
+          TZ: UTC
+
+    - name: 4. Wait for FreshRSS to be ready
+      uri:
+        url: "http://localhost:{{ freshrss_port }}"
+        status_code: 200
+      register: result
+      until: result.status == 200
+      retries: 30
+      delay: 2
+
+    - name: 5. Display FreshRSS access information
+      debug:
+        msg:
+          - "FreshRSS has been successfully installed!"
+          - "Access URL: http://localhost:{{ freshrss_port }}"
+          - "Data directory: {{ freshrss_data_dir }}"
+          - "Container name: {{ freshrss_container_name }}"
