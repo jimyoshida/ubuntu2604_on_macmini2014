@@ -20,6 +20,7 @@ This playbook configures:
 - Git branch display in bash prompt
 - `s` alias for `systemctl --user`
 - IPv6 disabled on the specified NetworkManager connection
+- journald low disk I/O configuration (500MB max, 3-day retention, 5-minute sync intervals)
 
 Also installs `avahi-utils`. Useful commands:
 

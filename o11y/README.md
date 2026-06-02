@@ -46,6 +46,8 @@ ansible-playbook o11y/loki.yml
 
 Installs Loki from the official Grafana APT repository. Loki listens on `http://localhost:3100` (HTTP) and `9096` (gRPC). Add it as a data source in Grafana using the HTTP URL.
 
+The playbook configures Loki with `log_level: info` to suppress verbose debug logs and reduce disk I/O.
+
 ## alloy.yml
 
 Install Grafana Alloy (log shipper)

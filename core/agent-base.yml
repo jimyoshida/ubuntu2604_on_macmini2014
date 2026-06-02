@@ -182,6 +182,45 @@
         nmcli connection up "{{ nm_connection }}"
       changed_when: false
 
+    - name: 19. Create journald configuration directory
+      file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        mode: '0755'
+
+    - name: 20. Configure journald for low disk I/O
+      copy:
+        dest: /etc/systemd/journald.conf.d/low-io.conf
+        content: |
+          [Journal]
+          # Limit disk usage to 500MB
+          SystemMaxUse=500M
+
+          # Keep only 3 days of logs
+          MaxRetentionSec=3d
+
+          # Sync to disk less frequently (5 minutes instead of default)
+          SyncIntervalSec=5m
+
+          # Limit individual log file size
+          SystemMaxFileSize=64M
+
+          # Maximum number of log files to keep
+          SystemMaxFiles=8
+
+          # Reduce rate limiting to drop more logs during bursts
+          RateLimitIntervalSec=30s
+          RateLimitBurst=1000
+
+          # Compress logs to save space
+          Compress=yes
+        mode: '0644'
+      notify: restart journald
+
+    - name: 21. Vacuum journal to configured size
+      command: journalctl --vacuum-size=500M
+      changed_when: false
+
   handlers:
     - name: restart logind
       systemd:
@@ -196,4 +235,9 @@
     - name: restart ssh
       systemd:
         name: ssh
+        state: restarted
+
+    - name: restart journald
+      systemd:
+        name: systemd-journald
         state: restarted
