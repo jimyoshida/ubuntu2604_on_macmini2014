@@ -84,6 +84,40 @@ Web UI is available at `http://127.0.0.1:8080`.
 
 > **Note:** The playbook automatically extracts and displays the initial admin password. Save it securely. To manage Jenkins via CLI, install the jenkins-cli tool using `cloud-cli/jenkins-cli.yml`.
 
+## jenkins-agent.yml
+
+Set up this machine as a Jenkins inbound (JNLP) agent
+
+```bash
+ansible-playbook tool/jenkins-agent.yml
+```
+
+Installs OpenJDK 21 (JRE), downloads `agent.jar` from the controller, and runs it as a `jenkins-agent` systemd service that connects to the controller over **WebSocket**. Unlike `jenkins.yml` (which installs a controller), this turns the machine into a build agent.
+
+**Prerequisites:**
+
+- A reachable Jenkins controller and a **permanent agent node** already created on it (New Node → Launch method "Launch agent by connecting it to the controller"). Copy the node name and secret from the node's connection page.
+- Set the required environment variables (e.g. in `env.sh`, see `env-tmpl.sh`):
+
+```bash
+export JENKINS_URL=http://controller:8080   # controller URL
+export JENKINS_AGENT_NAME=macmini2014        # node name on the controller
+export JENKINS_AGENT_SECRET=<secret>         # secret from the node page
+export JENKINS_AGENT_USER=yoshida            # local user the agent runs as
+# export JENKINS_AGENT_WORKDIR=/home/yoshida/jenkins-agent  # optional override
+```
+
+The secret is written to a `0600`-protected file and referenced via `-secret @file`, so it is not exposed in the systemd unit.
+
+**After installation:**
+
+```bash
+sudo systemctl status jenkins-agent     # service state
+sudo journalctl -u jenkins-agent -f     # live logs
+```
+
+The node should appear online on the controller. The service restarts automatically and starts on boot.
+
 ## opentofu.yml
 
 Install OpenTofu
