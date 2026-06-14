@@ -48,6 +48,7 @@
           ExecStart=/usr/bin/docker run --rm --name n8n \
             -p {{ n8n_port }}:5678 \
             -v {{ n8n_data_dir }}:/home/node/.n8n \
+            -e N8N_SECURE_COOKIE=false \
             n8nio/n8n
           ExecStop=/usr/bin/docker stop n8n
 
