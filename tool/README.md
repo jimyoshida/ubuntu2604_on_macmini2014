@@ -58,32 +58,6 @@ markdownlint --config .markdownlintrc.json '**/*.md'  # Use custom config
 
 Documentation: [markdownlint-cli](https://github.com/igorshubovych/markdownlint-cli)
 
-## jenkins.yml
-
-Install Jenkins
-
-```bash
-ansible-playbook tool/jenkins.yml
-```
-
-Installs Jenkins from the official Debian stable repository with OpenJDK 21. Configures the Jenkins systemd service on port `8080`, waits for the service to be ready, and displays the initial admin password. Adds `JENKINS_HOME` to `~/.bashrc`.
-
-**After installation:**
-
-```bash
-source ~/.bashrc
-
-# 1. Open Jenkins in your browser
-open http://127.0.0.1:8080/login
-
-# 2. Use the initial admin password shown in the playbook output
-# 3. Follow the setup wizard to install plugins and create your first admin user
-```
-
-Web UI is available at `http://127.0.0.1:8080`.
-
-> **Note:** The playbook automatically extracts and displays the initial admin password. Save it securely. To manage Jenkins via CLI, install the jenkins-cli tool using `cloud-cli/jenkins-cli.yml`.
-
 ## jenkins-agent.yml
 
 Set up this machine as a Jenkins inbound (JNLP) agent
@@ -149,25 +123,6 @@ This agent connects only over **WebSocket** (`-webSocket`). If the agent service
 3. **`JENKINS_AGENT_SECRET` must match the node's current secret.** Recreating the node regenerates its secret. A mismatch returns `403` and logs `WebSocketAgents#doIndex: incorrect secret for <name>` on the controller. Re-copy the secret from the node's connection page into `env.sh` and re-run the playbook.
 
 > **Tip:** A `curl` WebSocket-upgrade probe to `/wsagents/` returns `400` even when the proxy is configured correctly (curl is not a real WebSocket client), so don't use it as a pass/fail signal. Trust the **agent log** (`INFO: Connected`) and the **controller log** (`journalctl -u jenkins`) instead.
-
-## opentofu.yml
-
-Install OpenTofu
-
-```bash
-ansible-playbook tool/opentofu.yml
-```
-
-Installs OpenTofu from the official apt repository. The apt package name is `tofu`; the binary is available as `tofu` after installation.
-
-**After installation:**
-
-```bash
-tofu version
-tofu init       # Initialize a working directory
-tofu plan       # Preview infrastructure changes
-tofu apply      # Apply changes
-```
 
 ## vault.yml
 

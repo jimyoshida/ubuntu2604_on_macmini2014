@@ -99,3 +99,22 @@ After installation, run `jira init` to configure your instance interactively:
 jira init --installation cloud --server https://YOUR_ORG.atlassian.net --login your@email.com --project YOUR_PROJECT
 ```
 
+## opentofu.yml
+
+Install OpenTofu
+
+```bash
+ansible-playbook cloud-cli/opentofu.yml
+```
+
+Installs OpenTofu from the official apt repository. The apt package name is `tofu`; the binary is available as `tofu` after installation.
+
+**After installation:**
+
+```bash
+tofu version
+tofu init       # Initialize a working directory
+tofu plan       # Preview infrastructure changes
+tofu apply      # Apply changes
+```
+
