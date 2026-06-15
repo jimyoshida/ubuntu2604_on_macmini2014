@@ -53,12 +53,3 @@
       debug:
         msg: "Gemini CLI installed: {{ gemini_version.stdout }}"
       when: gemini_version.rc == 0
-
-    - name: 6. Set Vertex AI environment variables in .bashrc
-      lineinfile:
-        path: "{{ user_home }}/.bashrc"
-        line: "{{ item.line }}"
-        regexp: "{{ item.regexp }}"
-        state: present
-      loop:
-        - { line: 'export GOOGLE_GENAI_USE_VERTEXAI=true', regexp: '^export GOOGLE_GENAI_USE_VERTEXAI=' }

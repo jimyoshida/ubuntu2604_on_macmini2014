@@ -170,7 +170,12 @@ ansible-playbook ai-agent/gemini-cli.yml
 
 This playbook:
 - Installs `@google/gemini-cli` globally via npm
-- Sets `GOOGLE_GENAI_USE_VERTEXAI=true` in `.bashrc`
+
+**Required environment variables (set in `env-tmpl.sh`):**
+
+- `GOOGLE_GENAI_USE_VERTEXAI` — Use Vertex AI for Gemini CLI
+- `GOOGLE_CLOUD_PROJECT` — GCP project ID
+- `GOOGLE_CLOUD_LOCATION` — GCP region (e.g., `global`)
 
 **Required setup before use:**
 
@@ -210,16 +215,23 @@ ansible-playbook ai-agent/claude-code.yml
 Installs the Claude Code CLI tool using the official installation script. The playbook:
 - Installs prerequisites (curl, ca-certificates)
 - Downloads and runs the official Claude Code installer
-- Ensures `~/.local/bin` is added to PATH in both `.bashrc` and `.profile`
+- Ensures `~/.local/bin` is added to PATH in `.bashrc`, `.profile`, and `/etc/environment`
 - Respects `HTTPS_PROXY` environment variable
 - Verifies installation and displays version
 
+**Optional environment variables (set in `env-tmpl.sh`):**
+
+- `CLAUDE_CODE_USE_VERTEX` — Use Vertex AI for Claude Code
+- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project ID for Vertex AI
+- `CLOUD_ML_REGION` — GCP region for Vertex AI
+
 After installation, authenticate with:
+
 ```bash
 claude auth login
 ```
 
-Documentation: https://claude.ai/code
+Documentation: <https://claude.ai/code>
 
 ## antigravity-cli.yml
 
@@ -230,15 +242,17 @@ ansible-playbook ai-agent/antigravity-cli.yml
 ```
 
 Installs the Antigravity CLI tool (`agy`) using the official installation script. The playbook:
+
 - Installs prerequisites (curl, ca-certificates, libsecret-1-0)
 - Downloads and runs the official Antigravity installer
-- Ensures `~/.local/bin` is added to PATH in both `.bashrc` and `.profile`
+- Ensures `~/.local/bin` is added to PATH in `.bashrc`, `.profile`, and `/etc/environment`
 - Respects `HTTPS_PROXY` environment variable
 - Verifies installation and displays version
 
 After installation, authenticate with:
+
 ```bash
 agy auth login
 ```
 
-Documentation: https://antigravity.google
+Documentation: <https://antigravity.google>
