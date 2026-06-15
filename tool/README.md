@@ -118,6 +118,38 @@ sudo journalctl -u jenkins-agent -f     # live logs
 
 The node should appear online on the controller. The service restarts automatically and starts on boot.
 
+**Controller-side requirements (WebSocket transport):**
+
+This agent connects only over **WebSocket** (`-webSocket`). If the agent service is `active` but the node stays **offline** with the agent logging `Did not receive X-Remoting-Capability header` / `Failed to connect: Handshake error`, the cause is almost always on the controller, not this machine. All three of the following must be true:
+
+1. **The reverse proxy in front of the controller must allow WebSocket upgrades.** For nginx, the Jenkins `location` block needs:
+
+   ```nginx
+   proxy_http_version 1.1;
+   proxy_set_header   Upgrade    $http_upgrade;
+   proxy_set_header   Connection "upgrade";
+   ```
+
+   If missing, the proxy forwards the agent's request as plain HTTP and Jenkins replies `400` on `/wsagents/` (`This endpoint is only for use from agent.jar in WebSocket mode`).
+
+2. **The node must have WebSocket enabled.** If disabled, the controller returns `403` on `/wsagents/`. This is required when the controller's TCP inbound agent port is disabled (`<slaveAgentPort>-1</slaveAgentPort>`), which makes WebSocket the only transport.
+
+   - **UI:** node → **Configure** → under launch method "Launch agent by connecting it to the controller", tick **"Use WebSocket"** → Save. The checkbox is inline directly under the launch method (there is no "Advanced" button for it). If you don't see it, hard-refresh the page — the config form renders with JavaScript and can load partially.
+   - **On disk (when the UI checkbox won't render):** edit `<JENKINS_HOME>/nodes/<name>/config.xml` (e.g. `/var/lib/jenkins/nodes/<name>/config.xml`) and set the launcher's `webSocket` flag, then make Jenkins re-read it:
+
+     ```bash
+     # back up first
+     sudo cp -a /var/lib/jenkins/nodes/<name>/config.xml{,.bak}
+     sudo sed -i 's#<webSocket>false</webSocket>#<webSocket>true</webSocket>#' \
+       /var/lib/jenkins/nodes/<name>/config.xml
+     ```
+
+     Then apply it via **Manage Jenkins → Reload Configuration from Disk** (reloads all jobs/nodes from disk; running builds are not interrupted). The edit does not take effect until this reload (or a Jenkins restart).
+
+3. **`JENKINS_AGENT_SECRET` must match the node's current secret.** Recreating the node regenerates its secret. A mismatch returns `403` and logs `WebSocketAgents#doIndex: incorrect secret for <name>` on the controller. Re-copy the secret from the node's connection page into `env.sh` and re-run the playbook.
+
+> **Tip:** A `curl` WebSocket-upgrade probe to `/wsagents/` returns `400` even when the proxy is configured correctly (curl is not a real WebSocket client), so don't use it as a pass/fail signal. Trust the **agent log** (`INFO: Connected`) and the **controller log** (`journalctl -u jenkins`) instead.
+
 ## opentofu.yml
 
 Install OpenTofu

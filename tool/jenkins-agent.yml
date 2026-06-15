@@ -109,7 +109,10 @@
         enabled: yes
         state: started
 
-    - name: 10. Wait for the agent to connect
+    - name: Apply any pending restart before confirming the connection
+      meta: flush_handlers
+
+    - name: 10. Wait for the agent service to be active
       command: systemctl is-active jenkins-agent
       register: agent_active
       until: agent_active.stdout == "active"
@@ -117,7 +120,38 @@
       delay: 2
       changed_when: false
 
-    - name: 11. Show post-install instructions
+    # systemctl reports "active" even while the agent is stuck retrying a
+    # failed handshake, so confirm it actually connected: the most recent
+    # connection-state line in the journal must be "Connected".
+    - name: 11. Wait for the agent to connect to the controller
+      shell: |
+        set -o pipefail
+        journalctl -u jenkins-agent --no-pager -n 500 \
+          | grep -aE 'INFO: Connected|Failed to connect|Terminated|X-Remoting-Capability' \
+          | tail -1 | grep -q 'INFO: Connected'
+      args:
+        executable: /bin/bash
+      register: agent_connected
+      until: agent_connected.rc == 0
+      retries: 20
+      delay: 3
+      changed_when: false
+      failed_when: false
+
+    - name: 12. Confirm the agent connected successfully
+      assert:
+        that: agent_connected.rc == 0
+        quiet: yes
+        success_msg: "Agent '{{ agent_name }}' is connected to {{ jenkins_url }}."
+        fail_msg: >-
+          The jenkins-agent service is running but never connected to
+          {{ jenkins_url }}. This is almost always a controller-side issue:
+          the reverse proxy must allow WebSocket upgrades, the node must have
+          WebSocket enabled (webSocket=true), and JENKINS_AGENT_SECRET must
+          match the node's current secret. See the troubleshooting notes in
+          tool/README.md, then inspect: sudo journalctl -u jenkins-agent -e
+
+    - name: 13. Show post-install instructions
       debug:
         msg:
           - "Jenkins inbound agent '{{ agent_name }}' is running as user '{{ agent_user }}'."
