@@ -122,11 +122,14 @@
 
     # systemctl reports "active" even while the agent is stuck retrying a
     # failed handshake, so confirm it actually connected: the most recent
-    # connection-state line in the journal must be "Connected".
+    # connection-state line in the journal must be "Connected". Scope the scan
+    # to the current service invocation so a stale "Connected" from an earlier
+    # run/restart cannot make this pass falsely.
     - name: 11. Wait for the agent to connect to the controller
       shell: |
         set -o pipefail
-        journalctl -u jenkins-agent --no-pager -n 500 \
+        inv="$(systemctl show -p InvocationID --value jenkins-agent)"
+        journalctl ${inv:+_SYSTEMD_INVOCATION_ID="$inv"} -u jenkins-agent --no-pager \
           | grep -aE 'INFO: Connected|Failed to connect|Terminated|X-Remoting-Capability' \
           | tail -1 | grep -q 'INFO: Connected'
       args:
