@@ -9,7 +9,7 @@
     hostname: "{{ lookup('env', 'HOSTNAME') }}"
     avahi_interfaces: "{{ lookup('env', 'AVAHI_INTERFACES') | default('') }}"
     target_user: "{{ lookup('env', 'USER') }}"
-    nm_connection: "{{ lookup('env', 'NM_CONNECTION') | default('netplan-enp3s0f0') }}"
+    nm_connection: "{{ lookup('env', 'NM_CONNECTION') }}"
 
   tasks:
     - name: 1. Update /etc/hosts with new hostname
