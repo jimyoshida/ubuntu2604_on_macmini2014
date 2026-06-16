@@ -12,17 +12,13 @@ Installs `prometheus-node-exporter` from the Ubuntu apt repository. Node Exporte
 
 ## prometheus.yml
 
-Install Prometheus (metrics scraper and Mimir forwarder)
-
-**⚠️ DEPENDENCY:** Run `mimir.yml` BEFORE this playbook. Prometheus is configured with remote_write to Mimir, and restarting Prometheus without Mimir running will cause the service to hang.
+Install Prometheus (metrics scraper)
 
 ```bash
 ansible-playbook o11y/prometheus.yml
 ```
 
-Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) every 15 seconds and remote-write metrics to Mimir (`http://localhost:9009/api/v1/push`). Prometheus UI/API is available at `http://localhost:9090`. Local storage retention is **15 days**.
-
-> **Note:** No `X-Scope-OrgID` header is needed because Mimir runs with `multitenancy_enabled: false`.
+Installs Prometheus from the Ubuntu apt repository and configures it to scrape Node Exporter (`localhost:9100`) and Process Exporter (`localhost:9256`) every 15 seconds. Prometheus UI/API is available at `http://localhost:9090`. Local storage retention is **15 days**.
 
 ## grafana.yml
 
@@ -176,25 +172,24 @@ Run the playbooks in order:
 
 ```bash
 ansible-playbook o11y/grafana.yml
-ansible-playbook o11y/mimir.yml
 ansible-playbook o11y/node_exporter.yml
 ansible-playbook o11y/process_exporter.yml
 ansible-playbook o11y/prometheus.yml
 ```
 
-**1. Add Mimir as a data source**
+**1. Add Prometheus as a data source**
 
 1. Open Grafana at `http://localhost:3030` (default credentials: `admin` / `admin`)
 2. Go to **Connections → Data Sources → Add new data source**
 3. Select **Prometheus**
-4. Set URL to `http://localhost:9009/prometheus`
+4. Set URL to `http://localhost:9090`
 5. Click **Save & test**
 
 **2. Import the Node Exporter Full dashboard**
 
 1. Go to **Dashboards → New → Import**
 2. Enter dashboard ID `1860` and click **Load**
-3. Select the Mimir data source added above
+3. Select the Prometheus data source added above
 4. Click **Import**
 
 The dashboard displays CPU usage, memory, disk I/O, filesystem, and network metrics for the host.
@@ -205,7 +200,7 @@ Requires `process_exporter.yml` to have been run first.
 
 1. Go to **Dashboards → New → Import**
 2. Enter dashboard ID `249` and click **Load**
-3. Select the Mimir data source added above
+3. Select the Prometheus data source added above
 4. Click **Import**
 
 The dashboard displays per-process CPU, memory (RSS), thread count, and open file descriptors, grouped by process name (e.g. `alloy`, `loki`).
