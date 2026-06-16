@@ -136,7 +136,6 @@
             -display "${DISPLAY}" \
             -auth "${AUTH_FILE}" \
             -forever \
-            -loop \
             -noxdamage \
             -repeat \
             -rfbauth "${HOME}/.vnc/passwd" \

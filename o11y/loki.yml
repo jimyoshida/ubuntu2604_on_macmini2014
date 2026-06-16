@@ -43,7 +43,7 @@
         state: present
         update_cache: yes
 
-    - name: 6. Set HTTP and gRPC listen ports and log level
+    - name: 6. Set HTTP and gRPC listen ports in Loki config
       lineinfile:
         path: /etc/loki/config.yml
         regexp: "{{ item.regexp }}"
@@ -51,7 +51,14 @@
       loop:
         - { regexp: "http_listen_port:", line: "  http_listen_port: 3100" }
         - { regexp: "grpc_listen_port:", line: "  grpc_listen_port: 9096" }
-        - { regexp: "log_level:", line: "  log_level: info" }
+      notify: Restart Loki
+
+    - name: 6a. Set log level under server block in Loki config
+      lineinfile:
+        path: /etc/loki/config.yml
+        regexp: "^\s*log_level:"
+        line: "  log_level: info"
+        insertafter: "^server:"
       notify: Restart Loki
 
     - name: 7. Enable and start Loki service
