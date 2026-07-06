@@ -186,11 +186,12 @@
         daemon_reload: yes
         scope: user
 
-    - name: 15. Ensure x11vnc user service is not enabled by default
+    - name: 15. Enable and start x11vnc user service
       systemd:
         name: x11vnc
         scope: user
-        enabled: no
+        enabled: yes
+        state: started
 
     - name: 16. Print instructions
       debug:
