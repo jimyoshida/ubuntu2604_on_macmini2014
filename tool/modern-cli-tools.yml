@@ -32,6 +32,7 @@
         name:
           - gum           # Charming CLI for building interactive scripts
           - fzf           # Fuzzy finder for command-line
+          - ripgrep       # Fast recursive grep replacement (provides 'rg')
           - jq            # JSON processor (newer version than apt)
           - yq            # YAML processor like jq
           - jsonnet       # Data templating language
@@ -82,6 +83,7 @@
           - "Installed tools:"
           - "  - gum: Interactive CLI builder"
           - "  - fzf: Fuzzy finder (key bindings added to ~/.bashrc)"
+          - "  - ripgrep: Fast recursive grep replacement (provides 'rg')"
           - "  - jq: JSON processor"
           - "  - yq: YAML processor"
           - "  - jsonnet: Data templating language"

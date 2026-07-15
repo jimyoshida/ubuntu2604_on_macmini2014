@@ -42,7 +42,6 @@
           - bats-core         # Bash Automated Testing System
           - bats-assert       # Bats assertion library
           - bats-support      # Bats support library
-          - shellspec         # BDD unit testing framework for shell scripts
           - shellcheck        # Shell script static analysis tool
           - trivy             # Vulnerability scanner for containers and dependencies
           - grype             # Vulnerability scanner for container images and filesystems
