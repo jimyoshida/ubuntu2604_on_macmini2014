@@ -1,0 +1,87 @@
+---
+- name: OpenProject Setup via Docker
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  vars:
+    target_user: "{{ lookup('env', 'USER') }}"
+    openproject_container_name: openproject
+    openproject_port: 8082
+    openproject_image: "openproject/openproject:15"
+    openproject_data_dir: "/home/{{ target_user }}/openproject-data"
+    # Secret key base for signing cookies/sessions. Override via the
+    # OPENPROJECT_SECRET_KEY_BASE env var; a random one is generated otherwise.
+    openproject_secret_key_base: "{{ lookup('env', 'OPENPROJECT_SECRET_KEY_BASE') | default('', true) }}"
+
+  pre_tasks:
+    - name: Check Docker is installed
+      command: docker --version
+      register: docker_version
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if Docker is not installed
+      fail:
+        msg: "Docker is not installed. Please run @container/docker.yml first."
+      when: docker_version.rc != 0
+
+    - name: Generate a random secret key base if none provided
+      set_fact:
+        openproject_secret_key_base: "{{ lookup('password', '/dev/null length=64 chars=hexdigits') }}"
+      when: openproject_secret_key_base | length == 0
+
+  tasks:
+    - name: 1. Create OpenProject data directories
+      file:
+        path: "{{ openproject_data_dir }}/{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+      loop:
+        - pgdata
+        - assets
+
+    - name: 2. Create Docker network for OpenProject
+      docker_network:
+        name: openproject-network
+        state: present
+
+    - name: 3. Create and start OpenProject container
+      docker_container:
+        name: "{{ openproject_container_name }}"
+        image: "{{ openproject_image }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "{{ openproject_port }}:80"
+        volumes:
+          - "{{ openproject_data_dir }}/pgdata:/var/openproject/pgdata"
+          - "{{ openproject_data_dir }}/assets:/var/openproject/assets"
+        networks:
+          - name: openproject-network
+        env:
+          OPENPROJECT_SECRET_KEY_BASE: "{{ openproject_secret_key_base }}"
+          OPENPROJECT_HOST__NAME: "localhost:{{ openproject_port }}"
+          OPENPROJECT_HTTPS: "false"
+          OPENPROJECT_DEFAULT__LANGUAGE: "en"
+
+    - name: 4. Wait for OpenProject to be ready
+      uri:
+        url: "http://localhost:{{ openproject_port }}/health_checks/default"
+        status_code: 200
+      register: result
+      until: result.status == 200
+      retries: 90
+      delay: 10
+
+    - name: 5. Display OpenProject access information
+      debug:
+        msg:
+          - "OpenProject has been successfully installed!"
+          - "Access URL: http://localhost:{{ openproject_port }}"
+          - "Default login: admin / admin (you will be prompted to change the password)"
+          - "Data directory: {{ openproject_data_dir }}"
+          - "Container name: {{ openproject_container_name }}"

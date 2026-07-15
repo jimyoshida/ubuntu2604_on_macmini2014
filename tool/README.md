@@ -204,6 +204,46 @@ docker start freshrss     # Start the container
 docker logs freshrss      # View container logs
 ```
 
+## openproject.yml
+
+Install OpenProject via Docker
+
+```bash
+ansible-playbook tool/openproject.yml
+```
+
+**Prerequisites:**
+
+- Docker must be installed first (run `container/docker.yml`)
+
+This playbook:
+
+- Verifies Docker is installed
+- Creates persistent storage directories for the bundled PostgreSQL database and uploaded assets
+- Generates a random `OPENPROJECT_SECRET_KEY_BASE` (override via env var to keep it stable across re-runs)
+- Sets up a Docker network for the container
+- Deploys the OpenProject all-in-one image on port `8082`
+- Waits for the internal health check to pass before reporting success (first boot runs DB migrations and can take several minutes)
+
+**Configuration (optional):**
+
+```bash
+# Set a stable secret so sessions survive container recreation
+export OPENPROJECT_SECRET_KEY_BASE=<64-char-hex-secret>
+```
+
+**After installation:**
+
+OpenProject web UI is available at `http://localhost:8082`. Log in with the default credentials `admin` / `admin`; you will be prompted to set a new password on first login. Persistent data is stored at `~/openproject-data/` (`pgdata/` for the database, `assets/` for uploads).
+
+**Managing the container:**
+
+```bash
+docker stop openproject      # Stop the container
+docker start openproject     # Start the container
+docker logs openproject      # View container logs
+```
+
 ## modern-cli-tools.yml
 
 Install modern CLI tools via Homebrew
