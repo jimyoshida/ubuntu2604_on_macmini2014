@@ -31,6 +31,25 @@ avahi-resolve-host-name hostname.local      # Resolve a .local hostname to IP
 avahi-resolve-address 192.168.x.x          # Reverse-resolve IP to .local name
 ```
 
+## disable-rsyslog.yml
+
+Stop rsyslog from duplicating journal logs to `/var/log/syslog`
+
+```bash
+ansible-playbook core/disable-rsyslog.yml
+```
+
+journald already retains logs (see `agent-base.yml`'s journald configuration above), so rsyslog's copy in `/var/log/{syslog,auth.log,kern.log}` is redundant and just consumes extra disk space. This playbook stops and disables `rsyslog.service`, then stops and masks `syslog.socket` (which is `static`, so it cannot be `disable`d — only masking persists across reboots). After this, journald has no syslog consumer and `/var/log/syslog`, `/var/log/auth.log`, etc. stop growing. The journal itself is unaffected.
+
+It also deletes the now-stale `/var/log/{syslog,auth.log,kern.log}*` files (including rotations). `/var/log/cloud-init.log` is left alone — it is written by cloud-init directly, not rsyslog.
+
+To revert, unmask the socket and re-enable rsyslog:
+
+```bash
+sudo systemctl unmask syslog.socket
+sudo systemctl enable --now rsyslog.service
+```
+
 ## ssh-key-setup.yml
 
 SSH public key authentication setup
