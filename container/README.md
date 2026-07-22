@@ -89,6 +89,18 @@ Runs local Kubernetes clusters inside Docker containers. Includes bash completio
 
 **Prerequisites:** Docker must be installed and the user added to the `docker` group (run `docker.yml` first).
 
+## minikube.yml
+
+Install Minikube (local Kubernetes cluster)
+
+```bash
+ansible-playbook container/minikube.yml
+```
+
+Runs a local Kubernetes cluster using Docker as the driver. Includes bash completion.
+
+**Prerequisites:** Docker must be installed and the user added to the `docker` group (run `docker.yml` first).
+
 ## krew.yml
 
 Install Krew (kubectl plugin manager)
