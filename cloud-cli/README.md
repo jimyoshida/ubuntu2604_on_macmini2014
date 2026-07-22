@@ -99,6 +99,22 @@ After installation, run `jira init` to configure your instance interactively:
 jira init --installation cloud --server https://YOUR_ORG.atlassian.net --login your@email.com --project YOUR_PROJECT
 ```
 
+## gcx-cli.yml
+
+Install gcx (Grafana CLI) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
+
+```bash
+ansible-playbook cloud-cli/gcx-cli.yml
+```
+
+After installation, authenticate with a service account token:
+
+```bash
+gcx login my-grafana --server https://YOUR_INSTANCE.grafana.net --token glsa_xxx --yes
+```
+
+Or set `GRAFANA_SERVER` / `GRAFANA_TOKEN` env vars for CI/CD, then verify with `gcx config check`.
+
 ## opentofu.yml
 
 Install OpenTofu
