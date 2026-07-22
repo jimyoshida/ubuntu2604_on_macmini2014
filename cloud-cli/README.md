@@ -157,3 +157,19 @@ amtool silence add alertname=Foo --alertmanager.url=http://localhost:9093  # Cre
 
 **Note:** `amtool` commands that talk to a running Alertmanager (`alert`, `silence`) require an Alertmanager instance reachable at `--alertmanager.url` (default `http://localhost:9093`). This playbook does not deploy that service.
 
+## influx-cli.yml
+
+Install influx (InfluxDB v2 CLI) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
+
+```bash
+ansible-playbook cloud-cli/influx-cli.yml
+```
+
+After installation, create a CLI config for your instance:
+
+```bash
+influx config create --config-name default --host-url http://localhost:8086 --org YOUR_ORG --token YOUR_TOKEN --active
+```
+
+Or set `INFLUX_HOST` / `INFLUX_ORG` / `INFLUX_TOKEN` env vars, which `influx` reads natively — no config needed for CI/CD.
+
