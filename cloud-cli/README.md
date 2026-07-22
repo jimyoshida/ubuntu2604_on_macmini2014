@@ -173,3 +173,19 @@ influx config create --config-name default --host-url http://localhost:8086 --or
 
 Or set `INFLUX_HOST` / `INFLUX_ORG` / `INFLUX_TOKEN` env vars, which `influx` reads natively — no config needed for CI/CD.
 
+## vault-cli.yml
+
+Install Vault CLI (HashiCorp) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
+
+```bash
+ansible-playbook cloud-cli/vault-cli.yml
+```
+
+Installs the `vault` binary only — this playbook does not deploy or start a Vault server. After installation, log in interactively:
+
+```bash
+vault login -address=https://YOUR_VAULT_ADDR:8200
+```
+
+Or set `VAULT_ADDR` / `VAULT_TOKEN` env vars, which `vault` reads natively — no login needed for CI/CD.
+

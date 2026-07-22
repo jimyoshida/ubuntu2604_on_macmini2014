@@ -24,6 +24,10 @@ export INFLUX_HOST=       # InfluxDB server URL (e.g. http://localhost:8086)
 export INFLUX_ORG=        # Default organization name
 export INFLUX_TOKEN=      # API token
 
+# vault-cli.yml
+export VAULT_ADDR=        # Vault server URL (e.g. https://YOUR_VAULT_ADDR:8200)
+export VAULT_TOKEN=       # Vault token
+
 # gcx-cli.yml
 export GRAFANA_SERVER=    # Grafana Cloud instance URL (e.g. https://YOUR_INSTANCE.grafana.net)
 export GRAFANA_TOKEN=     # Service account token
