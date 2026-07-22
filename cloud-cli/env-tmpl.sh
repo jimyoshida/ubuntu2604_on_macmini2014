@@ -23,3 +23,7 @@ export JIRA_API_TOKEN=    # Atlassian API token — used with basic auth on Jira
 export INFLUX_HOST=       # InfluxDB server URL (e.g. http://localhost:8086)
 export INFLUX_ORG=        # Default organization name
 export INFLUX_TOKEN=      # API token
+
+# gcx-cli.yml
+export GRAFANA_SERVER=    # Grafana Cloud instance URL (e.g. https://YOUR_INSTANCE.grafana.net)
+export GRAFANA_TOKEN=     # Service account token
