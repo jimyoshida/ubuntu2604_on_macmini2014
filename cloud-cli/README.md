@@ -134,3 +134,26 @@ tofu plan       # Preview infrastructure changes
 tofu apply      # Apply changes
 ```
 
+## prometheus-cli.yml
+
+Install promtool and amtool
+
+```bash
+ansible-playbook cloud-cli/prometheus-cli.yml
+```
+
+Installs `promtool` (Prometheus config/rule validation and query CLI) from the Ubuntu apt repository. `amtool` (Alertmanager CLI) is bundled inside the `prometheus-alertmanager` package, so that package is also installed — but the Alertmanager daemon it ships is stopped and disabled immediately after, since this playbook is only for the CLI tools, not a running Alertmanager service.
+
+Usage examples:
+
+```bash
+promtool check config /etc/prometheus/prometheus.yml   # Validate Prometheus config
+promtool check rules /etc/prometheus/rules.yml          # Validate alerting/recording rules
+promtool query instant http://localhost:9090 'up'       # Run an instant query
+amtool check-config /etc/prometheus/alertmanager.yml    # Validate Alertmanager config
+amtool alert query --alertmanager.url=http://localhost:9093  # List active alerts
+amtool silence add alertname=Foo --alertmanager.url=http://localhost:9093  # Create a silence
+```
+
+**Note:** `amtool` commands that talk to a running Alertmanager (`alert`, `silence`) require an Alertmanager instance reachable at `--alertmanager.url` (default `http://localhost:9093`). This playbook does not deploy that service.
+

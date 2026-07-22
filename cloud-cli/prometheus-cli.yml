@@ -1,0 +1,24 @@
+---
+- name: Install promtool and amtool
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: 1. Install promtool
+      apt:
+        name: promtool
+        state: present
+        update_cache: yes
+
+    - name: 2. Install amtool (bundled in the prometheus-alertmanager package)
+      apt:
+        name: prometheus-alertmanager
+        state: present
+
+    - name: 3. Disable and stop Alertmanager daemon (CLI tool only)
+      systemd:
+        name: prometheus-alertmanager
+        enabled: no
+        state: stopped
