@@ -162,43 +162,90 @@ After installation, source your bashrc to enable fzf key bindings:
 source ~/.bashrc
 ```
 
-## test-and-security.yml
+## bats.yml
 
-Install testing and security tools via Homebrew
+Install the Bats testing framework via Homebrew
 
 ```bash
-ansible-playbook tool/test-and-security.yml
+ansible-playbook tool/bats.yml
 ```
 
 **Prerequisite:** Requires Homebrew to be installed first (run `core/homebrew.yml` first).
 
-Installs the following testing and security tools:
-
-**Testing Tools:**
+Adds the `bats-core/bats-core` tap and installs:
 
 - **bats-core** — Bash Automated Testing System
-- **shellcheck** — Shell script static analysis and linter
-
-**Security & Linting Tools:**
-
-- **trivy** — Comprehensive vulnerability scanner for containers and dependencies
-- **grype** — Vulnerability scanner for container images and filesystems
-- **syft** — SBOM (Software Bill of Materials) generator for supply chain security
-- **hadolint** — Dockerfile best practices linter
-
-**Note:** Bats helper libraries (bats-assert, bats-support, bats-file) are not available via Homebrew. If you need these libraries for your tests, install them manually from their GitHub repositories:
-
-- [bats-assert](https://github.com/bats-core/bats-assert)
-- [bats-support](https://github.com/bats-core/bats-support)
-- [bats-file](https://github.com/bats-core/bats-file)
-
-Usage examples:
+- **bats-assert** — Assertion library for Bats tests
+- **bats-support** — Support library for Bats tests
 
 ```bash
 bats test.bats              # Run Bats tests
+```
+
+## shellcheck.yml
+
+Install ShellCheck via Homebrew
+
+```bash
+ansible-playbook tool/shellcheck.yml
+```
+
+**Prerequisite:** Requires Homebrew to be installed first (run `core/homebrew.yml` first).
+
+Installs **shellcheck** — a shell script static analysis tool and linter.
+
+```bash
 shellcheck script.sh        # Lint shell scripts
+```
+
+## trivy.yml
+
+Install Trivy via Homebrew
+
+```bash
+ansible-playbook tool/trivy.yml
+```
+
+**Prerequisite:** Requires Homebrew to be installed first (run `core/homebrew.yml` first).
+
+Installs **trivy** — a comprehensive vulnerability scanner for containers and dependencies.
+
+```bash
 trivy image nginx:latest    # Scan container image for vulnerabilities
+```
+
+## grype-syft.yml
+
+Install Grype and Syft via Homebrew
+
+```bash
+ansible-playbook tool/grype-syft.yml
+```
+
+**Prerequisite:** Requires Homebrew to be installed first (run `core/homebrew.yml` first).
+
+Installs the vulnerability scanner and SBOM generator pair:
+
+- **grype** — Vulnerability scanner for container images and filesystems
+- **syft** — SBOM (Software Bill of Materials) generator for supply chain security
+
+```bash
 grype dir:.                 # Scan current directory for vulnerabilities
 syft packages dir:.         # Generate Software Bill of Materials
+```
+
+## hadolint.yml
+
+Install hadolint via Homebrew
+
+```bash
+ansible-playbook tool/hadolint.yml
+```
+
+**Prerequisite:** Requires Homebrew to be installed first (run `core/homebrew.yml` first).
+
+Installs **hadolint** — a Dockerfile best practices linter.
+
+```bash
 hadolint Dockerfile         # Lint Dockerfile for best practices
 ```
