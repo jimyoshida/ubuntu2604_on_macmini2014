@@ -1,0 +1,39 @@
+---
+- name: Install kube-score
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    kube_score_version: "1.20.0"
+
+  tasks:
+    - name: 1. Install prerequisites
+      become: yes
+      apt:
+        name:
+          - curl
+          - ca-certificates
+        state: present
+        update_cache: yes
+
+    - name: 2. Check if kube-score is already installed
+      stat:
+        path: /usr/local/bin/kube-score
+      register: kube_score_check
+
+    - name: 3. Download kube-score binary
+      become: yes
+      get_url:
+        url: "https://github.com/zegl/kube-score/releases/download/v{{ kube_score_version }}/kube-score_{{ kube_score_version }}_linux_amd64"
+        dest: /usr/local/bin/kube-score
+        mode: '0755'
+      when: not kube_score_check.stat.exists
+
+    - name: 4. Verify kube-score installation
+      command: kube-score version
+      register: kube_score_version_out
+      changed_when: false
+
+    - name: 5. Display kube-score version
+      debug:
+        msg: "{{ kube_score_version_out.stdout }}"

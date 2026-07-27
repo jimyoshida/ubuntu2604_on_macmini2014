@@ -57,6 +57,24 @@ UI is available at `http://127.0.0.1:8200/ui`.
 
 > **Note:** TLS is disabled in the default config. For production use, configure a certificate in `/etc/vault.d/vault.hcl` and remove `tls_disable = 1`.
 
+## kube-score.yml
+
+Install kube-score
+
+```bash
+ansible-playbook tool/kube-score.yml
+```
+
+Installs [kube-score](https://github.com/zegl/kube-score) — a static code analysis tool for Kubernetes object definitions — by downloading the official release binary from GitHub into `/usr/local/bin` (no Homebrew). Pin a different release with `-e kube_score_version=1.20.0`.
+
+**Usage:**
+
+```bash
+kube-score score deployment.yaml            # analyze a manifest
+helm template ./chart | kube-score score -  # analyze rendered Helm output
+kube-score list                             # list all available checks
+```
+
 ## vscode.yml
 
 Install Visual Studio Code
