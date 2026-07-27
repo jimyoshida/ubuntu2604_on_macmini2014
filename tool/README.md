@@ -75,6 +75,24 @@ helm template ./chart | kube-score score -  # analyze rendered Helm output
 kube-score list                             # list all available checks
 ```
 
+## gomplate.yml
+
+Install gomplate
+
+```bash
+ansible-playbook tool/gomplate.yml
+```
+
+Installs [gomplate](https://github.com/hairyhenderson/gomplate) — a flexible command-line template renderer with support for many datasources — by downloading the official release binary from GitHub into `/usr/local/bin` (no Homebrew). Pin a different release with `-e gomplate_version=4.3.0`.
+
+**Usage:**
+
+```bash
+gomplate -f template.tmpl -o out.txt        # render a template file
+echo 'Hello {{ .Env.USER }}' | gomplate     # render from stdin
+gomplate -d config=./config.yaml -f tmpl    # render with a datasource
+```
+
 ## vscode.yml
 
 Install Visual Studio Code
@@ -249,3 +267,23 @@ Installs **hadolint** — a Dockerfile best practices linter.
 ```bash
 hadolint Dockerfile         # Lint Dockerfile for best practices
 ```
+
+## junit2html.yml
+
+Install junit2html
+
+```bash
+ansible-playbook tool/junit2html.yml
+```
+
+Installs [junit2html](https://github.com/inorton/junit2html) — a tool that converts JUnit XML test reports into a standalone HTML report — via **pipx** (no Homebrew). The playbook installs `pipx` from apt, runs `pipx ensurepath`, then installs junit2html into an isolated environment under `~/.local/bin`.
+
+**Usage:**
+
+```bash
+junit2html results.xml report.html   # Convert a JUnit XML report to HTML
+junit2html results.xml               # Write HTML to stdout
+junit2html --summary-matrix *.xml    # Summarise multiple report files
+```
+
+> **Note:** junit2html is installed to `~/.local/bin`. Start a new shell or run `source ~/.bashrc` if the command is not yet on your `PATH`.
