@@ -75,7 +75,7 @@ Install Helm (Kubernetes package manager)
 ansible-playbook container/helm.yml
 ```
 
-Includes bash completion.
+Installs Helm from the official Helm APT repository (`baltocdn.com/helm`), so it stays updatable through `apt`. Includes bash completion and verifies the install with `helm version`.
 
 ## kind.yml
 

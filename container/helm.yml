@@ -3,37 +3,62 @@
   hosts: localhost
   connection: local
   gather_facts: no
+  become: yes
+
   vars:
     helm_user: "{{ lookup('env', 'USER') }}"
 
   tasks:
     - name: 1. Install prerequisites
-      become: yes
       apt:
         name:
+          - apt-transport-https
           - curl
+          - gnupg
         state: present
         update_cache: yes
 
-    - name: 2. Check if Helm is already installed
-      stat:
-        path: /usr/local/bin/helm
-      register: helm_check
+    - name: 2. Create directory for APT keyrings
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
 
-    - name: 3. Download and install Helm using official script
-      become: yes
-      shell: |
-        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-      args:
-        executable: /bin/bash
-      when: not helm_check.stat.exists
+    - name: 3. Download Helm GPG key
+      get_url:
+        url: https://baltocdn.com/helm/signing.asc
+        dest: /etc/apt/keyrings/helm.asc
+        mode: '0644'
+        force: yes
 
-    - name: 4. Add Helm bash completion to ~/.bashrc
+    - name: 4. Add Helm apt repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/helm.asc] https://baltocdn.com/helm/stable/debian/ all main"
+        state: present
+
+    - name: 5. Install Helm
+      apt:
+        name: helm
+        state: present
+        update_cache: yes
+
+    - name: 6. Add Helm bash completion to ~/.bashrc
+      become: no
       blockinfile:
         path: "/home/{{ helm_user }}/.bashrc"
-        marker: "# {mark} ANSIBLE MANAGED BLOCK: helm"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - helm"
         block: |
           # helm bash completion
           source <(helm completion bash)
         create: true
         mode: '0644'
+
+    - name: 7. Verify Helm installation
+      become: no
+      command: helm version
+      register: helm_version
+      changed_when: false
+
+    - name: 8. Show installed Helm version
+      debug:
+        msg: "{{ helm_version.stdout }}"
