@@ -1,14 +1,14 @@
 ---
 # Install modern CLI tool replacements system-wide on a multi-user workstation.
 #
-# Fourteen of these are current-enough Ubuntu apt packages, so they need no more
-# than a version pin. The exception is yq: Ubuntu's apt `yq` is the unrelated
-# Python jq-wrapper, not mikefarah's Go yq that Homebrew installs, so that one
-# is a release binary instead, at /usr/local/bin/yq.
+# All fourteen of these are current-enough Ubuntu apt packages, so they need no
+# more than a version pin. (yq, the fifteenth tool in the source playbook, is
+# split out to yq.yml: Ubuntu's apt `yq` is the unrelated Python jq-wrapper, not
+# mikefarah's Go yq that Homebrew installs, so it needs a release binary instead
+# of a plain apt install.)
 #
 #   /usr/bin/<tool>            for everything installed via apt
 #   /usr/local/bin/bat         symlink; apt installs the binary as batcat
-#   /usr/local/bin/yq          mikefarah/yq release binary
 #   /etc/profile.d/fzf.sh      fzf key bindings and completion (interactive shells only)
 #
 # fzf's key bindings only take effect if /etc/profile.d is actually sourced by
@@ -19,7 +19,6 @@
 #
 # Usage:
 #   ansible-playbook tools/modern-cli-tools.yml -e host=<inventory host or group>
-#   ansible-playbook tools/modern-cli-tools.yml -e host=ws01 -e modern_cli_tools_yq_version=4.53.3
 
 - name: Install modern CLI tools system-wide
   hosts: "{{ host }}"
@@ -91,26 +90,12 @@
         apt_package: glow
         version: "2.1.1-1"
         binary: glow
-    modern_cli_tools_yq_version: "4.53.3"
-    modern_cli_tools_yq_bin: /usr/local/bin/yq
-    # ansible_architecture -> upstream release asset suffix
-    modern_cli_tools_yq_arch_map:
-      x86_64: amd64
-      aarch64: arm64
-    modern_cli_tools_yq_arch: "{{ modern_cli_tools_yq_arch_map[ansible_architecture] | default('') }}"
     # uid/gid used to prove the install is usable by an arbitrary user
     modern_cli_tools_verify_uid: 65534    # nobody
     modern_cli_tools_verify_gid: 65534    # nogroup
 
   tasks:
-    - name: 1. Fail on an unsupported CPU architecture
-      ansible.builtin.fail:
-        msg: >-
-          No yq release asset is mapped for architecture
-          '{{ ansible_architecture }}'. Add it to modern_cli_tools_yq_arch_map.
-      when: modern_cli_tools_yq_arch | length == 0
-
-    - name: 2. Check the currently installed version of each apt-based tool
+    - name: 1. Check the currently installed version of each apt-based tool
       ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.apt_package }}"
       register: modern_cli_tools_installed
       loop: "{{ modern_cli_tools_packages }}"
@@ -119,7 +104,7 @@
       changed_when: false
       failed_when: false
 
-    - name: 3. Decide which apt-based tools need installing
+    - name: 2. Decide which apt-based tools need installing
       # A single filtered list, rather than a per-package task, so the
       # install task below is one apt-get invocation instead of fourteen.
       ansible.builtin.set_fact:
@@ -129,7 +114,7 @@
         label: "{{ item.0.name }}"
       when: item.0.version != (item.1.stdout | default(''))
 
-    - name: 4. Install the apt-based tools that need installing
+    - name: 3. Install the apt-based tools that need installing
       ansible.builtin.apt:
         name: "{{ modern_cli_tools_pending | default([]) }}"
         state: present
@@ -137,7 +122,7 @@
         cache_valid_time: 3600
       when: (modern_cli_tools_pending | default([])) | length > 0
 
-    - name: 5. Verify the installed versions of each apt-based tool
+    - name: 4. Verify the installed versions of each apt-based tool
       ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.apt_package }}"
       register: modern_cli_tools_version_out
       loop: "{{ modern_cli_tools_packages }}"
@@ -146,7 +131,7 @@
       changed_when: false
       failed_when: item.version != modern_cli_tools_version_out.stdout
 
-    - name: 6. Ensure /usr/local/bin/bat symlinks to batcat
+    - name: 5. Ensure /usr/local/bin/bat symlinks to batcat
       # apt names the binary batcat to avoid a clash with bacula-console.
       ansible.builtin.file:
         src: /usr/bin/batcat
@@ -154,56 +139,7 @@
         state: link
         force: true
 
-    - name: 7. Check the currently installed yq version
-      ansible.builtin.command: "{{ modern_cli_tools_yq_bin }} --version"
-      register: modern_cli_tools_yq_installed
-      changed_when: false
-      failed_when: false
-
-    - name: 8. Decide whether yq needs installing
-      ansible.builtin.set_fact:
-        modern_cli_tools_yq_install_needed: >-
-          {{ modern_cli_tools_yq_version not in (modern_cli_tools_yq_installed.stdout | default('')) }}
-
-    - name: 9. Fetch the GitHub release metadata for yq v{{ modern_cli_tools_yq_version }}
-      # yq's own published checksums file uses a bespoke multi-algorithm rhash
-      # table (see checksums_hashes_order / extract-checksum.sh in the
-      # release), not the usual "hash  filename" format the other release
-      # binaries in this repo rely on. GitHub computes and serves its own
-      # SHA-256 digest per asset, which is simpler to consume and equally
-      # authoritative, so that is used here instead.
-      ansible.builtin.uri:
-        url: "https://api.github.com/repos/mikefarah/yq/releases/tags/v{{ modern_cli_tools_yq_version }}"
-        return_content: true
-      register: modern_cli_tools_yq_release
-      when: modern_cli_tools_yq_install_needed | bool
-
-    - name: 10. Resolve the SHA-256 digest for the {{ modern_cli_tools_yq_arch }} binary
-      ansible.builtin.set_fact:
-        modern_cli_tools_yq_checksum: >-
-          {{ modern_cli_tools_yq_release.json.assets
-             | selectattr('name', 'equalto', 'yq_linux_' ~ modern_cli_tools_yq_arch)
-             | map(attribute='digest') | first }}
-      when: modern_cli_tools_yq_install_needed | bool
-
-    - name: 11. Install the yq binary
-      ansible.builtin.get_url:
-        url: "https://github.com/mikefarah/yq/releases/download/v{{ modern_cli_tools_yq_version }}/yq_linux_{{ modern_cli_tools_yq_arch }}"
-        dest: "{{ modern_cli_tools_yq_bin }}"
-        checksum: "{{ modern_cli_tools_yq_checksum }}"
-        owner: root
-        group: root
-        mode: '0755'
-        force: true
-      when: modern_cli_tools_yq_install_needed | bool
-
-    - name: 12. Verify the installed yq version
-      ansible.builtin.command: "{{ modern_cli_tools_yq_bin }} --version"
-      register: modern_cli_tools_yq_version_out
-      changed_when: false
-      failed_when: modern_cli_tools_yq_version not in modern_cli_tools_yq_version_out.stdout
-
-    - name: 13. Add fzf key bindings and completion for interactive shells
+    - name: 6. Add fzf key bindings and completion for interactive shells
       ansible.builtin.copy:
         dest: /etc/profile.d/fzf.sh
         mode: '0644'
@@ -211,7 +147,7 @@
           # fzf key bindings and fuzzy completion
           eval "$(fzf --bash)"
 
-    - name: 14. Ensure interactive non-login shells read /etc/profile.d
+    - name: 7. Ensure interactive non-login shells read /etc/profile.d
       # /etc/profile.d/*.sh is only sourced by login shells by default; an
       # SSH session that starts a non-login interactive bash reads
       # /etc/bash.bashrc instead, which does not loop over /etc/profile.d on
@@ -223,7 +159,7 @@
         block: |
           for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
 
-    - name: 15. Run each tool as an unprivileged user
+    - name: 8. Run each tool as an unprivileged user
       # A non-login interactive shell (bash -i), not a plain command, so
       # /etc/bash.bashrc and therefore /etc/profile.d/fzf.sh are actually
       # exercised end-to-end, not just the binaries themselves.
@@ -231,7 +167,7 @@
         cmd: >-
           setpriv --reuid={{ modern_cli_tools_verify_uid }} --regid={{ modern_cli_tools_verify_gid }} --clear-groups
           bash -i -c '{{ item.binary }} --version'
-      loop: "{{ modern_cli_tools_packages + [{'name': 'yq', 'binary': modern_cli_tools_yq_bin}] }}"
+      loop: "{{ modern_cli_tools_packages }}"
       loop_control:
         label: "{{ item.name }}"
       environment:
@@ -240,7 +176,7 @@
       register: modern_cli_tools_smoke
       changed_when: false
 
-    - name: 16. Verify fzf key bindings load for an unprivileged interactive shell
+    - name: 9. Verify fzf key bindings load for an unprivileged interactive shell
       ansible.builtin.shell:
         cmd: >-
           setpriv --reuid={{ modern_cli_tools_verify_uid }} --regid={{ modern_cli_tools_verify_gid }} --clear-groups
@@ -252,12 +188,11 @@
       changed_when: false
       failed_when: "'__fzf_select__' not in modern_cli_tools_fzf_smoke.stdout"
 
-    - name: 17. Display installation summary
+    - name: 10. Display installation summary
       ansible.builtin.debug:
         msg:
           - "Modern CLI tools installed system-wide:"
           - "{% for t in modern_cli_tools_packages %}  {{ t.name }} {{ t.version }}{% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}"
-          - "  yq {{ modern_cli_tools_yq_version }} ({{ modern_cli_tools_yq_bin }})"
           - ""
           - "Verified runnable by an unprivileged user (uid {{ modern_cli_tools_verify_uid }}),"
           - "including fzf key bindings in a non-login interactive shell."

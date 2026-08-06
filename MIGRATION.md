@@ -3,7 +3,8 @@
 Policy and procedure for migrating the developer tool installation playbooks from
 `tool/` to `_multi-user/tools/`.
 
-**Status: complete.** 10 of 10 playbooks migrated. See [Migration status](#migration-status).
+**Status: complete.** 10 of 10 source playbooks migrated, as 11 target playbooks (`yq` split
+out of `modern-cli-tools.yml`). See [Migration status](#migration-status).
 
 ## Background
 
@@ -16,7 +17,7 @@ can use. Three distinct causes:
    cannot `brew install`, `brew upgrade`, or `brew update`. Homebrew upstream does not
    support multi-user installs and refuses `sudo brew`; making the tree group-writable
    works only until the next upgrade resets permissions.
-   Affects: `bats`, `shellcheck`, `trivy`, `hadolint`, `grype-syft`, `modern-cli-tools`.
+   Affects: `bats`, `shellcheck`, `trivy`, `hadolint`, `grype-syft`, `modern-cli-tools`, `yq`.
 2. **Per-user shell profiles.** `blockinfile` against `~/.bashrc` writes to exactly one home
    directory. Accounts created later get nothing.
    Affects: `modern-cli-tools` (fzf key bindings) and `core/homebrew.yml` (`brew shellenv`).
@@ -236,7 +237,8 @@ For each playbook:
 | `trivy.yml` | brew | Aqua vendor apt repo | 0.73.0 | Verified (workstations) |
 | `hadolint.yml` | brew | release binary | 2.15.1 | Verified (workstations) |
 | `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
-| `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; yq via mikefarah/yq release binary (apt `yq` is the unrelated Python wrapper); llhttp dropped (apt eza needs no manual libllhttp symlink) | see README | Verified (workstations) |
+| `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; llhttp dropped (apt eza needs no manual libllhttp symlink); yq split out to `yq.yml` | see README | Verified (workstations) |
+| `modern-cli-tools.yml` (`yq`) | brew | release binary via `yq.yml` (apt `yq` is the unrelated Python wrapper) | 4.53.3 | Verified (workstations) |
 | `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | 31.1.4 | Verified (ws01, ws02) |
 | `markdownlint.yml` | `npm install -g` | unchanged mechanism; pinned version, version-aware guard, npm prefix from facts not assumed | 0.49.1 | Verified (ws01, ws02) |
 | `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | 1.20.0 | Verified (ws01, ws02) |
@@ -246,7 +248,9 @@ For each playbook:
 they're no longer in scope for `tool/*.yml` → `_multi-user/tools/*.yml`. Whether they need
 a multi-user treatment is a question for wherever they live now, not this document.
 
-All ten remaining `tool/*.yml` playbooks are migrated and verified against `ws01`/`ws02`.
+All ten remaining `tool/*.yml` playbooks are migrated and verified against `ws01`/`ws02`
+(eleven target playbooks, since `yq` is split out of `modern-cli-tools.yml` into its own
+`yq.yml`).
 
 ## Known follow-ups
 
@@ -296,15 +300,18 @@ match what the target's apt sources actually carry. Worth checking the target's 
 `modern-cli-tools.yml`'s planned mechanism was wrong on two counts, both only visible by
 checking the actual target: Ubuntu 26.04's apt already carries `gum` and `glow` directly
 (0.17.0-1, 2.1.1-1), so the Charm vendor apt repo this row originally called for turned out
-to be unnecessary — apt alone covers all 14 non-yq tools. `llhttp` (a manual symlink hack the
-source playbook needed for Homebrew's eza build) is also dropped entirely: apt's `eza`
-package declares its own library dependencies, so nothing extra is needed. `yq` is the one
-real exception — apt's `yq` is confirmed to be the Python jq-wrapper, not mikefarah's Go yq,
-so it installs from a release binary instead. That release's own checksums file uses a
-bespoke multi-algorithm rhash table (`checksums_hashes_order` / `extract-checksum.sh`) rather
-than the usual `hash  filename` format the other release-binary playbooks parse; the playbook
-uses GitHub's own computed per-asset SHA-256 `digest` (from the releases API) instead, which
-is simpler and equally authoritative.
+to be unnecessary — apt alone covers all 14 tools. `llhttp` (a manual symlink hack the source
+playbook needed for Homebrew's eza build) is also dropped entirely: apt's `eza` package
+declares its own library dependencies, so nothing extra is needed.
+
+`yq` was migrated as part of `modern-cli-tools.yml` but is split into its own `yq.yml`, since
+it is not a plain apt install like the other 14: apt's `yq` is confirmed to be the Python
+jq-wrapper, not mikefarah's Go yq, so it installs from a release binary instead. That
+release's own checksums file uses a bespoke multi-algorithm rhash table
+(`checksums_hashes_order` / `extract-checksum.sh`) rather than the usual `hash  filename`
+format the other release-binary playbooks parse; the playbook uses GitHub's own computed
+per-asset SHA-256 `digest` (from the releases API) instead, which is simpler and equally
+authoritative.
 
 `junit2html.yml` needed a version-source change discovered only when checking upstream
 directly, not just its GitHub tags: `inorton/junit2html` moved off GitHub to

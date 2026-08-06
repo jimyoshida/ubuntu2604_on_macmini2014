@@ -1,0 +1,128 @@
+---
+# Install yq system-wide on a multi-user workstation.
+#
+# Ubuntu's apt `yq` is kislyuk/yq, a Python wrapper around jq with entirely
+# different syntax from mikefarah's Go yq that scripts in this repo expect
+# (see the decision-order gotcha in MIGRATION.md). Silently swapping one for
+# the other under the same command name would break any script written
+# against the Go one, so this installs the real thing as a release binary:
+#
+#   /usr/local/bin/yq   root-owned, mode 0755
+#
+# There is no per-user state and nothing to add to a shell profile.
+#
+# Usage:
+#   ansible-playbook tools/yq.yml -e host=<inventory host or group>
+#   ansible-playbook tools/yq.yml -e host=ws01 -e yq_version=4.53.3
+
+- name: Install yq system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    yq_version: "4.53.3"
+    yq_bin: /usr/local/bin/yq
+    # ansible_architecture -> upstream release asset suffix
+    yq_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    yq_arch: "{{ yq_arch_map[ansible_architecture] | default('') }}"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    yq_verify_uid: 65534    # nobody
+    yq_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No yq release asset is mapped for architecture
+          '{{ ansible_architecture }}'. Add it to yq_arch_map.
+      when: yq_arch | length == 0
+
+    - name: 3. Check the currently installed yq version
+      ansible.builtin.command: "{{ yq_bin }} --version"
+      register: yq_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 4. Decide whether yq needs installing
+      ansible.builtin.set_fact:
+        yq_install_needed: >-
+          {{ yq_version not in (yq_installed.stdout | default('')) }}
+
+    - name: 5. Fetch the GitHub release metadata for yq v{{ yq_version }}
+      # yq's own published checksums file uses a bespoke multi-algorithm rhash
+      # table (see checksums_hashes_order / extract-checksum.sh in the
+      # release), not the usual "hash  filename" format the other
+      # release-binary playbooks in this directory parse. GitHub computes and
+      # serves its own SHA-256 digest per asset, which is simpler to consume
+      # and equally authoritative, so that is used here instead.
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/mikefarah/yq/releases/tags/v{{ yq_version }}"
+        return_content: true
+      register: yq_release
+      when: yq_install_needed | bool
+
+    - name: 6. Resolve the SHA-256 digest for the {{ yq_arch }} binary
+      ansible.builtin.set_fact:
+        yq_checksum: >-
+          {{ yq_release.json.assets
+             | selectattr('name', 'equalto', 'yq_linux_' ~ yq_arch)
+             | map(attribute='digest') | first }}
+      when: yq_install_needed | bool
+
+    - name: 7. Install the yq binary
+      ansible.builtin.get_url:
+        url: "https://github.com/mikefarah/yq/releases/download/v{{ yq_version }}/yq_linux_{{ yq_arch }}"
+        dest: "{{ yq_bin }}"
+        checksum: "{{ yq_checksum }}"
+        owner: root
+        group: root
+        mode: '0755'
+        force: true
+      when: yq_install_needed | bool
+
+    - name: 8. Verify the installed yq version
+      ansible.builtin.command: "{{ yq_bin }} --version"
+      register: yq_version_out
+      changed_when: false
+      failed_when: yq_version not in yq_version_out.stdout
+
+    - name: 9. Evaluate a YAML expression as an unprivileged user
+      ansible.builtin.shell:
+        cmd: >-
+          echo 'a: 1' |
+          setpriv --reuid={{ yq_verify_uid }} --regid={{ yq_verify_gid }} --clear-groups
+          {{ yq_bin }} e '.a' -
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: yq_smoke
+      changed_when: false
+      failed_when: (yq_smoke.stdout | trim) != '1'
+
+    - name: 10. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ yq_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ yq_bin }} ({{ yq_arch }})"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ yq_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  yq e '.key' file.yaml       # Read a value"
+          - "  yq e '.key = \"val\"' -i file.yaml  # Edit in place"
