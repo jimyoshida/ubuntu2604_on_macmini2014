@@ -31,8 +31,7 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 | [ai-agent/](ai-agent/README.md) | AI agent tools (Claude Code, Antigravity CLI, OpenClaw) |
 | [tool/](tool/README.md) | Developer tools (kube-score, gomplate, modern CLI tools) |
 | [gui-tools/](gui-tools/README.md) | GUI tools (VS Code) |
-| [services/](services/README.md) | Self-hosted services (Vault, n8n) |
-| [media/](media/README.md) | Media tools (Jellyfin, Samba, FreshRSS) |
+| [services/](services/README.md) | Self-hosted services (Vault, n8n, Jellyfin, Samba, FreshRSS) |
 
 ## Ongoing Migrations
 
