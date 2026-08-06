@@ -1,2 +1,5 @@
 env.sh
 .antigravitycli/
+
+# Real inventory for the multi-user playbooks; see _multi-user/inventory.ini.example
+_multi-user/inventory.ini

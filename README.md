@@ -31,3 +31,10 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 | [ai-agent/](ai-agent/README.md) | AI agent tools (Claude Code, Antigravity CLI, OpenClaw) |
 | [tool/](tool/README.md) | Developer tools (Vault, VS Code) |
 | [media/](media/README.md) | Media tools (Jellyfin, Samba, FreshRSS) |
+
+## Ongoing Migrations
+
+- **Multi-User Workstation Tool Playbook Migration** — [MIGRATION.md](MIGRATION.md)
+  - Policy and procedure for moving the tool installation playbooks from
+    `tool/` (single-user) to `_multi-user/tools/` (multi-user)
+  - Current status of each playbook

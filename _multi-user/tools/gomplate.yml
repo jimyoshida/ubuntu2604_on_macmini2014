@@ -1,0 +1,122 @@
+---
+# Install gomplate system-wide on a multi-user workstation.
+#
+# gomplate ships as a single static binary, so the multi-user story is simple:
+#
+#   /usr/local/bin/gomplate   root-owned, mode 0755
+#
+# There is no per-user state and nothing to add to a shell profile.
+#
+# Usage:
+#   ansible-playbook tools/gomplate.yml -e host=<inventory host or group>
+#   ansible-playbook tools/gomplate.yml -e host=ws01 -e gomplate_version=4.3.3
+
+- name: Install gomplate system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    gomplate_version: "5.2.0"
+    gomplate_bin: /usr/local/bin/gomplate
+    gomplate_release_url: "https://github.com/hairyhenderson/gomplate/releases/download/v{{ gomplate_version }}"
+    # ansible_architecture -> upstream release asset suffix
+    gomplate_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    gomplate_arch: "{{ gomplate_arch_map[ansible_architecture] | default('') }}"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    gomplate_verify_uid: 65534    # nobody
+    gomplate_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No gomplate release asset is mapped for architecture
+          '{{ ansible_architecture }}'. Add it to gomplate_arch_map.
+      when: gomplate_arch | length == 0
+
+    - name: 3. Check the currently installed gomplate version
+      ansible.builtin.command: "{{ gomplate_bin }} --version"
+      register: gomplate_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 4. Decide whether gomplate needs installing
+      # The version is compared, not merely the presence of the file, so that
+      # bumping gomplate_version actually replaces the binary.
+      ansible.builtin.set_fact:
+        gomplate_install_needed: >-
+          {{ gomplate_version not in (gomplate_installed.stdout | default('')) }}
+
+    - name: 5. Fetch the published checksums for gomplate v{{ gomplate_version }}
+      ansible.builtin.uri:
+        url: "{{ gomplate_release_url }}/checksums-v{{ gomplate_version }}_sha256.txt"
+        return_content: true
+      register: gomplate_checksums
+      when: gomplate_install_needed | bool
+
+    - name: 6. Resolve the SHA-256 for the {{ gomplate_arch }} binary
+      # Looked up per release rather than pinned in this file, so overriding
+      # gomplate_version stays a one-flag change.
+      ansible.builtin.set_fact:
+        gomplate_sha256: >-
+          {{ gomplate_checksums.content.splitlines()
+             | select('search', 'gomplate_linux-' ~ gomplate_arch ~ '$')
+             | first | trim | regex_replace('\s.*$', '') }}
+      when: gomplate_install_needed | bool
+
+    - name: 7. Install the gomplate binary
+      ansible.builtin.get_url:
+        url: "{{ gomplate_release_url }}/gomplate_linux-{{ gomplate_arch }}"
+        dest: "{{ gomplate_bin }}"
+        checksum: "sha256:{{ gomplate_sha256 }}"
+        owner: root
+        group: root
+        mode: '0755'
+        force: true
+      when: gomplate_install_needed | bool
+
+    - name: 8. Verify the installed gomplate version
+      ansible.builtin.command: "{{ gomplate_bin }} --version"
+      register: gomplate_version_out
+      changed_when: false
+      failed_when: gomplate_version not in gomplate_version_out.stdout
+
+    - name: 9. Render a template as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ gomplate_verify_uid }} --regid={{ gomplate_verify_gid }} --clear-groups
+          {{ gomplate_bin }} -i '{% raw %}{{ "gomplate-ok" }}{% endraw %}'
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: gomplate_smoke
+      changed_when: false
+      failed_when: (gomplate_smoke.stdout | trim) != 'gomplate-ok'
+
+    - name: 10. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ gomplate_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ gomplate_bin }} ({{ gomplate_arch }})"
+          - ""
+          - "Verified renderable by an unprivileged user (uid {{ gomplate_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  gomplate -f template.tmpl -o out.txt        # render a template file"
+          - "  echo 'Hello {% raw %}{{ .Env.USER }}{% endraw %}' | gomplate  # render from stdin"
+          - "  gomplate -d config=./config.yaml -f tmpl    # render with a datasource"

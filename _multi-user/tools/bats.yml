@@ -1,0 +1,173 @@
+---
+# Install the Bats testing framework system-wide on a multi-user workstation.
+#
+# Everything lands in root-owned paths, so every user on the host can run bats
+# and load the helper libraries without any per-user setup:
+#
+#   /usr/local/bin/bats             executable (installed by upstream install.sh)
+#   /usr/local/libexec/bats-core/   internals
+#   /usr/local/lib/bats-core/       internals
+#   /usr/lib/bats/bats-support/     helper library
+#   /usr/lib/bats/bats-assert/      helper library
+#
+# /usr/lib/bats is bats-core's built-in default for BATS_LIB_PATH
+# (libexec/bats-core/bats: BATS_LIB_PATH=${BATS_LIB_PATH-/usr/lib/bats}), so
+# `bats_load_library bats-support` resolves with no environment set up at all.
+#
+# Usage:
+#   ansible-playbook tools/bats.yml -e host=<inventory host or group>
+#   ansible-playbook tools/bats.yml -e host=ws01 -e bats_core_version=1.13.0
+
+- name: Install Bats testing framework system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    bats_core_version: "1.14.0"
+    bats_prefix: /usr/local
+    bats_lib_dir: /usr/lib/bats
+    bats_src_dir: /usr/local/src/bats-core
+    bats_libraries:
+      - name: bats-support
+        version: "0.3.0"
+      - name: bats-assert
+        version: "2.2.4"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    bats_verify_uid: 65534    # nobody
+    bats_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - git
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Check the currently installed bats version
+      ansible.builtin.command: "{{ bats_prefix }}/bin/bats --version"
+      register: bats_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Decide whether bats-core needs installing
+      ansible.builtin.set_fact:
+        bats_core_install_needed: >-
+          {{ (bats_installed.stdout | default('') | trim) != 'Bats ' ~ bats_core_version }}
+
+    - name: 4. Fetch the bats-core source
+      # No depth limit: a shallow clone cannot be re-pointed at a different tag
+      # on the next run, which breaks version bumps.
+      ansible.builtin.git:
+        repo: https://github.com/bats-core/bats-core.git
+        dest: "{{ bats_src_dir }}"
+        version: "v{{ bats_core_version }}"
+        force: true
+      when: bats_core_install_needed | bool
+
+    - name: 5. Install bats-core into {{ bats_prefix }}
+      ansible.builtin.command:
+        cmd: "./install.sh {{ bats_prefix }}"
+        chdir: "{{ bats_src_dir }}"
+      when: bats_core_install_needed | bool
+
+    - name: 6. Create the shared bats library directory
+      ansible.builtin.file:
+        path: "{{ bats_lib_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: 7. Install the bats helper libraries
+      ansible.builtin.git:
+        repo: "https://github.com/bats-core/{{ item.name }}.git"
+        dest: "{{ bats_lib_dir }}/{{ item.name }}"
+        version: "v{{ item.version }}"
+        force: true
+      loop: "{{ bats_libraries }}"
+      loop_control:
+        label: "{{ item.name }} v{{ item.version }}"
+
+    - name: 8. Ensure the helper libraries are readable by every user
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ bats_lib_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 9. Publish BATS_LIB_PATH to all login sessions
+      # Redundant with bats-core's built-in default, but makes the location
+      # explicit and survives an upstream change of that default.
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^BATS_LIB_PATH='
+        line: 'BATS_LIB_PATH="{{ bats_lib_dir }}"'
+        state: present
+
+    - name: 10. Verify the installed bats version
+      ansible.builtin.command: "{{ bats_prefix }}/bin/bats --version"
+      register: bats_version_out
+      changed_when: false
+      failed_when: (bats_version_out.stdout | trim) != 'Bats ' ~ bats_core_version
+
+    - name: 11. Write a smoke test exercising the helper libraries
+      ansible.builtin.copy:
+        dest: /tmp/bats-multiuser-smoke.bats
+        mode: '0644'
+        content: |
+          setup() {
+            bats_load_library bats-support
+            bats_load_library bats-assert
+          }
+
+          @test "helper libraries load from the default BATS_LIB_PATH" {
+            run echo hello
+            assert_success
+            assert_output "hello"
+          }
+
+    - name: 12. Run the smoke test as an unprivileged user
+      # BATS_LIB_PATH is deliberately left unset here so the test proves the
+      # zero-configuration path works for a user who has done no setup at all.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ bats_verify_uid }} --regid={{ bats_verify_gid }} --clear-groups
+          {{ bats_prefix }}/bin/bats /tmp/bats-multiuser-smoke.bats
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: bats_smoke
+      changed_when: false
+
+    - name: 13. Remove the smoke test
+      ansible.builtin.file:
+        path: /tmp/bats-multiuser-smoke.bats
+        state: absent
+
+    - name: 14. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ bats_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ bats_prefix }}/bin/bats"
+          - "{% for lib in bats_libraries %}  {{ bats_lib_dir }}/{{ lib.name }} (v{{ lib.version }}){% if not loop.last %}\n{% endif %}{% endfor %}"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ bats_verify_uid }})."
+          - ""
+          - "Load the helper libraries in a test file with:"
+          - "  bats_load_library bats-support"
+          - "  bats_load_library bats-assert"
+          - ""
+          - "No per-user setup is required: {{ bats_lib_dir }} is bats-core's"
+          - "default BATS_LIB_PATH, and is also set in /etc/environment."

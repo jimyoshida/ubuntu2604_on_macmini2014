@@ -1,0 +1,29 @@
+# Example inventory for the multi-user workstation playbooks.
+#
+# Copy it, then replace the placeholders with real hosts:
+#
+#   cd _multi-user
+#   cp inventory.ini.example inventory.ini
+#
+# inventory.ini is gitignored — it holds real hostnames and addresses.
+#
+# Each playbook takes its target as an extra var, naming either a host or a group
+# defined here:
+#
+#   ansible-playbook tools/gomplate.yml -e host=workstations   # every workstation
+#   ansible-playbook tools/gomplate.yml -e host=ws01           # one of them
+#
+# The addresses below are from the RFC 5737 documentation range and route nowhere.
+
+[workstations]
+ws01 ansible_host=192.0.2.11
+ws02 ansible_host=192.0.2.12
+
+[workstations:vars]
+# The account Ansible connects as. The playbooks declare remote_user: ubuntu, but an
+# inventory ansible_user overrides that play keyword, and -e ansible_user=<name>
+# overrides both. Set it here when the targets consistently use a different account.
+ansible_user=ubuntu
+
+# Uncomment when the key for these hosts is not the SSH client's default.
+# ansible_ssh_private_key_file=~/.ssh/id_ed25519
