@@ -3,7 +3,7 @@
 Policy and procedure for migrating the developer tool installation playbooks from
 `tool/` to `_multi-user/tools/`.
 
-**Status: in progress.** 2 of 12 playbooks migrated. See [Migration status](#migration-status).
+**Status: in progress.** 3 of 12 playbooks migrated. See [Migration status](#migration-status).
 
 ## Background
 
@@ -236,7 +236,7 @@ For each playbook:
 | `shellcheck.yml` | brew | apt `shellcheck` | — | Pending |
 | `trivy.yml` | brew | Aqua vendor apt repo | — | Pending |
 | `hadolint.yml` | brew | release binary | — | Pending |
-| `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | — | Pending |
+| `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
 | `modern-cli-tools.yml` | brew (16 tools) | apt where available, else release binary; Charm apt repo for gum/glow | — | Pending |
 | `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | — | Pending |
 | `vault.yml` | apt + `~/.bashrc` | apt + `/etc/profile.d/vault.sh` | — | Pending |
@@ -244,8 +244,8 @@ For each playbook:
 | `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | — | Pending |
 | `vscode.yml` | vendor apt repo | unchanged | — | Pending |
 
-Suggested order for the remainder: `shellcheck`, `trivy`, `hadolint`, `grype-syft` (small and
-independent), then `modern-cli-tools` (largest, do it tool by tool), then `junit2html`,
+Suggested order for the remainder: `shellcheck`, `trivy`, `hadolint`, then `modern-cli-tools`
+(largest, do it tool by tool), then `junit2html`,
 `vault`, and finally the three that need only hardening.
 
 ## Known follow-ups
@@ -271,6 +271,14 @@ These are required for a complete migration but are not part of any single tool 
 
 ## Verification status
 
-The migrated playbooks have been YAML-validated and reviewed against the policy, but **have
-not been executed** — that requires an Ubuntu target host. Treat every "Written, not yet run"
-row above as unverified until someone runs it and updates this table.
+Playbooks marked "Written, not yet run" have been YAML-validated and reviewed against the
+policy but **not executed** — that requires an Ubuntu target host. Treat those rows as
+unverified until someone runs them and updates this table. Rows marked "Verified" have been
+run against the listed host(s) with `ansible-playbook tools/<tool>.yml -e host=<host>` and
+completed with `failed=0`.
+
+`grype-syft.yml` needed a fix discovered only at run time: on `ws01`/`ws02`, `/tmp` is a
+size-capped tmpfs (~1.65GiB) too small for grype's vulnerability database, which failed with
+`SQLITE_FULL` when downloaded there during the unprivileged-verification step. The playbook
+now stages that step under `/var/tmp` (disk-backed) instead. Worth checking for on any tool
+whose verification step writes non-trivial amounts of data under `HOME=/tmp`.

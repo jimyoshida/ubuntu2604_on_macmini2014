@@ -1,0 +1,167 @@
+---
+# Install grype and syft system-wide on a multi-user workstation.
+#
+# Both ship as single static binaries with no per-user state, so the multi-user
+# story is simple:
+#
+#   /usr/local/bin/grype   root-owned, mode 0755
+#   /usr/local/bin/syft     root-owned, mode 0755
+#
+# Installed via each project's own install.sh (pinned to the release tag, not
+# `main`), which resolves the right release asset for the host architecture and
+# verifies its SHA-256 against the checksums.txt published alongside it. Nothing
+# is added to a shell profile.
+#
+# Usage:
+#   ansible-playbook tools/grype-syft.yml -e host=<inventory host or group>
+#   ansible-playbook tools/grype-syft.yml -e host=ws01 -e grype_syft_tools='[{"name":"grype","version":"0.116.1","repo":"anchore/grype"},{"name":"syft","version":"1.50.0","repo":"anchore/syft"}]'
+
+- name: Install grype and syft system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    grype_syft_tools:
+      - name: grype
+        version: "0.116.1"
+        repo: anchore/grype
+      - name: syft
+        version: "1.50.0"
+        repo: anchore/syft
+    grype_syft_bin_dir: /usr/local/bin
+    # uid/gid used to prove the install is usable by an arbitrary user
+    grype_syft_verify_uid: 65534    # nobody
+    grype_syft_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - curl
+          - ca-certificates
+          - tar
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Check the currently installed grype and syft versions
+      ansible.builtin.command: "{{ grype_syft_bin_dir }}/{{ item.name }} version"
+      register: grype_syft_installed
+      loop: "{{ grype_syft_tools }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Download the install script for tools that need installing
+      # Pinned to the release tag rather than the `main` branch, so the script
+      # content is fixed to what that release published.
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/{{ pair[0].repo }}/v{{ pair[0].version }}/install.sh"
+        dest: "/tmp/{{ pair[0].name }}-install.sh"
+        mode: '0755'
+        force: true
+      loop: "{{ grype_syft_tools | zip(grype_syft_installed.results) | list }}"
+      loop_control:
+        loop_var: pair
+        label: "{{ pair[0].name }}"
+      when: pair[0].version not in (pair[1].stdout | default(''))
+
+    - name: 4. Run the install script for tools that need installing
+      # The script downloads the checksums.txt published with the release and
+      # verifies the binary's SHA-256 against it before installing.
+      ansible.builtin.command:
+        cmd: "/tmp/{{ pair[0].name }}-install.sh -b {{ grype_syft_bin_dir }} v{{ pair[0].version }}"
+      loop: "{{ grype_syft_tools | zip(grype_syft_installed.results) | list }}"
+      loop_control:
+        loop_var: pair
+        label: "{{ pair[0].name }}"
+      when: pair[0].version not in (pair[1].stdout | default(''))
+
+    - name: 5. Remove the downloaded install scripts
+      ansible.builtin.file:
+        path: "/tmp/{{ item.name }}-install.sh"
+        state: absent
+      loop: "{{ grype_syft_tools }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: 6. Ensure the installed binaries are world-readable and root-owned
+      # Guards against a restrictive umask on the control path.
+      ansible.builtin.file:
+        path: "{{ grype_syft_bin_dir }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+      loop: "{{ grype_syft_tools }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: 7. Verify the installed grype and syft versions
+      ansible.builtin.command: "{{ grype_syft_bin_dir }}/{{ item.name }} version"
+      register: grype_syft_version_out
+      loop: "{{ grype_syft_tools }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: item.version not in grype_syft_version_out.stdout
+
+    - name: 8. Create a scratch directory for the unprivileged verification
+      # Disk-backed rather than /tmp: on hosts where /tmp is a size-capped
+      # tmpfs, grype's vulnerability database (task 10) does not fit alongside
+      # its own decompression temp files and fails with SQLITE_FULL.
+      ansible.builtin.file:
+        path: /var/tmp/grype-syft-verify
+        state: directory
+        owner: root
+        group: root
+        mode: '1777'
+
+    - name: 9. Generate an SBOM for a directory as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ grype_syft_verify_uid }} --regid={{ grype_syft_verify_gid }} --clear-groups
+          {{ grype_syft_bin_dir }}/syft dir:/etc -o table
+        chdir: /var/tmp/grype-syft-verify
+      environment:
+        HOME: /var/tmp/grype-syft-verify
+        TMPDIR: /var/tmp/grype-syft-verify
+      register: syft_smoke
+      changed_when: false
+
+    - name: 10. Update the grype vulnerability database and scan a directory as an unprivileged user
+      # HOME is left pointing at a throwaway directory rather than a persistent
+      # one, so this proves grype can create and use its own per-user DB cache
+      # (default: $HOME/.cache/grype/db) without any root-owned shared path.
+      # Needs network egress to fetch the vulnerability database.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ grype_syft_verify_uid }} --regid={{ grype_syft_verify_gid }} --clear-groups
+          {{ grype_syft_bin_dir }}/grype dir:/etc -o table
+        chdir: /var/tmp/grype-syft-verify
+      environment:
+        HOME: /var/tmp/grype-syft-verify
+        TMPDIR: /var/tmp/grype-syft-verify
+      register: grype_smoke
+      changed_when: false
+
+    - name: 11. Remove the scratch directory used for unprivileged verification
+      ansible.builtin.file:
+        path: /var/tmp/grype-syft-verify
+        state: absent
+
+    - name: 12. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "grype and syft installed system-wide:"
+          - "{% for t in grype_syft_tools %}  {{ t.name }} {{ t.version }} ({{ grype_syft_bin_dir }}/{{ t.name }}){% if not loop.last %}\n{% endif %}{% endfor %}"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ grype_syft_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  grype dir:.                 # Scan current directory for vulnerabilities"
+          - "  syft packages dir:.         # Generate a Software Bill of Materials"

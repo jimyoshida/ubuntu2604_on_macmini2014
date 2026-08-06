@@ -86,3 +86,37 @@ Version overrides:
 ```bash
 ansible-playbook tools/gomplate.yml -e host=ws01 -e gomplate_version=4.3.3
 ```
+
+## grype-syft.yml
+
+Installs [grype](https://github.com/anchore/grype) (vulnerability scanner) and
+[syft](https://github.com/anchore/syft) (SBOM generator) as single static binaries at
+`/usr/local/bin/grype` and `/usr/local/bin/syft`, root-owned, mode `0755`. There is no
+per-user state and nothing to add to a shell profile.
+
+The source playbook installed both via Homebrew, which only the account that ran
+`core/homebrew.yml` can use. This migration instead uses each project's own `install.sh`:
+
+- **Pinned to the release tag, not `main`.** The script is fetched from
+  `raw.githubusercontent.com/anchore/<repo>/v<version>/install.sh`, so its content is fixed
+  to what that release published, the same trust boundary as `bats.yml` pinning a git tag.
+- **Checksum verification comes from the installer itself.** `install.sh` downloads the
+  `checksums.txt` published alongside the release and verifies the binary's SHA-256 before
+  installing it — no separate Ansible checksum step is needed.
+- **Architecture resolution comes from the installer itself.** `install.sh` maps
+  `uname -m` to the release asset name internally, so there is no separate arch-mapping var.
+- **Version-aware idempotency.** The installed version (parsed from `grype version` /
+  `syft version` output) is compared against the pinned version before re-installing.
+
+The unprivileged verification step runs `syft dir:/etc` and `grype dir:/etc` as `nobody`
+with `HOME=/tmp`. For grype, this also downloads the vulnerability database into that
+throwaway `HOME`, proving the tool can create and use its own per-user cache
+(`$HOME/.cache/grype/db` by default) without any root-owned shared path — this needs
+network egress and can take a little while on the first run.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/grype-syft.yml -e host=ws01 \
+  -e grype_syft_tools='[{"name":"grype","version":"0.116.1","repo":"anchore/grype"},{"name":"syft","version":"1.50.0","repo":"anchore/syft"}]'
+```
