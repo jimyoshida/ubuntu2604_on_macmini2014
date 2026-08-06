@@ -158,7 +158,7 @@
       ansible.builtin.debug:
         msg:
           - "grype and syft installed system-wide:"
-          - "{% for t in grype_syft_tools %}  {{ t.name }} {{ t.version }} ({{ grype_syft_bin_dir }}/{{ t.name }}){% if not loop.last %}\n{% endif %}{% endfor %}"
+          - "{% for t in grype_syft_tools %}  {{ t.name }} {{ t.version }} ({{ grype_syft_bin_dir }}/{{ t.name }}){% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}"
           - ""
           - "Verified runnable by an unprivileged user (uid {{ grype_syft_verify_uid }})."
           - ""

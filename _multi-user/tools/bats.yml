@@ -162,7 +162,7 @@
           - "{{ bats_version_out.stdout | trim }} installed system-wide."
           - ""
           - "  {{ bats_prefix }}/bin/bats"
-          - "{% for lib in bats_libraries %}  {{ bats_lib_dir }}/{{ lib.name }} (v{{ lib.version }}){% if not loop.last %}\n{% endif %}{% endfor %}"
+          - "{% for lib in bats_libraries %}  {{ bats_lib_dir }}/{{ lib.name }} (v{{ lib.version }}){% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}"
           - ""
           - "Verified runnable by an unprivileged user (uid {{ bats_verify_uid }})."
           - ""
