@@ -129,13 +129,20 @@
         aws_cli_install_needed: >-
           {{ ('aws-cli/' ~ aws_cli_version ~ ' ') not in (aws_cli_installed.stdout | default('')) }}
 
-    - name: 5. Create the staging directory
+    - name: 5. Create the staging directories
+      # The gnupg subdirectory is created here rather than left to gpg: under
+      # --batch, gpg will not create a missing --homedir and fails with
+      # "no writable keyring found" instead. 0700 is required, or gpg warns
+      # about unsafe permissions on every invocation.
       ansible.builtin.file:
-        path: "{{ aws_cli_stage_dir }}"
+        path: "{{ item }}"
         state: directory
         owner: root
         group: root
         mode: '0700'
+      loop:
+        - "{{ aws_cli_stage_dir }}"
+        - "{{ aws_cli_stage_dir }}/gnupg"
       when: aws_cli_install_needed | bool
 
     - name: 6. Write the AWS CLI signing key

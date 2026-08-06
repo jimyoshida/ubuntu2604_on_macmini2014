@@ -3,8 +3,8 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: in progress.** 1 of 13 source playbooks migrated, written but not yet run against a
-host. See [Migration status](#migration-status).
+**Status: in progress.** 1 of 13 source playbooks migrated and verified. See
+[Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
 `_multi-user/tools/` and is complete. Everything there still applies: the
@@ -321,7 +321,7 @@ additions:
 | `azure-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
 | `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
 | `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | TBD | Planned |
-| `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Written, not yet run |
+| `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Verified (localhost) |
 | `jira-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
 | `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
 | `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/bin` | TBD | Planned |
@@ -340,9 +340,35 @@ apt repository, and configures no identity — so the ordering above is unaffect
 ### Verification status
 
 Rows marked "Written, not yet run" have been YAML-validated, syntax-checked, and reviewed
-against the policy, but **not executed against a target host** — `_multi-user/inventory.ini`
-is gitignored and absent from this checkout. Treat them as unverified until someone runs
-`ansible-playbook cloud-cli/<tool>.yml -e host=<host>` and updates the table.
+against the policy, but **not executed against a target host**. Treat them as unverified until
+someone runs `ansible-playbook cloud-cli/<tool>.yml -e host=<host>` and updates the table.
+Rows marked "Verified" completed with `failed=0` against the listed host, and re-ran
+idempotently.
+
+`aws-cli.yml` is verified against `localhost` — this repo's own workstation, provisioned in
+place via an `ansible_connection=local` inventory entry rather than over SSH — and **not** yet
+against `ws01`/`ws02`. Two caveats on what that does and does not establish: the run exercised
+ansible-core 2.20, so it says nothing about the 2.16 control node, and a local connection never
+touches the SSH/`remote_user` path. What it does establish is the whole install: signature
+verification, the install itself, world-readable modes, and the unprivileged check. Re-running
+is idempotent — `ok=10 changed=2 skipped=10`, the two changes being the scratch `HOME` the
+smoke test creates and removes, the same churn `tools/kube-score.yml` has for its smoke
+manifest.
+
+`aws-cli.yml` needed a fix discovered only at run time: **`gpg` will not create a missing
+`--homedir` under `--batch`**. Task 8 imported the signing key into a throwaway keyring inside
+the staging directory, and failed with `no writable keyring found: Not found` because nothing
+had created that subdirectory — the failure names the keyring file, not the missing directory,
+so it reads like a gpg configuration problem rather than a mkdir that never happened. The
+playbook now creates the `gnupg` subdirectory explicitly at mode `0700` (`0700` also being
+required to avoid gpg's unsafe-permissions warning on every invocation). This will recur in
+every playbook that verifies a signature in a scratch keyring rather than against apt's
+keyring, so create the homedir first.
+
+Post-run verification independent of the playbook's own checks: `/usr/local/aws-cli` is
+root-owned with no non-world-readable file in the tree, `/var/tmp` holds no staging or
+scratch-`HOME` leftovers, and `aws --version` runs under
+`setpriv --reuid=65534 --regid=65534 --clear-groups` with `HOME=/nonexistent`.
 
 `aws-cli.yml` turned up one thing worth carrying forward to the other playbooks: **AWS's
 signing key is expired at the public keyservers.** `keyserver.ubuntu.com` serves a
@@ -395,3 +421,9 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   for keyring paths or `sources.list.d` filenames. A5 makes the migrated playbooks internally
   consistent; making them consistent with `core/`, `container/`, and `services/` is a separate
   cleanup that this migration should document but not attempt.
+- **Bare `ansible_architecture` is deprecated.** ansible-core 2.20 warns on every run that
+  reads it (`Use ansible_facts["fact_name"] (no ansible_ prefix) instead`), and every playbook
+  in `_multi-user/` maps it onto upstream asset names. Currently a warning, not an error.
+  `ansible_facts['architecture']` works on 2.16 as well, so this is a safe repo-wide change
+  whenever it is worth doing — it is not specific to `cloud-cli/` and should be done in one
+  pass across `tools/` and `cloud-cli/` together, not tool by tool.
