@@ -1,4 +1,4 @@
-# ubuntu2604_on_macmini2014
+# Ubuntu 26.04 Workstation Setup
 
 This directory contains Ansible playbooks for automated Ubuntu 26.04 agent environment setup.
 
@@ -21,7 +21,7 @@ For a smoother experience, especially on Ubuntu 26.04+, configure passwordless s
 
 This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo prompt compatibility issues with newer Ubuntu versions.
 
-## Playbooks
+## Playbooks (old)
 
 | Directory | Description |
 |-----------|-------------|
@@ -33,9 +33,14 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 | [gui-tools/](gui-tools/README.md) | GUI tools (VS Code) |
 | [services/](services/README.md) | Self-hosted services (Vault, n8n, Jellyfin, Samba, FreshRSS) |
 
-## Ongoing Migrations
+## Playbooks (new)
 
-- **Multi-User Workstation Tool Playbook Migration** — [MIGRATION.md](MIGRATION.md)
-  - Policy and procedure for moving the tool installation playbooks from
-    `tool/` (single-user) to `_multi-user/tools/` (multi-user)
-  - Current status of each playbook
+Multi-user successors to `tool/`: root-owned system paths and `/etc` drop-ins instead of
+per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every account on a
+**shared** workstation. Run against a remote host (`-e host=<inventory host or group>`), not
+`localhost`; see [MIGRATION.md](MIGRATION.md) for the migration policy and per-playbook status.
+
+| Directory | Description |
+|-----------|-------------|
+| [_multi-user/tools/](_multi-user/tools/README.md) | Developer tools (bats, gomplate, shellcheck, trivy, hadolint, grype-syft, modern-cli-tools, yq, junit2html, markdownlint, kube-score) |
+
