@@ -1,36 +1,5 @@
 # AI Agent Tools
 
-## n8n.yml
-
-Install n8n Workflow Automation
-
-```bash
-ansible-playbook ai-agent/n8n.yml
-```
-
-**Prerequisites:**
-- System-wide Node.js installed via `core/nodejs.yml`
-  - version manager-managed Node.js will cause the playbook to fail
-
-Installs n8n globally via npm and starts the `n8n` systemd service on port `5678`. Workflow data and SQLite database are stored in `/var/lib/n8n`. n8n generates and manages its own encryption key in `/var/lib/n8n/.n8n/config` on first start.
-
-**Optional environment variables:**
-- `N8N_PORT` — port to listen on (default: `5678`)
-
-**After installation:**
-
-The n8n UI is available at `http://localhost:5678`. On first access you will be prompted to create an admin account.
-
-```bash
-# Check service status
-systemctl status n8n
-
-# View logs
-journalctl -u n8n -f
-```
-
-> **Note:** Back up `/var/lib/n8n/.n8n/config` — it contains the encryption key for stored credentials.
-
 ## nanoclaw.yml
 
 NanoClaw agent setup (Docker-based, lightweight OpenClaw alternative)
