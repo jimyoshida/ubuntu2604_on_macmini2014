@@ -3,7 +3,7 @@
 Policy and procedure for migrating the developer tool installation playbooks from
 `tool/` to `_multi-user/tools/`.
 
-**Status: in progress.** 9 of 12 playbooks migrated. See [Migration status](#migration-status).
+**Status: in progress.** 9 of 10 playbooks migrated. See [Migration status](#migration-status).
 
 ## Background
 
@@ -19,8 +19,7 @@ can use. Three distinct causes:
    Affects: `bats`, `shellcheck`, `trivy`, `hadolint`, `grype-syft`, `modern-cli-tools`.
 2. **Per-user shell profiles.** `blockinfile` against `~/.bashrc` writes to exactly one home
    directory. Accounts created later get nothing.
-   Affects: `modern-cli-tools` (fzf key bindings), `vault` (`VAULT_ADDR`), and
-   `core/homebrew.yml` (`brew shellenv`).
+   Affects: `modern-cli-tools` (fzf key bindings) and `core/homebrew.yml` (`brew shellenv`).
 3. **Per-user install prefixes.** pipx defaults to `~/.local/bin`.
    Affects: `junit2html`.
 
@@ -31,7 +30,7 @@ running this".
 
 | | |
 | --- | --- |
-| Source | `tool/*.yml` (12 playbooks) |
+| Source | `tool/*.yml` (10 playbooks) |
 | Target | `_multi-user/tools/*.yml` |
 | Applies to | New multi-user workstation builds |
 
@@ -171,7 +170,7 @@ Choose the first that applies:
 | Order | Mechanism | Use when | Example |
 | --- | --- | --- | --- |
 | 1 | Ubuntu apt package | the distro package is current enough and named as expected | `shellcheck` |
-| 2 | Vendor apt repository | the vendor publishes one and the distro package lags | `trivy`, `vscode` |
+| 2 | Vendor apt repository | the vendor publishes one and the distro package lags | `trivy` |
 | 3 | Upstream release binary → `/usr/local/bin` | single static binary | `gomplate`, `hadolint`, `kube-score` |
 | 4 | Upstream git tag + `install.sh` | the tool ships an installer and helper libraries | `bats` |
 | 5 | pipx as root, `PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin` | Python application | `junit2html` |
@@ -189,7 +188,7 @@ Two apt gotchas to check before choosing option 1:
 For each playbook:
 
 1. **Read the source playbook** in `tool/` and identify which of the three
-   background causes apply. Some playbooks (`gomplate`, `kube-score`, `vscode`) already
+   background causes apply. Some playbooks (`gomplate`, `kube-score`) already
    install system-wide; for those the migration is correctness work, not reach work.
 2. **Choose the target mechanism** from the decision order above.
 3. **Check upstream for the current version** rather than carrying the old pin forward
@@ -239,12 +238,15 @@ For each playbook:
 | `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
 | `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; yq via mikefarah/yq release binary (apt `yq` is the unrelated Python wrapper); llhttp dropped (apt eza needs no manual libllhttp symlink) | see README | Verified (workstations) |
 | `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | 31.1.4 | Verified (ws01, ws02) |
-| `vault.yml` | apt + `~/.bashrc` | apt + `/etc/profile.d/vault.sh` | — | Pending |
 | `markdownlint.yml` | `npm install -g` | unchanged; harden node resolution to `/usr/bin/node` | — | Pending |
 | `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | 1.20.0 | Verified (ws01, ws02) |
-| `vscode.yml` | vendor apt repo | unchanged | — | Pending |
 
-Suggested order for the remainder: `vault`, and finally the two that need only hardening.
+`vault.yml` and `vscode.yml` dropped out of this table: both moved out of `tool/` (to
+`services/` and `gui-tools/` respectively) before their multi-user migration started, so
+they're no longer in scope for `tool/*.yml` → `_multi-user/tools/*.yml`. Whether they need
+a multi-user treatment is a question for wherever they live now, not this document.
+
+`markdownlint.yml` is the only playbook left.
 
 ## Known follow-ups
 
@@ -261,7 +263,8 @@ These are required for a complete migration but are not part of any single tool 
       block: |
         for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
   ```
-  Needed before `modern-cli-tools` (fzf key bindings) and `vault` can be migrated properly.
+  Needed before `modern-cli-tools` (fzf key bindings) could be migrated properly; already
+  applied there (see `modern-cli-tools.yml`'s `/etc/bash.bashrc` task).
 - **`PATH` precedence on hosts that already have Homebrew.** If `/home/linuxbrew` is left in
   place after migrating, `brew shellenv` prepends its `bin` to `PATH`, so users keep
   silently getting the stale brew copies instead of `/usr/local/bin`. Decide per host
