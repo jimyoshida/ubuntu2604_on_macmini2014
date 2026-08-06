@@ -3,7 +3,7 @@
 Policy and procedure for migrating the developer tool installation playbooks from
 `tool/` to `_multi-user/tools/`.
 
-**Status: in progress.** 9 of 10 playbooks migrated. See [Migration status](#migration-status).
+**Status: complete.** 10 of 10 playbooks migrated. See [Migration status](#migration-status).
 
 ## Background
 
@@ -174,7 +174,7 @@ Choose the first that applies:
 | 3 | Upstream release binary → `/usr/local/bin` | single static binary | `gomplate`, `hadolint`, `kube-score` |
 | 4 | Upstream git tag + `install.sh` | the tool ships an installer and helper libraries | `bats` |
 | 5 | pipx as root, `PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin` | Python application | `junit2html` |
-| 6 | `npm install -g` with `become` | Node application; lands in `/usr/lib/node_modules` | `markdownlint` |
+| 6 | `npm install -g` with `become` | Node application; lands in npm's global prefix | `markdownlint` |
 
 Two apt gotchas to check before choosing option 1:
 
@@ -238,7 +238,7 @@ For each playbook:
 | `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
 | `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; yq via mikefarah/yq release binary (apt `yq` is the unrelated Python wrapper); llhttp dropped (apt eza needs no manual libllhttp symlink) | see README | Verified (workstations) |
 | `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | 31.1.4 | Verified (ws01, ws02) |
-| `markdownlint.yml` | `npm install -g` | unchanged; harden node resolution to `/usr/bin/node` | — | Pending |
+| `markdownlint.yml` | `npm install -g` | unchanged mechanism; pinned version, version-aware guard, npm prefix from facts not assumed | 0.49.1 | Verified (ws01, ws02) |
 | `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | 1.20.0 | Verified (ws01, ws02) |
 
 `vault.yml` and `vscode.yml` dropped out of this table: both moved out of `tool/` (to
@@ -246,7 +246,7 @@ For each playbook:
 they're no longer in scope for `tool/*.yml` → `_multi-user/tools/*.yml`. Whether they need
 a multi-user treatment is a question for wherever they live now, not this document.
 
-`markdownlint.yml` is the only playbook left.
+All ten remaining `tool/*.yml` playbooks are migrated and verified against `ws01`/`ws02`.
 
 ## Known follow-ups
 
@@ -335,3 +335,14 @@ instead of one per line. Wrapping it as an expression, `{{ '\n' }}`, is not subj
 `trim_blocks` and fixes it. Fixed in both existing playbooks and written correctly from the
 start in `modern-cli-tools.yml`; worth using `{{ '\n' }}` rather than a bare `\n` in any
 future summary task that loops.
+
+`markdownlint.yml`'s planned mechanism ("lands in `/usr/lib/node_modules`") was wrong in a
+way only visible by checking both actual targets, not just one: `ws01`'s Node.js comes from
+the NodeSource repository, which sets npm's global prefix to `/usr`, while `ws02`'s comes
+from Ubuntu's own `nodejs` apt package, which defaults it to `/usr/local` instead. Both are
+root-owned system paths, but a playbook that hardcoded either would silently install to the
+wrong tree — or the right tree with the wrong bin dir — on the other host. The playbook
+reads `npm config get prefix` at run time instead. Its unprivileged verification step also
+needed a fix discovered only at run time: markdownlint writes its lint findings to
+**stderr**, not stdout, so a `failed_when` written against `.stdout` never matched and the
+task failed even though the tool worked correctly.

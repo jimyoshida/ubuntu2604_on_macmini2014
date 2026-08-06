@@ -1,0 +1,147 @@
+---
+# Install markdownlint-cli system-wide on a multi-user workstation.
+#
+# The source playbook already installs via `npm install -g` with `become`,
+# which lands in npm's global prefix (root-owned, e.g. /usr/lib/node_modules
+# with npm's own /usr/bin/markdownlint symlink) rather than any per-user
+# path, so there is nothing to add to a shell profile. Node.js itself is a
+# prerequisite provisioned elsewhere; this playbook only checks for it.
+#
+# The migration here is correctness work, not reach work, following the
+# same pattern as gomplate.yml and kube-score.yml:
+#   - Pinned version (the source playbook installed `@latest`).
+#   - Version-aware idempotency (the source playbook only checked presence).
+#   - npm's global prefix is read from `npm config get prefix` rather than
+#     assumed, since it is not fixed: an apt-installed nodejs package on
+#     Ubuntu defaults it to /usr/local, while a NodeSource-installed one
+#     defaults it to /usr. Both are root-owned system paths, so either is
+#     fine, but hardcoding one breaks the other.
+#
+# Usage:
+#   ansible-playbook tools/markdownlint.yml -e host=<inventory host or group>
+#   ansible-playbook tools/markdownlint.yml -e host=ws01 -e markdownlint_cli_version=0.49.1
+
+- name: Install markdownlint-cli system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    markdownlint_cli_version: "0.49.1"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    markdownlint_verify_uid: 65534    # nobody
+    markdownlint_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that Node.js is installed as a system package
+      ansible.builtin.command: dpkg -s nodejs
+      register: markdownlint_nodejs_dpkg
+      changed_when: false
+      failed_when: false
+
+    - name: 2. Fail if Node.js is not installed as a system package
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Node.js is not installed. Provision it (apt package or
+          the NodeSource repository) before running this playbook.
+      when: markdownlint_nodejs_dpkg.rc != 0
+
+    - name: 3. Resolve the active node binary path
+      ansible.builtin.command: which node
+      register: markdownlint_node_path
+      changed_when: false
+
+    - name: 4. Fail if node in PATH is not a system-wide install
+      # Guards against a per-user version manager (nvm, fnm, ...) shadowing
+      # the system node on PATH for the connecting account: a global npm
+      # install under become would then land wherever that shim points,
+      # which is per-user, not root-owned.
+      ansible.builtin.fail:
+        msg: >-
+          node resolved to '{{ markdownlint_node_path.stdout }}', which is not
+          under /usr/bin or /usr/local/bin. It looks like it is managed by a
+          per-user version manager rather than a system package.
+      when: markdownlint_node_path.stdout not in ['/usr/bin/node', '/usr/local/bin/node']
+
+    - name: 5. Resolve npm's global install prefix
+      ansible.builtin.command: npm config get prefix
+      register: markdownlint_npm_prefix
+      changed_when: false
+
+    - name: 6. Check the currently installed markdownlint-cli version
+      ansible.builtin.command: "{{ markdownlint_npm_prefix.stdout }}/bin/markdownlint --version"
+      register: markdownlint_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 7. Decide whether markdownlint-cli needs installing
+      # The version is compared, not merely the presence of the binary, so
+      # that bumping markdownlint_cli_version actually replaces the package.
+      ansible.builtin.set_fact:
+        markdownlint_install_needed: >-
+          {{ markdownlint_cli_version not in (markdownlint_installed.stdout | default('')) }}
+
+    - name: 8. Install markdownlint-cli via npm as root
+      ansible.builtin.command: "npm install -g markdownlint-cli@{{ markdownlint_cli_version }}"
+      when: markdownlint_install_needed | bool
+
+    - name: 9. Ensure the installed package is world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ markdownlint_npm_prefix.stdout }}/lib/node_modules/markdownlint-cli"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 10. Verify the installed markdownlint-cli version
+      ansible.builtin.command: "{{ markdownlint_npm_prefix.stdout }}/bin/markdownlint --version"
+      register: markdownlint_version_out
+      changed_when: false
+      failed_when: markdownlint_cli_version not in markdownlint_version_out.stdout
+
+    - name: 11. Write a markdown file with a known lint issue for the unprivileged smoke test
+      ansible.builtin.copy:
+        dest: /tmp/markdownlint-multiuser-smoke.md
+        mode: '0644'
+        content: |
+          #heading-with-no-space
+          Body text.
+
+    - name: 12. Lint the file as an unprivileged user
+      # markdownlint exits non-zero and writes its findings to stderr when it
+      # finds issues, which the file above deliberately has (MD018: no space
+      # after the hash on an atx heading). That non-zero exit is the
+      # expected, successful outcome of this check, not a failure of the
+      # playbook run.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ markdownlint_verify_uid }} --regid={{ markdownlint_verify_gid }} --clear-groups
+          {{ markdownlint_npm_prefix.stdout }}/bin/markdownlint /tmp/markdownlint-multiuser-smoke.md
+      register: markdownlint_smoke
+      changed_when: false
+      failed_when: "'MD018' not in markdownlint_smoke.stderr"
+
+    - name: 13. Remove the smoke test file
+      ansible.builtin.file:
+        path: /tmp/markdownlint-multiuser-smoke.md
+        state: absent
+
+    - name: 14. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ markdownlint_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ markdownlint_npm_prefix.stdout }}/bin/markdownlint"
+          - "  {{ markdownlint_npm_prefix.stdout }}/lib/node_modules/markdownlint-cli"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ markdownlint_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  markdownlint '**/*.md'              # Lint all markdown files"
+          - "  markdownlint --fix '**/*.md'        # Automatically fix fixable issues"

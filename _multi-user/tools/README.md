@@ -343,3 +343,37 @@ Version overrides:
 ```bash
 ansible-playbook tools/kube-score.yml -e host=ws01 -e kube_score_version=1.20.0
 ```
+
+## markdownlint.yml
+
+Installs [markdownlint-cli](https://github.com/igorshubovych/markdownlint-cli) via
+`npm install -g`, root-owned. Node.js itself is a prerequisite provisioned elsewhere; this
+playbook only checks for it, and fails loudly with setup instructions if it is missing.
+
+The source playbook already installed via `npm install -g` with `become`, so nothing
+needed to move — this migration is correctness work, not reach work:
+
+- **Pinned version.** The source playbook installed `markdownlint-cli@latest`.
+- **Version-aware idempotency.** The source playbook only checked for the binary's
+  presence (`which markdownlint`); the installed version is now compared instead.
+- **npm's global prefix is read at run time, not assumed.** `npm config get prefix`
+  turned out to disagree between the two hosts this was verified against: a
+  NodeSource-installed Node.js defaults it to `/usr` (`/usr/lib/node_modules`,
+  `/usr/bin/markdownlint`), while Ubuntu's own `nodejs` apt package defaults it to
+  `/usr/local` (`/usr/local/lib/node_modules`, `/usr/local/bin/markdownlint`). Both are
+  root-owned system paths, so either is fine — but hardcoding one breaks the other.
+- **Node-in-PATH guard kept from the source playbook**, broadened to accept either system
+  prefix: fails if `which node` resolves outside `/usr/bin/node` or `/usr/local/bin/node`,
+  which would indicate a per-user version manager (nvm, fnm, ...) shadowing the system
+  Node.js for the connecting account.
+
+The unprivileged verification step lints a Markdown file with a deliberate heading-space
+issue and checks the output for that specific rule (`MD018`). markdownlint writes its
+findings to **stderr**, not stdout, and exits non-zero when it finds issues — both are the
+expected, successful outcome of this check, not a failure of the playbook run.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/markdownlint.yml -e host=ws01 -e markdownlint_cli_version=0.49.1
+```
