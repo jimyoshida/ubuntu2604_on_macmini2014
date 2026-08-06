@@ -1,0 +1,287 @@
+---
+# Install the AWS CLI v2 system-wide on a multi-user workstation.
+#
+# AWS's own installer already targets root-owned system paths:
+#
+#   /usr/local/aws-cli/v2/<version>/   the bundled interpreter and libraries
+#   /usr/local/bin/aws                 symlink into the above
+#   /usr/local/bin/aws_completer       symlink into the above
+#
+# so this migration is correctness work rather than reach work. What the
+# source playbook (cloud-cli/aws-cli.yml) lacked: a version pin, signature
+# verification, architecture from facts, and a guard that survives a version
+# bump. Its `creates: /usr/local/bin/aws` guard made `--update` unreachable,
+# so once installed the CLI could never move.
+#
+# Credentials stay per-user in ~/.aws and are not touched here. Nothing is
+# written to any $HOME, and no environment variable is set: the AWS CLI reads
+# AWS_PROFILE / AWS_REGION and its credential files per-account, which is the
+# correct behaviour on a shared box.
+#
+# apt was considered and rejected: Ubuntu 26.04 universe carries a genuine
+# v2 (2.31.x) but trails upstream by several minor releases and will drift
+# further over an LTS lifetime. See MIGRATION2.md.
+#
+# Usage:
+#   ansible-playbook cloud-cli/aws-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/aws-cli.yml -e host=ws01 -e aws_cli_version=2.36.17
+
+- name: Install the AWS CLI v2 system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    aws_cli_version: "2.36.17"
+    aws_cli_install_dir: /usr/local/aws-cli
+    aws_cli_bin_dir: /usr/local/bin
+    aws_cli_bin: /usr/local/bin/aws
+    aws_cli_base_url: "https://awscli.amazonaws.com"
+    # ansible_architecture -> upstream installer asset name. AWS happens to
+    # use the same strings uname does, but the map is kept explicit so an
+    # unmapped architecture fails loudly instead of silently taking amd64.
+    aws_cli_arch_map:
+      x86_64: x86_64
+      aarch64: aarch64
+    aws_cli_arch: "{{ aws_cli_arch_map[ansible_architecture] | default('') }}"
+    aws_cli_zip: "awscli-exe-linux-{{ aws_cli_arch }}-{{ aws_cli_version }}.zip"
+    # Disk-backed, not /tmp: the installer zip is ~70MiB and unpacks larger,
+    # and /tmp is a size-capped tmpfs on these hosts (see MIGRATION.md).
+    aws_cli_stage_dir: "/var/tmp/awscli-install-{{ aws_cli_version }}"
+    aws_cli_smoke_home: /var/tmp/aws-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    aws_cli_verify_uid: 65534    # nobody
+    aws_cli_verify_gid: 65534    # nogroup
+    # AWS publishes this key only in the installation documentation, not at a
+    # fetchable URL, so it is pinned here rather than downloaded. Fetching it
+    # from awscli.amazonaws.com would in any case prove nothing that the
+    # signature does not already prove, since the artifact comes from the same
+    # host. Do NOT substitute a keyserver copy: keys.openpgp.org and
+    # keyserver.ubuntu.com both serve a stale self-signature for this key that
+    # gpg reports as expired (2026-07-07), while the documented copy carries an
+    # extended expiry (2027-07-01). Same fingerprint, different expiry.
+    #   https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+    aws_cli_key_fingerprint: "FB5DB77FD5C118B80511ADA8A6310ACC4672475C"
+    aws_cli_public_key: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+
+      mQINBF2Cr7UBEADJZHcgusOJl7ENSyumXh85z0TRV0xJorM2B/JL0kHOyigQluUG
+      ZMLhENaG0bYatdrKP+3H91lvK050pXwnO/R7fB/FSTouki4ciIx5OuLlnJZIxSzx
+      PqGl0mkxImLNbGWoi6Lto0LYxqHN2iQtzlwTVmq9733zd3XfcXrZ3+LblHAgEt5G
+      TfNxEKJ8soPLyWmwDH6HWCnjZ/aIQRBTIQ05uVeEoYxSh6wOai7ss/KveoSNBbYz
+      gbdzoqI2Y8cgH2nbfgp3DSasaLZEdCSsIsK1u05CinE7k2qZ7KgKAUIcT/cR/grk
+      C6VwsnDU0OUCideXcQ8WeHutqvgZH1JgKDbznoIzeQHJD238GEu+eKhRHcz8/jeG
+      94zkcgJOz3KbZGYMiTh277Fvj9zzvZsbMBCedV1BTg3TqgvdX4bdkhf5cH+7NtWO
+      lrFj6UwAsGukBTAOxC0l/dnSmZhJ7Z1KmEWilro/gOrjtOxqRQutlIqG22TaqoPG
+      fYVN+en3Zwbt97kcgZDwqbuykNt64oZWc4XKCa3mprEGC3IbJTBFqglXmZ7l9ywG
+      EEUJYOlb2XrSuPWml39beWdKM8kzr1OjnlOm6+lpTRCBfo0wa9F8YZRhHPAkwKkX
+      XDeOGpWRj4ohOx0d2GWkyV5xyN14p2tQOCdOODmz80yUTgRpPVQUtOEhXQARAQAB
+      tCFBV1MgQ0xJIFRlYW0gPGF3cy1jbGlAYW1hem9uLmNvbT6JAlQEEwEIAD4CGwMF
+      CwkIBwIGFQoJCAsCBBYCAwECHgECF4AWIQT7Xbd/1cEYuAURraimMQrMRnJHXAUC
+      akV0ygUJDqP4lQAKCRCmMQrMRnJHXFHjD/9eyZLYcKuQOlLvtqSDtUBiEZf6ZZjM
+      i3ygYH8rJNtuToUH+HvSpe819urJCquXhDrlK6N+aqW0hCLtNABJG/vsafIgvIYJ
+      hSGgpgtNnQyMV1jViRWqPjbouw8OkYKBThUfT1i2Y+wn58ifs6ODBCmTexWtXspA
+      Si+Gt49xDOW0APmbOPnI+a4HJW6tVEo6MWS0WjzpiBayR3d1A4pt4YrPfSdDgpLo
+      h2SLQqlRqvvVZJaWBjhkErNFpfsBA06sDcPEOb0G8LBUbR4WOcdvhe5LubJbZuxC
+      AG9kNPCVeQP1ixwjgjXKysaxeQ6rv0VzIQgRp6tLVLWhy6AKDNvLjFSsmXZ1Wl08
+      Y/RlOHXlzLuQMRE6sR1wOdRxc9TsrNWTGiBK65cvSWOy03JeBkQQ8pesqltiyxI9
+      U21kkgiXtTSKNGfKK8pO27D81YANhRqPK7iTp6kuFiY2WtOg90KTMNlIT+Ff85Y2
+      b1rHj6Z0SrCkJujhWk3IBPic/wJgz01LEc/OAdUPlby90RJZcIBhSlWhT7mXnXIO
+      c0HWlNQrns2s3CTyYwZSiSlYe9ApeLwhjDo8NhbFuCAy61l6O5UsR4AfZxx/rGKv
+      2wFb1/RN/P4gNe6vmxZAPjR0AQcwD3tc2McimOLr/22kmPz8IH3I0X7WoSFr0Biz
+      E91G7bb0hOb/cA==
+      =knv7
+      -----END PGP PUBLIC KEY BLOCK-----
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No AWS CLI installer is mapped for architecture
+          '{{ ansible_architecture }}'. Add it to aws_cli_arch_map.
+      when: aws_cli_arch | length == 0
+
+    - name: 3. Check the currently installed AWS CLI version
+      ansible.builtin.command: "{{ aws_cli_bin }} --version"
+      register: aws_cli_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 4. Decide whether the AWS CLI needs installing
+      # The version is compared, not merely the presence of the binary, so
+      # that bumping aws_cli_version actually replaces the install. The
+      # trailing space anchors the match: without it, a pin of 2.36.1 would
+      # be satisfied by an installed 2.36.17.
+      ansible.builtin.set_fact:
+        aws_cli_install_needed: >-
+          {{ ('aws-cli/' ~ aws_cli_version ~ ' ') not in (aws_cli_installed.stdout | default('')) }}
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ aws_cli_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: aws_cli_install_needed | bool
+
+    - name: 6. Write the AWS CLI signing key
+      ansible.builtin.copy:
+        content: "{{ aws_cli_public_key }}"
+        dest: "{{ aws_cli_stage_dir }}/aws-cli-public-key.asc"
+        owner: root
+        group: root
+        mode: '0600'
+      when: aws_cli_install_needed | bool
+
+    - name: 7. Download the AWS CLI installer and its signature
+      ansible.builtin.get_url:
+        url: "{{ aws_cli_base_url }}/{{ item }}"
+        dest: "{{ aws_cli_stage_dir }}/{{ item }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - "{{ aws_cli_zip }}"
+        - "{{ aws_cli_zip }}.sig"
+      when: aws_cli_install_needed | bool
+
+    - name: 8. Import the signing key into a throwaway keyring
+      # A staging GNUPGHOME rather than root's own keyring: this key is used
+      # to check one artifact and should not become permanently trusted for
+      # anything else on the host.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --homedir {{ aws_cli_stage_dir }}/gnupg --batch --quiet
+          --import {{ aws_cli_stage_dir }}/aws-cli-public-key.asc
+      changed_when: true
+      when: aws_cli_install_needed | bool
+
+    - name: 9. Confirm the imported key is the pinned AWS CLI signing key
+      # Guards the embedded key block itself: a swapped key would otherwise
+      # produce a "good" signature for a swapped installer.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --homedir {{ aws_cli_stage_dir }}/gnupg --batch
+          --with-colons --fingerprint
+      register: aws_cli_fpr
+      changed_when: false
+      failed_when: aws_cli_key_fingerprint not in aws_cli_fpr.stdout
+      when: aws_cli_install_needed | bool
+
+    - name: 10. Verify the installer's signature
+      # gpg exits 0 only for a good signature; the "key is not certified with
+      # a trusted signature" warning it prints for an uncertified key does not
+      # affect the exit status, so the exit code is the gate.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --homedir {{ aws_cli_stage_dir }}/gnupg --batch
+          --verify {{ aws_cli_stage_dir }}/{{ aws_cli_zip }}.sig
+          {{ aws_cli_stage_dir }}/{{ aws_cli_zip }}
+      changed_when: false
+      when: aws_cli_install_needed | bool
+
+    - name: 11. Unpack the installer
+      ansible.builtin.unarchive:
+        src: "{{ aws_cli_stage_dir }}/{{ aws_cli_zip }}"
+        dest: "{{ aws_cli_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when: aws_cli_install_needed | bool
+
+    - name: 12. Run the AWS CLI installer
+      # --update makes the installer replace an existing install instead of
+      # refusing; the install/bin dirs are passed explicitly rather than
+      # relying on the installer's defaults staying what they are today.
+      ansible.builtin.command:
+        cmd: >-
+          {{ aws_cli_stage_dir }}/aws/install --update
+          --install-dir {{ aws_cli_install_dir }}
+          --bin-dir {{ aws_cli_bin_dir }}
+      changed_when: true
+      when: aws_cli_install_needed | bool
+
+    - name: 13. Make the install tree readable by every account
+      # The installer applies root's umask rather than an explicit mode, so
+      # this is set here instead of being inherited from whoever ran the play.
+      ansible.builtin.file:
+        path: "{{ aws_cli_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when: aws_cli_install_needed | bool
+
+    - name: 14. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ aws_cli_stage_dir }}"
+        state: absent
+
+    - name: 15. Verify the installed AWS CLI version
+      ansible.builtin.command: "{{ aws_cli_bin }} --version"
+      register: aws_cli_version_out
+      changed_when: false
+      failed_when: ('aws-cli/' ~ aws_cli_version ~ ' ') not in aws_cli_version_out.stdout
+
+    - name: 16. Create a scratch HOME for the unprivileged check
+      # `aws configure list` reads ~/.aws, so the smoke test needs a HOME it
+      # can read. AWS_CONFIG_FILE and friends are deliberately left unset so
+      # that the zero-configuration discovery path is what gets exercised.
+      ansible.builtin.file:
+        path: "{{ aws_cli_smoke_home }}"
+        state: directory
+        owner: "{{ aws_cli_verify_uid }}"
+        group: "{{ aws_cli_verify_gid }}"
+        mode: '0700'
+
+    - name: 17. Inspect AWS CLI configuration as an unprivileged user
+      # Exercises more than --version does: `configure list` loads the
+      # bundled interpreter and libraries and walks the credential chain.
+      # With no credentials present it prints "<not set>" and exits 0, which
+      # is the expected result here — this playbook installs a client and
+      # deliberately configures no identity.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ aws_cli_verify_uid }} --regid={{ aws_cli_verify_gid }} --clear-groups
+          env HOME={{ aws_cli_smoke_home }} {{ aws_cli_bin }} configure list
+      register: aws_cli_smoke
+      changed_when: false
+      failed_when: "'access_key' not in aws_cli_smoke.stdout"
+
+    - name: 18. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ aws_cli_smoke_home }}"
+        state: absent
+
+    - name: 19. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ aws_cli_version_out.stdout | trim }}"
+          - ""
+          - "  {{ aws_cli_install_dir }}/v2/{{ aws_cli_version }} ({{ aws_cli_arch }})"
+          - "  {{ aws_cli_bin }}"
+          - "  {{ aws_cli_bin_dir }}/aws_completer"
+          - ""
+          - "Installer signature verified against {{ aws_cli_key_fingerprint }}."
+          - "Verified runnable by an unprivileged user (uid {{ aws_cli_verify_uid }})."
+          - ""
+          - "Credentials are per-account and are NOT configured by this playbook."
+          - "Each user runs, for themselves:"
+          - "  aws configure                 # static keys, written to ~/.aws"
+          - "  aws configure sso             # IAM Identity Center"
+          - "  aws sts get-caller-identity   # confirm who you are"

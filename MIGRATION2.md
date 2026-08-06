@@ -3,7 +3,8 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: planned.** 0 of 13 source playbooks migrated. See [Migration status](#migration-status).
+**Status: in progress.** 1 of 13 source playbooks migrated, written but not yet run against a
+host. See [Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
 `_multi-user/tools/` and is complete. Everything there still applies: the
@@ -320,7 +321,7 @@ additions:
 | `azure-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
 | `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
 | `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | TBD | Planned |
-| `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | TBD | Planned |
+| `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Written, not yet run |
 | `jira-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
 | `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
 | `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/bin` | TBD | Planned |
@@ -331,6 +332,30 @@ additions:
 Versions are deliberately left `TBD`: MIGRATION.md's step 3 requires checking upstream at the
 time each playbook is written, and the [upstream survey](#upstream-survey-2026-08-06) below
 will be stale by then.
+
+`aws-cli.yml` was taken first, ahead of its position in wave 2. Nothing depends on it and it
+depends on none of wave 1's three decisions — it sets no environment variable, shares no vendor
+apt repository, and configures no identity — so the ordering above is unaffected.
+
+### Verification status
+
+Rows marked "Written, not yet run" have been YAML-validated, syntax-checked, and reviewed
+against the policy, but **not executed against a target host** — `_multi-user/inventory.ini`
+is gitignored and absent from this checkout. Treat them as unverified until someone runs
+`ansible-playbook cloud-cli/<tool>.yml -e host=<host>` and updates the table.
+
+`aws-cli.yml` turned up one thing worth carrying forward to the other playbooks: **AWS's
+signing key is expired at the public keyservers.** `keyserver.ubuntu.com` serves a
+self-signature for `FB5DB77FD5C118B80511ADA8A6310ACC4672475C` that `gpg` reports as expired on
+2026-07-07, while the copy in AWS's installation documentation carries an extended expiry of
+2027-07-01 — same key, same fingerprint, different self-signature. A playbook that had taken
+the convenient route of pulling the key from a keyserver would fail signature verification a
+month after that expiry, for reasons that look nothing like a stale key. Verified end to end
+before writing the playbook: the documented key validates the real `2.36.17` installer
+signature, `gpg --verify` exits 0 on a good signature (the "not certified with a trusted
+signature" warning does not change the exit status) and 1 on a tampered file, so the exit code
+is a sound gate. Where a vendor publishes a key only as documentation prose, pin it in the
+playbook and assert the fingerprint after import.
 
 ## Upstream survey (2026-08-06)
 
