@@ -120,3 +120,96 @@ Version overrides:
 ansible-playbook tools/grype-syft.yml -e host=ws01 \
   -e grype_syft_tools='[{"name":"grype","version":"0.116.1","repo":"anchore/grype"},{"name":"syft","version":"1.50.0","repo":"anchore/syft"}]'
 ```
+
+## shellcheck.yml
+
+Installs [ShellCheck](https://github.com/koalaman/shellcheck) from the Ubuntu apt
+package, `/usr/bin/shellcheck`, root-owned. There is no per-user state and nothing to
+add to a shell profile.
+
+The source playbook installed it via Homebrew, which only the account that ran
+`core/homebrew.yml` can use. The apt package is current enough to use directly instead:
+
+- **Pinned by exact dpkg version**, not just the semantic version. `shellcheck_version`
+  is compared against `dpkg-query -W -f='${Version}' shellcheck`, which includes the
+  Debian revision suffix (e.g. `-2`), so the idempotency check is exact.
+- **The pin is Ubuntu-release-specific.** apt's candidate version for `shellcheck`
+  differs between Ubuntu releases (`0.11.0-2` on 26.04 "resolute", `0.9.0-1` on 24.04
+  "noble"). Overriding `shellcheck_version` only helps if that exact dpkg version is
+  available from the target's configured apt sources.
+
+The unprivileged verification step writes a throwaway script with a known issue
+(unquoted `$1`) to `/tmp`, lints it as `nobody`, and checks for `SC2086` in the output.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/shellcheck.yml -e host=ws01 -e shellcheck_version=0.9.0-1
+```
+
+## trivy.yml
+
+Installs [Trivy](https://github.com/aquasecurity/trivy) (vulnerability scanner) from
+Aqua Security's own apt repository, `/usr/bin/trivy`, root-owned. There is no per-user
+state and nothing to add to a shell profile.
+
+The source playbook installed it via Homebrew. Ubuntu carries no `trivy` package at
+all, so this adds the vendor's apt repository instead:
+
+| Path | Contents |
+| --- | --- |
+| `/usr/share/keyrings/trivy.gpg` | apt signing key, dearmored from Aqua Security's published key |
+| `/etc/apt/sources.list.d/trivy.list` | apt repository definition (`signed-by` pinned to the keyring above) |
+| `/usr/bin/trivy` | installed by apt |
+
+- **Signing key handled the same way `apt-key` used to.** `apt-key` is deprecated;
+  the key is downloaded, dearmored into `/usr/share/keyrings/trivy.gpg`, and referenced
+  from the repo line with `signed-by`, which is the currently supported pattern.
+- **Version-aware idempotency**, same as `shellcheck.yml`: the pin is compared against
+  `dpkg-query`'s exact version string. Aqua's repo happens to publish `trivy` without a
+  Debian revision suffix, so this pin is just the upstream version (`0.73.0`).
+- **Repository setup is skipped once installed.** The key/repo tasks only run when the
+  pinned version isn't already present, so a host that already has the repo configured
+  doesn't re-add it every run.
+
+The unprivileged verification step runs `trivy fs --scanners vuln /etc` as `nobody`
+under a disk-backed scratch `HOME` (`/var/tmp/trivy-verify`), the same `/var/tmp`
+workaround `grype-syft.yml` needed: Trivy's vulnerability database is roughly 100MiB,
+too large for a size-capped `/tmp` tmpfs on some hosts. This also proves Trivy can
+create and use its own per-user cache (`$HOME/.cache/trivy` by default) with no
+root-owned shared path — it needs network egress and can take a little while on the
+first run.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/trivy.yml -e host=ws01 -e trivy_version=0.73.0
+```
+
+## hadolint.yml
+
+Installs [hadolint](https://github.com/hadolint/hadolint) as a single static binary at
+`/usr/local/bin/hadolint`, root-owned, mode `0755`. There is no per-user state and
+nothing to add to a shell profile.
+
+The source playbook installed it via Homebrew. hadolint has no apt package or vendor
+repository, so this migration uses the upstream release binary directly, following the
+same pattern as `gomplate.yml`:
+
+- **Checksum verification** from the release's published `checksums.sha256`, resolved at
+  run time so that changing `hadolint_version` stays a one-flag change.
+- **Architecture from facts.** `ansible_architecture` is mapped to the release asset
+  suffix (`x86_64` → `x86_64`, `aarch64` → `arm64`). Unmapped architectures fail with a
+  clear message.
+- **Version-aware idempotency.** The installed version (parsed from `hadolint --version`
+  output) is compared against the pinned version before re-downloading.
+
+The unprivileged verification step pipes `FROM scratch` into `hadolint -` (reading from
+stdin) as `nobody`, with `HOME` deliberately left unset, proving hadolint's
+zero-configuration path: no `.hadolint.yaml` is discovered or required.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
+```

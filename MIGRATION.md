@@ -3,7 +3,7 @@
 Policy and procedure for migrating the developer tool installation playbooks from
 `tool/` to `_multi-user/tools/`.
 
-**Status: in progress.** 3 of 12 playbooks migrated. See [Migration status](#migration-status).
+**Status: in progress.** 6 of 12 playbooks migrated. See [Migration status](#migration-status).
 
 ## Background
 
@@ -233,9 +233,9 @@ For each playbook:
 | --- | --- | --- | --- | --- |
 | `bats.yml` | brew + tap | git tags + `install.sh`; libs to `/usr/lib/bats` | core 1.14.0, support 0.3.0, assert 2.2.4 | Verified (workstations) |
 | `gomplate.yml` | release binary | release binary + checksum + arch from facts | 5.2.0 (was 4.3.0) | Verified (workstations) |
-| `shellcheck.yml` | brew | apt `shellcheck` | — | Pending |
-| `trivy.yml` | brew | Aqua vendor apt repo | — | Pending |
-| `hadolint.yml` | brew | release binary | — | Pending |
+| `shellcheck.yml` | brew | apt `shellcheck` | 0.11.0-2 (dpkg version, Ubuntu 26.04) | Verified (workstations) |
+| `trivy.yml` | brew | Aqua vendor apt repo | 0.73.0 | Verified (workstations) |
+| `hadolint.yml` | brew | release binary | 2.15.1 | Verified (workstations) |
 | `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
 | `modern-cli-tools.yml` | brew (16 tools) | apt where available, else release binary; Charm apt repo for gum/glow | — | Pending |
 | `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | — | Pending |
@@ -244,7 +244,7 @@ For each playbook:
 | `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | — | Pending |
 | `vscode.yml` | vendor apt repo | unchanged | — | Pending |
 
-Suggested order for the remainder: `shellcheck`, `trivy`, `hadolint`, then `modern-cli-tools`
+Suggested order for the remainder: `modern-cli-tools`
 (largest, do it tool by tool), then `junit2html`,
 `vault`, and finally the three that need only hardening.
 
@@ -281,4 +281,13 @@ completed with `failed=0`.
 size-capped tmpfs (~1.65GiB) too small for grype's vulnerability database, which failed with
 `SQLITE_FULL` when downloaded there during the unprivileged-verification step. The playbook
 now stages that step under `/var/tmp` (disk-backed) instead. Worth checking for on any tool
-whose verification step writes non-trivial amounts of data under `HOME=/tmp`.
+whose verification step writes non-trivial amounts of data under `HOME=/tmp`. `trivy.yml`
+applied the same `/var/tmp` staging from the start, since its vulnerability database is a
+similar size (~100MiB).
+
+`shellcheck.yml` needed a version fix discovered only at run time: `ws01`/`ws02` run Ubuntu
+26.04 ("resolute"), not 24.04 ("noble") as assumed when picking the initial pin from a local
+apt cache. apt's `shellcheck` candidate differs by release (`0.11.0-2` vs `0.9.0-1`), and the
+task 3 install fails outright — "no available installation candidate" — when the pin doesn't
+match what the target's apt sources actually carry. Worth checking the target's actual
+`/etc/os-release` before trusting an apt-based version pin, not just a local machine's.

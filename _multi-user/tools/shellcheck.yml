@@ -1,0 +1,92 @@
+---
+# Install ShellCheck system-wide on a multi-user workstation.
+#
+# ShellCheck's Ubuntu apt package is current enough to use as-is, so the
+# multi-user story is simple:
+#
+#   /usr/bin/shellcheck   installed by apt, root-owned
+#
+# There is no per-user state and nothing to add to a shell profile.
+#
+# Usage:
+#   ansible-playbook tools/shellcheck.yml -e host=<inventory host or group>
+#   ansible-playbook tools/shellcheck.yml -e host=ws01 -e shellcheck_version=0.10.0-1
+
+- name: Install ShellCheck system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # dpkg version, including the Debian revision suffix, so the comparison
+    # in task 2 is exact. This is Ubuntu 26.04 (resolute)'s current
+    # candidate. apt is the chosen mechanism here, so overriding this only
+    # helps if that exact dpkg version is available from the configured apt
+    # sources — it varies by Ubuntu release.
+    shellcheck_version: "0.11.0-2"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    shellcheck_verify_uid: 65534    # nobody
+    shellcheck_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed shellcheck version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' shellcheck
+      register: shellcheck_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 2. Decide whether shellcheck needs installing
+      ansible.builtin.set_fact:
+        shellcheck_install_needed: >-
+          {{ shellcheck_installed.rc != 0 or shellcheck_installed.stdout != shellcheck_version }}
+
+    - name: 3. Install shellcheck via apt
+      ansible.builtin.apt:
+        name: "shellcheck={{ shellcheck_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: shellcheck_install_needed | bool
+
+    - name: 4. Verify the installed shellcheck version
+      ansible.builtin.command: shellcheck --version
+      register: shellcheck_version_out
+      changed_when: false
+      failed_when: (shellcheck_version.split('-')[0]) not in shellcheck_version_out.stdout
+
+    - name: 5. Create a scratch script with a known issue for verification
+      ansible.builtin.copy:
+        dest: /tmp/shellcheck-verify.sh
+        mode: 'u=rwX,go=rX'
+        content: |
+          #!/bin/bash
+          echo $1
+
+    - name: 6. Lint the scratch script as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ shellcheck_verify_uid }} --regid={{ shellcheck_verify_gid }} --clear-groups
+          shellcheck /tmp/shellcheck-verify.sh
+      register: shellcheck_smoke
+      changed_when: false
+      failed_when: "'SC2086' not in shellcheck_smoke.stdout"
+
+    - name: 7. Remove the scratch script
+      ansible.builtin.file:
+        path: /tmp/shellcheck-verify.sh
+        state: absent
+
+    - name: 8. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "ShellCheck {{ shellcheck_version_out.stdout.splitlines() | select('match', 'version:') | first | trim }} installed system-wide."
+          - ""
+          - "  /usr/bin/shellcheck"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ shellcheck_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  shellcheck script.sh        # Lint a shell script"

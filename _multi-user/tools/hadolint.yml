@@ -1,0 +1,120 @@
+---
+# Install hadolint system-wide on a multi-user workstation.
+#
+# hadolint ships as a single static binary, so the multi-user story is simple:
+#
+#   /usr/local/bin/hadolint   root-owned, mode 0755
+#
+# There is no per-user state and nothing to add to a shell profile.
+#
+# Usage:
+#   ansible-playbook tools/hadolint.yml -e host=<inventory host or group>
+#   ansible-playbook tools/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
+
+- name: Install hadolint system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    hadolint_version: "2.15.1"
+    hadolint_bin: /usr/local/bin/hadolint
+    hadolint_release_url: "https://github.com/hadolint/hadolint/releases/download/v{{ hadolint_version }}"
+    # ansible_architecture -> upstream release asset suffix
+    hadolint_arch_map:
+      x86_64: x86_64
+      aarch64: arm64
+    hadolint_arch: "{{ hadolint_arch_map[ansible_architecture] | default('') }}"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    hadolint_verify_uid: 65534    # nobody
+    hadolint_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No hadolint release asset is mapped for architecture
+          '{{ ansible_architecture }}'. Add it to hadolint_arch_map.
+      when: hadolint_arch | length == 0
+
+    - name: 3. Check the currently installed hadolint version
+      ansible.builtin.command: "{{ hadolint_bin }} --version"
+      register: hadolint_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 4. Decide whether hadolint needs installing
+      # The version is compared, not merely the presence of the file, so that
+      # bumping hadolint_version actually replaces the binary.
+      ansible.builtin.set_fact:
+        hadolint_install_needed: >-
+          {{ hadolint_version not in (hadolint_installed.stdout | default('')) }}
+
+    - name: 5. Fetch the published checksums for hadolint v{{ hadolint_version }}
+      ansible.builtin.uri:
+        url: "{{ hadolint_release_url }}/checksums.sha256"
+        return_content: true
+      register: hadolint_checksums
+      when: hadolint_install_needed | bool
+
+    - name: 6. Resolve the SHA-256 for the {{ hadolint_arch }} binary
+      # Looked up per release rather than pinned in this file, so overriding
+      # hadolint_version stays a one-flag change.
+      ansible.builtin.set_fact:
+        hadolint_sha256: >-
+          {{ hadolint_checksums.content.splitlines()
+             | select('search', 'hadolint-linux-' ~ hadolint_arch ~ '$')
+             | first | trim | regex_replace('\s.*$', '') }}
+      when: hadolint_install_needed | bool
+
+    - name: 7. Install the hadolint binary
+      ansible.builtin.get_url:
+        url: "{{ hadolint_release_url }}/hadolint-linux-{{ hadolint_arch }}"
+        dest: "{{ hadolint_bin }}"
+        checksum: "sha256:{{ hadolint_sha256 }}"
+        owner: root
+        group: root
+        mode: '0755'
+        force: true
+      when: hadolint_install_needed | bool
+
+    - name: 8. Verify the installed hadolint version
+      ansible.builtin.command: "{{ hadolint_bin }} --version"
+      register: hadolint_version_out
+      changed_when: false
+      failed_when: hadolint_version not in hadolint_version_out.stdout
+
+    - name: 9. Lint a Dockerfile from stdin as an unprivileged user
+      # Read from stdin rather than a file on disk, and HOME is deliberately
+      # left unset, so this proves the zero-configuration path: no config
+      # file (.hadolint.yaml) is discovered or required.
+      ansible.builtin.shell:
+        cmd: >-
+          echo 'FROM scratch' |
+          setpriv --reuid={{ hadolint_verify_uid }} --regid={{ hadolint_verify_gid }} --clear-groups
+          {{ hadolint_bin }} -
+      register: hadolint_smoke
+      changed_when: false
+
+    - name: 10. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ hadolint_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ hadolint_bin }} ({{ hadolint_arch }})"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ hadolint_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  hadolint Dockerfile         # Lint a Dockerfile"

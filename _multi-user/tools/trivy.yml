@@ -1,0 +1,148 @@
+---
+# Install Trivy system-wide on a multi-user workstation.
+#
+# Ubuntu's own repos do not carry Trivy at all, so this adds Aqua Security's
+# official apt repository instead of Homebrew:
+#
+#   /usr/share/keyrings/trivy.gpg          apt signing key, root-owned
+#   /etc/apt/sources.list.d/trivy.list     apt repository definition
+#   /usr/bin/trivy                         installed by apt, root-owned
+#
+# There is no per-user state and nothing to add to a shell profile. Trivy's
+# own vulnerability database still lands under each user's $HOME/.cache/trivy
+# on first scan, same as any other per-user cache Trivy would build with a
+# single-user install.
+#
+# Usage:
+#   ansible-playbook tools/trivy.yml -e host=<inventory host or group>
+#   ansible-playbook tools/trivy.yml -e host=ws01 -e trivy_version=0.73.0
+
+- name: Install Trivy system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    trivy_version: "0.73.0"
+    trivy_gpg_key_url: https://aquasecurity.github.io/trivy-repo/deb/public.key
+    trivy_keyring: /usr/share/keyrings/trivy.gpg
+    trivy_repo_line: "deb [signed-by={{ trivy_keyring }}] https://aquasecurity.github.io/trivy-repo/deb generic main"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    trivy_verify_uid: 65534    # nobody
+    trivy_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - gnupg
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Check the currently installed trivy version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' trivy
+      register: trivy_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Decide whether trivy needs installing
+      ansible.builtin.set_fact:
+        trivy_install_needed: >-
+          {{ trivy_installed.rc != 0 or trivy_installed.stdout != trivy_version }}
+
+    - name: 4. Download the Aqua Security apt signing key
+      ansible.builtin.get_url:
+        url: "{{ trivy_gpg_key_url }}"
+        dest: /tmp/trivy-public.key
+        mode: '0644'
+        force: true
+      when: trivy_install_needed | bool
+
+    - name: 5. Dearmor the signing key into the apt keyring
+      ansible.builtin.command:
+        cmd: "gpg --batch --yes --dearmor --output {{ trivy_keyring }} /tmp/trivy-public.key"
+      when: trivy_install_needed | bool
+
+    - name: 6. Ensure the apt keyring is world-readable
+      ansible.builtin.file:
+        path: "{{ trivy_keyring }}"
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+      when: trivy_install_needed | bool
+
+    - name: 7. Remove the downloaded key file
+      ansible.builtin.file:
+        path: /tmp/trivy-public.key
+        state: absent
+      when: trivy_install_needed | bool
+
+    - name: 8. Add the Aqua Security apt repository
+      ansible.builtin.apt_repository:
+        repo: "{{ trivy_repo_line }}"
+        filename: trivy
+        state: present
+        update_cache: true
+      when: trivy_install_needed | bool
+
+    - name: 9. Install trivy via apt
+      ansible.builtin.apt:
+        name: "trivy={{ trivy_version }}"
+        state: present
+      when: trivy_install_needed | bool
+
+    - name: 10. Verify the installed trivy version
+      ansible.builtin.command: trivy --version
+      register: trivy_version_out
+      changed_when: false
+      failed_when: trivy_version not in trivy_version_out.stdout
+
+    - name: 11. Create a scratch directory for the unprivileged verification
+      # Disk-backed rather than /tmp: on hosts where /tmp is a size-capped
+      # tmpfs, Trivy's vulnerability database (~100MiB) may not fit, the same
+      # SQLITE_FULL failure mode found migrating grype-syft.yml.
+      ansible.builtin.file:
+        path: /var/tmp/trivy-verify
+        state: directory
+        owner: root
+        group: root
+        mode: '1777'
+
+    - name: 12. Scan a directory for vulnerabilities as an unprivileged user
+      # Downloads Trivy's vulnerability database into this throwaway HOME,
+      # proving the tool can create and use its own per-user cache
+      # ($HOME/.cache/trivy by default) without any root-owned shared path.
+      # Needs network egress to fetch the vulnerability database.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ trivy_verify_uid }} --regid={{ trivy_verify_gid }} --clear-groups
+          trivy fs --scanners vuln -f table /etc
+        chdir: /var/tmp/trivy-verify
+      environment:
+        HOME: /var/tmp/trivy-verify
+        TMPDIR: /var/tmp/trivy-verify
+      register: trivy_smoke
+      changed_when: false
+
+    - name: 13. Remove the scratch directory used for unprivileged verification
+      ansible.builtin.file:
+        path: /var/tmp/trivy-verify
+        state: absent
+
+    - name: 14. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "Trivy {{ trivy_version_out.stdout.splitlines() | select('match', 'Version:') | first | trim }} installed system-wide."
+          - ""
+          - "  /usr/bin/trivy"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ trivy_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  trivy image nginx:latest    # Scan a container image"
+          - "  trivy fs .                  # Scan a directory for vulnerabilities and secrets"
