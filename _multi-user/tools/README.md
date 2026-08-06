@@ -213,3 +213,66 @@ Version overrides:
 ```bash
 ansible-playbook tools/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
 ```
+
+## modern-cli-tools.yml
+
+Installs 15 modern CLI tool replacements. 14 come from apt, root-owned, at `/usr/bin` (no
+per-user state, nothing added to a shell profile for any of them):
+
+| Tool | apt package | Binary |
+| --- | --- | --- |
+| gum, fzf, jq, jsonnet, eza, lsd, duf, procs, gdu, htop, glow | same name | same name |
+| ripgrep | `ripgrep` | `rg` |
+| bat | `bat` | `batcat` (symlinked to `/usr/local/bin/bat`) |
+| dust | `du-dust` | `dust` |
+
+The fifteenth, **yq**, is the one tool in this bundle that is not a plain apt install:
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/yq` | [mikefarah/yq](https://github.com/mikefarah/yq) release binary |
+| `/etc/profile.d/fzf.sh` | `eval "$(fzf --bash)"` — fzf key bindings and completion |
+
+The source playbook installed all 16 (including `llhttp`, a manual dependency shim; see
+below) via Homebrew. Migrating this one uncovered three real differences from the plan in
+`MIGRATION.md`, all only visible by checking the actual target host rather than assuming:
+
+- **No Charm apt repo needed.** The plan called for Aqua-style vendor apt repo for `gum` and
+  `glow`, on the assumption Ubuntu's own repos lagged. On the actual target (Ubuntu 26.04
+  "resolute"), apt already carries both directly (`gum` 0.17.0-1, `glow` 2.1.1-1) — one apt
+  install covers all 14 non-yq tools, no vendor repo at all.
+- **`llhttp` is dropped entirely**, not migrated. The source playbook symlinked a Homebrew
+  Cellar path (`libllhttp.so.9.3`) so its Homebrew-built `eza` could find the library at
+  runtime — a Homebrew Cellar-isolation workaround. apt's `eza` package declares
+  `libgit2-1.9` etc. as proper package dependencies, so nothing extra is needed.
+- **`yq` is a deliberate exception to "prefer apt".** Per the decision-order gotcha in
+  `MIGRATION.md`: Ubuntu's apt `yq` is `kislyuk/yq`, a Python wrapper around `jq` with
+  entirely different syntax from mikefarah's Go `yq` that Homebrew's `yq` formula installs.
+  Silently swapping one for the other under the same command name would break any script
+  written against the Go one, so this installs the real thing as a release binary instead.
+  Its own published checksums file uses a bespoke multi-algorithm rhash table
+  (`checksums_hashes_order` / `extract-checksum.sh` in the release), not the plain
+  `hash  filename` format `gomplate.yml`/`hadolint.yml` parse. Instead, the playbook reads
+  the SHA-256 `digest` GitHub computes and serves per release asset via its own API — simpler
+  to consume and just as authoritative.
+
+fzf's key bindings need `/etc/profile.d` to actually be read by interactive shells, which is
+not true by default for a non-login shell (e.g. a plain SSH session) on stock Ubuntu — see
+"Known follow-ups" in `MIGRATION.md`. This playbook adds that hook to `/etc/bash.bashrc`,
+since fzf is the first migrated tool that needs it; the task is an idempotent no-op for any
+later playbook (`vault.yml`) that adds the same hook.
+
+The unprivileged verification step runs every tool's `--version` as `nobody`, then separately
+opens a non-login interactive `bash -i` shell as the same user and checks that fzf's
+`__fzf_select__` function is defined — proving the `/etc/profile.d` → `/etc/bash.bashrc` chain
+actually works end-to-end for a real interactive session, not just that the binaries exist.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/modern-cli-tools.yml -e host=ws01 -e modern_cli_tools_yq_version=4.53.3
+```
+
+apt package pins are release-specific (see `shellcheck.yml`'s note on the same issue); to
+override one, edit `modern_cli_tools_packages` with `-e` as a JSON list, the same pattern
+`grype-syft.yml` uses for its tool list.

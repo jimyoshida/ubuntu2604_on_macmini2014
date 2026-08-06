@@ -3,7 +3,7 @@
 Policy and procedure for migrating the developer tool installation playbooks from
 `tool/` to `_multi-user/tools/`.
 
-**Status: in progress.** 6 of 12 playbooks migrated. See [Migration status](#migration-status).
+**Status: in progress.** 7 of 12 playbooks migrated. See [Migration status](#migration-status).
 
 ## Background
 
@@ -237,15 +237,14 @@ For each playbook:
 | `trivy.yml` | brew | Aqua vendor apt repo | 0.73.0 | Verified (workstations) |
 | `hadolint.yml` | brew | release binary | 2.15.1 | Verified (workstations) |
 | `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
-| `modern-cli-tools.yml` | brew (16 tools) | apt where available, else release binary; Charm apt repo for gum/glow | — | Pending |
+| `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; yq via mikefarah/yq release binary (apt `yq` is the unrelated Python wrapper); llhttp dropped (apt eza needs no manual libllhttp symlink) | see README | Verified (workstations) |
 | `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | — | Pending |
 | `vault.yml` | apt + `~/.bashrc` | apt + `/etc/profile.d/vault.sh` | — | Pending |
 | `markdownlint.yml` | `npm install -g` | unchanged; harden node resolution to `/usr/bin/node` | — | Pending |
 | `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | — | Pending |
 | `vscode.yml` | vendor apt repo | unchanged | — | Pending |
 
-Suggested order for the remainder: `modern-cli-tools`
-(largest, do it tool by tool), then `junit2html`,
+Suggested order for the remainder: `junit2html`,
 `vault`, and finally the three that need only hardening.
 
 ## Known follow-ups
@@ -291,3 +290,26 @@ apt cache. apt's `shellcheck` candidate differs by release (`0.11.0-2` vs `0.9.0
 task 3 install fails outright — "no available installation candidate" — when the pin doesn't
 match what the target's apt sources actually carry. Worth checking the target's actual
 `/etc/os-release` before trusting an apt-based version pin, not just a local machine's.
+
+`modern-cli-tools.yml`'s planned mechanism was wrong on two counts, both only visible by
+checking the actual target: Ubuntu 26.04's apt already carries `gum` and `glow` directly
+(0.17.0-1, 2.1.1-1), so the Charm vendor apt repo this row originally called for turned out
+to be unnecessary — apt alone covers all 14 non-yq tools. `llhttp` (a manual symlink hack the
+source playbook needed for Homebrew's eza build) is also dropped entirely: apt's `eza`
+package declares its own library dependencies, so nothing extra is needed. `yq` is the one
+real exception — apt's `yq` is confirmed to be the Python jq-wrapper, not mikefarah's Go yq,
+so it installs from a release binary instead. That release's own checksums file uses a
+bespoke multi-algorithm rhash table (`checksums_hashes_order` / `extract-checksum.sh`) rather
+than the usual `hash  filename` format the other release-binary playbooks parse; the playbook
+uses GitHub's own computed per-asset SHA-256 `digest` (from the releases API) instead, which
+is simpler and equally authoritative.
+
+Also found while migrating `modern-cli-tools.yml`, but predating it: `bats.yml` and
+`grype-syft.yml`'s installation-summary tasks built a per-item newline with a bare `\n`
+inside a Jinja `{% if %}...{% endif %}` block. Ansible's Jinja environment has
+`trim_blocks` enabled, which silently strips a newline immediately following a block tag,
+so that `\n` was never actually emitted — the summary printed all items joined on one line
+instead of one per line. Wrapping it as an expression, `{{ '\n' }}`, is not subject to
+`trim_blocks` and fixes it. Fixed in both existing playbooks and written correctly from the
+start in `modern-cli-tools.yml`; worth using `{{ '\n' }}` rather than a bare `\n` in any
+future summary task that loops.
