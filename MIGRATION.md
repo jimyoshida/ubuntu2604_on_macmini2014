@@ -231,8 +231,8 @@ For each playbook:
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `bats.yml` | brew + tap | git tags + `install.sh`; libs to `/usr/lib/bats` | core 1.14.0, support 0.3.0, assert 2.2.4 | Written, not yet run |
-| `gomplate.yml` | release binary | release binary + checksum + arch from facts | 5.2.0 (was 4.3.0) | Written, not yet run |
+| `bats.yml` | brew + tap | git tags + `install.sh`; libs to `/usr/lib/bats` | core 1.14.0, support 0.3.0, assert 2.2.4 | Verified (workstations) |
+| `gomplate.yml` | release binary | release binary + checksum + arch from facts | 5.2.0 (was 4.3.0) | Verified (workstations) |
 | `shellcheck.yml` | brew | apt `shellcheck` | — | Pending |
 | `trivy.yml` | brew | Aqua vendor apt repo | — | Pending |
 | `hadolint.yml` | brew | release binary | — | Pending |
