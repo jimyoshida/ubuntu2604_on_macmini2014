@@ -1,0 +1,156 @@
+---
+# Install kube-score system-wide on a multi-user workstation.
+#
+# kube-score ships as a single static binary, so the multi-user story is
+# simple:
+#
+#   /usr/local/bin/kube-score   root-owned, mode 0755
+#
+# There is no per-user state and nothing to add to a shell profile. The
+# source playbook already installed to this same root-owned path, so this
+# migration is correctness work rather than reach work: checksum
+# verification, architecture from facts, and a version-aware install guard,
+# following the same pattern as gomplate.yml and hadolint.yml.
+#
+# Usage:
+#   ansible-playbook tools/kube-score.yml -e host=<inventory host or group>
+#   ansible-playbook tools/kube-score.yml -e host=ws01 -e kube_score_version=1.20.0
+
+- name: Install kube-score system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    kube_score_version: "1.20.0"
+    kube_score_bin: /usr/local/bin/kube-score
+    kube_score_release_url: "https://github.com/zegl/kube-score/releases/download/v{{ kube_score_version }}"
+    # ansible_architecture -> upstream release asset suffix
+    kube_score_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    kube_score_arch: "{{ kube_score_arch_map[ansible_architecture] | default('') }}"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    kube_score_verify_uid: 65534    # nobody
+    kube_score_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No kube-score release asset is mapped for architecture
+          '{{ ansible_architecture }}'. Add it to kube_score_arch_map.
+      when: kube_score_arch | length == 0
+
+    - name: 3. Check the currently installed kube-score version
+      ansible.builtin.command: "{{ kube_score_bin }} version"
+      register: kube_score_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 4. Decide whether kube-score needs installing
+      # The version is compared, not merely the presence of the file, so that
+      # bumping kube_score_version actually replaces the binary.
+      ansible.builtin.set_fact:
+        kube_score_install_needed: >-
+          {{ kube_score_version not in (kube_score_installed.stdout | default('')) }}
+
+    - name: 5. Fetch the published checksums for kube-score v{{ kube_score_version }}
+      ansible.builtin.uri:
+        url: "{{ kube_score_release_url }}/checksums.txt"
+        return_content: true
+      register: kube_score_checksums
+      when: kube_score_install_needed | bool
+
+    - name: 6. Resolve the SHA-256 for the linux/{{ kube_score_arch }} binary
+      # Looked up per release rather than pinned in this file, so overriding
+      # kube_score_version stays a one-flag change. Anchored on '$' so the
+      # bare binary is matched and not its .tar.gz sibling.
+      ansible.builtin.set_fact:
+        kube_score_sha256: >-
+          {{ kube_score_checksums.content.splitlines()
+             | select('search', 'kube-score_' ~ kube_score_version ~ '_linux_' ~ kube_score_arch ~ '$')
+             | first | trim | regex_replace('\s.*$', '') }}
+      when: kube_score_install_needed | bool
+
+    - name: 7. Install the kube-score binary
+      ansible.builtin.get_url:
+        url: "{{ kube_score_release_url }}/kube-score_{{ kube_score_version }}_linux_{{ kube_score_arch }}"
+        dest: "{{ kube_score_bin }}"
+        checksum: "sha256:{{ kube_score_sha256 }}"
+        owner: root
+        group: root
+        mode: '0755'
+        force: true
+      when: kube_score_install_needed | bool
+
+    - name: 8. Verify the installed kube-score version
+      ansible.builtin.command: "{{ kube_score_bin }} version"
+      register: kube_score_version_out
+      changed_when: false
+      failed_when: kube_score_version not in kube_score_version_out.stdout
+
+    - name: 9. Write a manifest with known issues for the unprivileged smoke test
+      ansible.builtin.copy:
+        dest: /tmp/kube-score-multiuser-smoke.yml
+        mode: '0644'
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: smoke
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: smoke
+            template:
+              metadata:
+                labels:
+                  app: smoke
+              spec:
+                containers:
+                  - name: smoke
+                    image: nginx:latest
+
+    - name: 10. Score the manifest as an unprivileged user
+      # kube-score exits non-zero when it finds CRITICAL issues, which the
+      # manifest above deliberately has (a floating ':latest' image tag, no
+      # resource limits, no security context). That non-zero exit is the
+      # expected, successful outcome here, not a failure of the run.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kube_score_verify_uid }} --regid={{ kube_score_verify_gid }} --clear-groups
+          {{ kube_score_bin }} score /tmp/kube-score-multiuser-smoke.yml
+      register: kube_score_smoke
+      changed_when: false
+      failed_when: "'Container Image Tag' not in kube_score_smoke.stdout"
+
+    - name: 11. Remove the smoke test manifest
+      ansible.builtin.file:
+        path: /tmp/kube-score-multiuser-smoke.yml
+        state: absent
+
+    - name: 12. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ kube_score_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ kube_score_bin }} ({{ kube_score_arch }})"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ kube_score_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  kube-score score deployment.yaml   # Score a manifest and print recommendations"
+          - "  kube-score score --output-format ci manifests/*.yaml"

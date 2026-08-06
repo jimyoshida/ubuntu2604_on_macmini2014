@@ -276,3 +276,70 @@ ansible-playbook tools/modern-cli-tools.yml -e host=ws01 -e modern_cli_tools_yq_
 apt package pins are release-specific (see `shellcheck.yml`'s note on the same issue); to
 override one, edit `modern_cli_tools_packages` with `-e` as a JSON list, the same pattern
 `grype-syft.yml` uses for its tool list.
+
+## junit2html.yml
+
+Installs [junit2html](https://gitlab.com/inorton/junit2html) via `pipx`, root-owned:
+
+| Path | Contents |
+| --- | --- |
+| `/opt/pipx` | `PIPX_HOME` — the pipx-managed virtualenv holding junit2html |
+| `/usr/local/bin/junit2html` | `PIPX_BIN_DIR` — the app symlink pipx creates |
+
+The source playbook ran `pipx install` as the connecting user, which lands in that user's
+own `~/.local/bin` and `~/.local/pipx`; only that account can then run `junit2html`. This
+migration instead runs `pipx` as `root` with `PIPX_HOME`/`PIPX_BIN_DIR` redirected to the
+root-owned paths above, following the pipx-as-root pattern from `MIGRATION.md`'s install
+mechanism decision order. There is nothing to add to a shell profile: junit2html is a
+plain CLI with no per-user configuration.
+
+- **No `--version` flag.** junit2html has no way to report its own version, so both the
+  idempotency check and the post-install verification instead parse `pipx list --short`,
+  which prints `junit2html <version>` once installed.
+- **Pinned to the current PyPI release**, not a GitHub tag: upstream moved off GitHub to
+  GitLab after `v31.0.2`, so later releases (`31.1.4` and newer) have no corresponding
+  GitHub tag at all. `pip`/`pipx` verify the downloaded package against the hash PyPI
+  publishes in its index as part of every install; there is no separate checksum step to
+  add, the same way apt-based playbooks in this directory need none.
+- **World-readable install tree.** `mode: 'u=rwX,go=rX'` is applied recursively to
+  `/opt/pipx` after install, since pipx's own venv creation is subject to the umask of
+  whoever ran it (`root`, in this case).
+
+The unprivileged verification step renders a small sample JUnit XML fixture to HTML and
+confirms the output file exists.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/junit2html.yml -e host=ws01 -e junit2html_version=31.1.4
+```
+
+## kube-score.yml
+
+Installs [kube-score](https://github.com/zegl/kube-score) as a single static binary at
+`/usr/local/bin/kube-score`, root-owned, mode `0755`. There is no per-user state and
+nothing to add to a shell profile.
+
+The source playbook already installed to this same root-owned path — like `gomplate.yml`,
+this migration is correctness work rather than reach work:
+
+- **Checksum verification** from the release's published `checksums.txt`, resolved at run
+  time so that changing `kube_score_version` stays a one-flag change.
+- **Architecture from facts.** `ansible_architecture` is mapped to the release asset
+  suffix (`x86_64` → `amd64`, `aarch64` → `arm64`). Unmapped architectures fail with a
+  clear message.
+- **Version-aware idempotency.** The original guarded the download with
+  `stat.exists`, so once the binary existed, bumping `kube_score_version` did nothing. The
+  installed version (parsed from `kube-score version` output) is now compared instead.
+
+The unprivileged verification step scores a Deployment manifest that deliberately has a
+floating `:latest` image tag, no resource limits, and no security context, and checks the
+output flags the image tag issue. kube-score exits non-zero whenever it finds `CRITICAL`
+issues, which this manifest is written to trigger — that non-zero exit is the expected,
+successful outcome of the check, not a failure of the playbook run.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/kube-score.yml -e host=ws01 -e kube_score_version=1.20.0
+```

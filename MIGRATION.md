@@ -3,7 +3,7 @@
 Policy and procedure for migrating the developer tool installation playbooks from
 `tool/` to `_multi-user/tools/`.
 
-**Status: in progress.** 7 of 12 playbooks migrated. See [Migration status](#migration-status).
+**Status: in progress.** 9 of 12 playbooks migrated. See [Migration status](#migration-status).
 
 ## Background
 
@@ -238,14 +238,13 @@ For each playbook:
 | `hadolint.yml` | brew | release binary | 2.15.1 | Verified (workstations) |
 | `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
 | `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; yq via mikefarah/yq release binary (apt `yq` is the unrelated Python wrapper); llhttp dropped (apt eza needs no manual libllhttp symlink) | see README | Verified (workstations) |
-| `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | — | Pending |
+| `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | 31.1.4 | Verified (ws01, ws02) |
 | `vault.yml` | apt + `~/.bashrc` | apt + `/etc/profile.d/vault.sh` | — | Pending |
 | `markdownlint.yml` | `npm install -g` | unchanged; harden node resolution to `/usr/bin/node` | — | Pending |
-| `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | — | Pending |
+| `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | 1.20.0 | Verified (ws01, ws02) |
 | `vscode.yml` | vendor apt repo | unchanged | — | Pending |
 
-Suggested order for the remainder: `junit2html`,
-`vault`, and finally the three that need only hardening.
+Suggested order for the remainder: `vault`, and finally the two that need only hardening.
 
 ## Known follow-ups
 
@@ -303,6 +302,26 @@ bespoke multi-algorithm rhash table (`checksums_hashes_order` / `extract-checksu
 than the usual `hash  filename` format the other release-binary playbooks parse; the playbook
 uses GitHub's own computed per-asset SHA-256 `digest` (from the releases API) instead, which
 is simpler and equally authoritative.
+
+`junit2html.yml` needed a version-source change discovered only when checking upstream
+directly, not just its GitHub tags: `inorton/junit2html` moved off GitHub to
+`gitlab.com/inorton/junit2html` after tag `v31.0.2`, so later PyPI releases (`31.1.4` and
+newer) have no corresponding GitHub tag at all. The pin is taken from PyPI's release
+history instead, and no separate checksum step was added — `pip`/`pipx` already verify the
+downloaded package against the hash PyPI publishes in its index as part of every install,
+so a manual checksum task would be redundant. Also, junit2html has no `--version` flag;
+both the idempotency check and the post-install verification instead parse
+`pipx list --short`, which prints `junit2html <version>` once installed.
+
+`kube-score.yml` needed no version bump — the source playbook's pin (`1.20.0`) is still
+upstream's latest tag — so this migration was pure hardening: checksum verification from
+the release's `checksums.txt`, architecture from `ansible_architecture` instead of an
+assumed `amd64`, and comparing the installed version instead of the old `stat.exists`
+guard. Its unprivileged verification step scores a Deployment manifest deliberately
+written with a floating `:latest` image tag, no resource limits, and no security context;
+kube-score exits non-zero when it finds `CRITICAL` issues, which is the expected outcome
+of that check, not a run failure, so the task's `failed_when` looks for the specific
+issue text in the output rather than a zero exit code.
 
 Also found while migrating `modern-cli-tools.yml`, but predating it: `bats.yml` and
 `grype-syft.yml`'s installation-summary tasks built a per-item newline with a bare `\n`
