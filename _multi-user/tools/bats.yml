@@ -144,6 +144,7 @@
         cmd: >-
           setpriv --reuid={{ bats_verify_uid }} --regid={{ bats_verify_gid }} --clear-groups
           {{ bats_prefix }}/bin/bats /tmp/bats-multiuser-smoke.bats
+        chdir: /tmp
       environment:
         HOME: /tmp
         TMPDIR: /tmp

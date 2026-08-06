@@ -100,6 +100,7 @@
         cmd: >-
           setpriv --reuid={{ gomplate_verify_uid }} --regid={{ gomplate_verify_gid }} --clear-groups
           {{ gomplate_bin }} -i '{% raw %}{{ "gomplate-ok" }}{% endraw %}'
+        chdir: /tmp
       environment:
         HOME: /tmp
         TMPDIR: /tmp
