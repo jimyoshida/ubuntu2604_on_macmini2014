@@ -1,39 +1,104 @@
-- name: Setup NanoClaw Agent
-  hosts: localhost
-  connection: local
+---
+# Prepares each named account for NanoClaw on a remote host.
+#
+#   build-essential, python3, curl, git   apt, shared
+#   ~/nanoclaw                            the clone, one per provisioned account
+#   /var/lib/systemd/linger/<user>        so the agent service survives logout
+#
+# This playbook stops short of installing NanoClaw. The upstream installer is
+# interactive -- it registers an Anthropic API key and pairs a messaging channel --
+# so it cannot run unattended, and it must run as the account that will own the
+# agent. Converting to the push model does not change that: the playbook still does
+# the prerequisite half, and each account finishes onboarding over its own SSH
+# session. See task 6 for the commands.
+#
+# Usage:
+#   cd _personal
+#   ansible-playbook ai-agent/nanoclaw.yml -e host=ws01 -e target_users=alice
+
+- name: Prepare named accounts for NanoClaw
+  hosts: "{{ host }}"
+  remote_user: ubuntu
+  become: false
+  gather_facts: true
+
   vars:
-    current_user: "{{ lookup('env', 'USER') }}"
-    nanoclaw_dir: "/home/{{ current_user }}/nanoclaw"
+    # Accounts to provision. Accepts "alice,bob" or a YAML/JSON list.
+    target_users: []
+    nanoclaw_repo: https://github.com/nanocoai/nanoclaw.git
+    nanoclaw_version: main
+
+  pre_tasks:
+    - name: 0. Normalise target_users into a list
+      ansible.builtin.set_fact:
+        nanoclaw_users: >-
+          {{ (target_users.split(',') if target_users is string else target_users)
+             | map('trim') | select | list }}
+
+    - name: 0a. Require at least one target user
+      ansible.builtin.assert:
+        that: nanoclaw_users | length > 0
+        fail_msg: >-
+          No target_users given. Name the accounts to provision explicitly, e.g.
+          -e target_users=alice or -e target_users=alice,bob.
+
+    - name: 0b. Read the target host's passwd database
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: 0c. Require every target user to exist on the host
+      ansible.builtin.assert:
+        that: item in ansible_facts.getent_passwd
+        fail_msg: "No account '{{ item }}' on {{ inventory_hostname }}."
+      loop: "{{ nanoclaw_users }}"
+
+    # Stated out loud because the list can be silently truncated upstream of the
+    # playbook: `ansible-playbook -e target_users="alice, bob"` splits on whitespace
+    # and binds only "alice,", and a stray trailing comma drops an account the same
+    # way. Read this line before letting the run continue.
+    - name: 0d. Show the accounts this run will provision
+      ansible.builtin.debug:
+        msg: >-
+          Provisioning {{ nanoclaw_users | length }} account(s) on {{ inventory_hostname }}:
+          {{ nanoclaw_users | join(', ') }}
 
   tasks:
     - name: 1. Check Docker is installed
-      command: docker --version
+      ansible.builtin.command: docker --version
       register: docker_check
       changed_when: false
-      ignore_errors: true
+      failed_when: false
 
     - name: 1a. Fail if Docker is not installed
-      fail:
+      ansible.builtin.fail:
         msg: >-
-          Docker is not installed.
+          Docker is not installed on {{ inventory_hostname }}.
           Run: ansible-playbook container/docker.yml
       when: docker_check.rc != 0
 
-    - name: 1b. Check current user is in the docker group
-      command: id -nG {{ current_user }}
+    # Checked per account, not for the connecting user: container/docker.yml adds only
+    # whoever ran it to the docker group, so membership is exactly the kind of thing
+    # that differs between the account Ansible logs in as and the ones being set up.
+    - name: 1b. Read the group membership of each target account
+      ansible.builtin.command: "id -nG {{ item }}"
       register: user_groups
       changed_when: false
+      loop: "{{ nanoclaw_users }}"
 
-    - name: 1c. Fail if user is not in the docker group
-      fail:
+    - name: 1c. Fail if any target account is not in the docker group
+      ansible.builtin.fail:
         msg: >-
-          User '{{ current_user }}' is not in the docker group.
-          Run: ansible-playbook container/docker.yml
-          Then log out and back in (or run: newgrp docker).
-      when: "'docker' not in user_groups.stdout.split()"
+          Account '{{ item.item }}' on {{ inventory_hostname }} is not in the docker
+          group, so it cannot build or run the agent container.
+          Add it with: usermod -aG docker {{ item.item }}
+      when: "'docker' not in item.stdout.split()"
+      loop: "{{ user_groups.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: 2. Install system prerequisites
-      apt:
+      become: true
+      ansible.builtin.apt:
         name:
           - build-essential
           - python3
@@ -41,62 +106,53 @@
           - git
         state: present
         update_cache: true
-      become: true
 
-    - name: 3. Clone NanoClaw repository
-      git:
-        repo: "https://github.com/nanocoai/nanoclaw.git"
-        dest: "{{ nanoclaw_dir }}"
-        version: main
+    - name: 3. Clone the NanoClaw repository for each account
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.git:
+        repo: "{{ nanoclaw_repo }}"
+        dest: "{{ ansible_facts.getent_passwd[item][4] }}/nanoclaw"
+        version: "{{ nanoclaw_version }}"
         update: true
+      loop: "{{ nanoclaw_users }}"
 
-    - name: 4. Enable systemd lingering for current user
-      command: loginctl enable-linger {{ current_user }}
+    - name: 4. Enable lingering so the agent service survives logout
       become: true
-      changed_when: true
+      ansible.builtin.command: "loginctl enable-linger {{ item }}"
+      args:
+        creates: "/var/lib/systemd/linger/{{ item }}"
+      loop: "{{ nanoclaw_users }}"
 
-    - name: 5. Print instructions
-      block:
-        - name: 5a. Print NanoClaw setup summary
-          debug:
-            msg:
-              - "NanoClaw prerequisites installed."
-              - ""
-              - "User: {{ current_user }}"
-              - "Repository: {{ nanoclaw_dir }}"
+    - name: 5. Verify the clone is readable by the account that owns it
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.command: "git -C {{ ansible_facts.getent_passwd[item][4] }}/nanoclaw rev-parse --abbrev-ref HEAD"
+      register: nanoclaw_branch
+      changed_when: false
+      loop: "{{ nanoclaw_users }}"
 
-        - name: 5b. Print onboarding instructions
-          debug:
-            msg:
-              - ""
-              - "Next steps (interactive onboarding required):"
-              - "  1. Open a new shell and run:"
-              - "     cd {{ nanoclaw_dir }}"
-              - "     bash nanoclaw.sh"
-              - ""
-              - "  The installer will:"
-              - "    - Install Node 22"
-              - "    - Install pnpm 10 via corepack"
-              - "    - Build the agent container image"
-              - "    - Register your Anthropic API key with OneCLI vault"
-              - "    - Set up your messaging channel (Slack, WhatsApp, Telegram, etc.)"
-              - "    - Install the nanoclaw-v2-<slug> systemd user service"
-              - ""
-              - "After onboarding, manage the service (replace <slug> with your agent slug):"
-              - "  To start:   systemctl --user start nanoclaw-v2-<slug>"
-              - "  To status:  systemctl --user status nanoclaw-v2-<slug>"
-              - "  To logs:    journalctl --user -u nanoclaw-v2-<slug> -f"
-              - "  To stop:    systemctl --user stop nanoclaw-v2-<slug>"
-
-        - name: 5c. Print troubleshooting and update tips
-          debug:
-            msg:
-              - ""
-              - "Troubleshooting:"
-              - "  sqlite3 build failure:  cd {{ nanoclaw_dir }} && pnpm rebuild better-sqlite3"
-              - "  Container build issue:  cd {{ nanoclaw_dir }} && docker builder prune -f && ./container/build.sh"
-              - "  Installer log:          {{ nanoclaw_dir }}/logs/setup.log"
-              - "  Service error log:      {{ nanoclaw_dir }}/logs/nanoclaw.error.log"
-              - ""
-              - "Updating: cd {{ nanoclaw_dir }} && git pull && bash nanoclaw.sh"
-              - "Documentation: https://docs.nanoclaw.dev/"
+    - name: 6. Print onboarding instructions
+      ansible.builtin.debug:
+        msg:
+          - "NanoClaw prerequisites installed on {{ inventory_hostname }} for:"
+          - "  {{ nanoclaw_users | join(', ') }} (branch {{ nanoclaw_branch.results[0].stdout }})"
+          - ""
+          - "Onboarding is interactive and must be run by each account itself, over SSH:"
+          - "  ssh <account>@{{ inventory_hostname }}"
+          - "  cd ~/nanoclaw && bash nanoclaw.sh"
+          - ""
+          - "The installer registers an Anthropic API key and pairs a messaging channel,"
+          - "which is why it is not run from here: those are that account's credentials."
+          - ""
+          - "It then installs a nanoclaw-v2-<slug> systemd user service, managed as:"
+          - "  systemctl --user status nanoclaw-v2-<slug>"
+          - "  journalctl --user -u nanoclaw-v2-<slug> -f"
+          - ""
+          - "Troubleshooting:"
+          - "  sqlite3 build failure:  cd ~/nanoclaw && pnpm rebuild better-sqlite3"
+          - "  Container build issue:  cd ~/nanoclaw && docker builder prune -f && ./container/build.sh"
+          - "  Installer log:          ~/nanoclaw/logs/setup.log"
+          - ""
+          - "Updating: cd ~/nanoclaw && git pull && bash nanoclaw.sh"
+          - "Documentation: https://docs.nanoclaw.dev/"

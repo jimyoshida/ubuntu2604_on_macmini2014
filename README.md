@@ -47,9 +47,18 @@ per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every a
 
 The opposite staging tree: playbooks that are per-identity **by nature** and are not candidates
 for migration, because what they install is an identity rather than a tool — an agent's
-credentials, a user systemd service, a checkout in `$HOME`. Run on the machine being
-provisioned, like the old tree. The leading underscore means staging, same convention as
-`_multi-user/`.
+credentials, a user systemd service, a checkout in `$HOME`. The leading underscore means
+staging, same convention as `_multi-user/`.
+
+Same push model as `_multi-user/`, but with a second required var. `host` names the machine;
+`target_users` names the accounts on it to provision. The account Ansible connects as is
+neither of those — defaulting the work to it would reproduce the `$USER` bug this tree exists
+to avoid, so the accounts are always named explicitly:
+
+```bash
+cd _personal
+ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice,bob
+```
 
 | Directory | Description |
 |-----------|-------------|
@@ -68,9 +77,11 @@ that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy point
 | [Mixed](#mixed--shared-install-personal-tail-14) | 14 | Shared install plus a tail that benefits only the invoker |
 | [Personal only](#personal-only-13) | 13 | The whole install lands in one `$HOME` or one account |
 
-Everything outside `_multi-user/` is `hosts: localhost` with `connection: local`, so even the
-"effectively shared" playbooks are personal in *execution model* — run on the box, by one
-person. They are shared only in *outcome*.
+The 36 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+the "effectively shared" ones among them are personal in *execution model* — run on the box, by
+one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
+for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
+because it belongs to accounts named explicitly rather than to whoever is logged in.
 
 ### Multi-user (12)
 

@@ -1,73 +1,152 @@
 ---
-- name: Install Claude Code CLI
-  hosts: localhost
-  connection: local
-  gather_facts: no
+# Installs the Claude Code CLI into each named account's own $HOME on a remote host.
+#
+#   ~/.local/bin/claude          the CLI, written by the official installer
+#   ~/.bashrc, ~/.profile        PATH entry for the above
+#
+# Nothing is shared and nothing is root-owned: this is the inverse of _multi-user/.
+# The accounts to provision are named explicitly in target_users. The connecting
+# account (remote_user) is only how Ansible logs in and is never itself provisioned
+# unless it appears in that list -- reading $USER or writing to ~ would silently
+# provision whoever happened to run the playbook, which is the bug this tree avoids.
+#
+# Usage:
+#   cd _personal
+#   ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice
+#   ansible-playbook ai-agent/claude-code.yml -e host=workstations -e target_users=alice,bob
+
+- name: Install Claude Code CLI for named accounts
+  hosts: "{{ host }}"
+  remote_user: ubuntu
+  become: false
+  gather_facts: true
+
   vars:
-    claude_user: "{{ lookup('env', 'USER') }}"
-    user_home: "{{ lookup('env', 'HOME') }}"
+    # Accounts to provision. Accepts "alice,bob" or a YAML/JSON list.
+    target_users: []
+    # Proxy for the installer download. A play var rather than lookup('env', ...):
+    # in a push model an env lookup reads the control node's environment, not the
+    # target's, so it would silently carry the operator's shell onto the host.
+    https_proxy_url: ''
+
+  pre_tasks:
+    - name: 0. Normalise target_users into a list
+      ansible.builtin.set_fact:
+        claude_users: >-
+          {{ (target_users.split(',') if target_users is string else target_users)
+             | map('trim') | select | list }}
+
+    - name: 0a. Require at least one target user
+      ansible.builtin.assert:
+        that: claude_users | length > 0
+        fail_msg: >-
+          No target_users given. Name the accounts to provision explicitly, e.g.
+          -e target_users=alice or -e target_users=alice,bob.
+
+    # $HOME comes from the target's passwd database, never from /home/<user>: the two
+    # differ often enough (service accounts, /var/lib homes) that assuming would write
+    # to a directory the account does not own.
+    - name: 0b. Read the target host's passwd database
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: 0c. Require every target user to exist on the host
+      ansible.builtin.assert:
+        that: item in ansible_facts.getent_passwd
+        fail_msg: "No account '{{ item }}' on {{ inventory_hostname }}."
+      loop: "{{ claude_users }}"
+
+    # Stated out loud because the list can be silently truncated upstream of the
+    # playbook: `ansible-playbook -e target_users="alice, bob"` splits on whitespace
+    # and binds only "alice,", and a stray trailing comma drops an account the same
+    # way. Read this line before letting the run continue.
+    - name: 0d. Show the accounts this run will provision
+      ansible.builtin.debug:
+        msg: >-
+          Provisioning {{ claude_users | length }} account(s) on {{ inventory_hostname }}:
+          {{ claude_users | join(', ') }}
 
   tasks:
     - name: 1. Install prerequisites
-      become: yes
-      apt:
+      become: true
+      ansible.builtin.apt:
         name:
           - curl
           - ca-certificates
         state: present
-        update_cache: yes
+        update_cache: true
 
-    - name: 2. Check if Claude Code is already installed
-      command: which claude
-      register: claude_check
-      changed_when: false
-      failed_when: false
+    - name: 2. Check whether Claude Code is already installed for each account
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.stat:
+        path: "{{ ansible_facts.getent_passwd[item][4] }}/.local/bin/claude"
+      register: claude_installed
+      loop: "{{ claude_users }}"
 
-    - name: 3. Download and install Claude Code using official script
-      shell: |
-        curl -fsSL https://claude.ai/install.sh | bash
+    - name: 3. Install Claude Code with the official script, as each account
+      become: true
+      become_user: "{{ item.item }}"
+      ansible.builtin.shell: curl -fsSL https://claude.ai/install.sh | bash
       args:
         executable: /bin/bash
-      when: claude_check.rc != 0
       environment:
-        HTTPS_PROXY: "{{ lookup('env', 'HTTPS_PROXY') | default('') }}"
+        HOME: "{{ ansible_facts.getent_passwd[item.item][4] }}"
+        HTTPS_PROXY: "{{ https_proxy_url }}"
+      loop: "{{ claude_installed.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stat.exists
 
-    - name: 4. Ensure ~/.local/bin is in PATH (bashrc)
-      lineinfile:
-        path: "{{ user_home }}/.bashrc"
+    - name: 4. Ensure ~/.local/bin is on PATH (bashrc)
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_facts.getent_passwd[item][4] }}/.bashrc"
         line: 'export PATH="$HOME/.local/bin:$PATH"'
         regexp: '^export PATH="\$HOME/\.local/bin:\$PATH"'
         state: present
-        create: yes
+        create: true
+        mode: '0644'
+      loop: "{{ claude_users }}"
 
-    - name: 5. Ensure ~/.local/bin is in PATH (profile)
-      lineinfile:
-        path: "{{ user_home }}/.profile"
+    - name: 5. Ensure ~/.local/bin is on PATH (profile)
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_facts.getent_passwd[item][4] }}/.profile"
         line: 'export PATH="$HOME/.local/bin:$PATH"'
         regexp: '^export PATH="\$HOME/\.local/bin:\$PATH"'
         state: present
-        create: yes
+        create: true
+        mode: '0644'
+      loop: "{{ claude_users }}"
 
-    - name: 6. Verify Claude Code installation
-      command: "{{ user_home }}/.local/bin/claude --version"
+    # The regression guard, and the mirror image of the _multi-user/ policy: those
+    # playbooks verify as an arbitrary uid to prove the install is not tied to one
+    # account, so these verify as the provisioned account to prove that it is.
+    # Unlike the source playbook this is allowed to fail the run.
+    - name: 6. Verify Claude Code runs as each provisioned account
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.command: "{{ ansible_facts.getent_passwd[item][4] }}/.local/bin/claude --version"
       register: claude_version
       changed_when: false
-      failed_when: false
+      loop: "{{ claude_users }}"
 
-    - name: 7. Display Claude Code version
-      debug:
-        msg: "Claude Code installed: {{ claude_version.stdout }}"
-      when: claude_version.rc == 0
+    - name: 7. Display the installed version per account
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ item.stdout }}"
+      loop: "{{ claude_version.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
-    - name: 8. Configure OpenTelemetry for Claude Code
-      lineinfile:
-        path: "{{ user_home }}/.bashrc"
-        line: "{{ item.line }}"
-        regexp: "{{ item.regexp }}"
-        state: present
-      loop:
-        - { line: 'export CLAUDE_CODE_ENABLE_TELEMETRY=1',             regexp: '^export CLAUDE_CODE_ENABLE_TELEMETRY=' }
-        - { line: 'export OTEL_METRICS_EXPORTER=otlp',                 regexp: '^export OTEL_METRICS_EXPORTER=' }
-        - { line: 'export OTEL_LOGS_EXPORTER=otlp',                    regexp: '^export OTEL_LOGS_EXPORTER=' }
-        - { line: 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf',  regexp: '^export OTEL_EXPORTER_OTLP_PROTOCOL=' }
-        - { line: 'export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318', regexp: '^export OTEL_EXPORTER_OTLP_ENDPOINT=' }
+    - name: 8. Print post-install instructions
+      ansible.builtin.debug:
+        msg:
+          - "Claude Code installed for: {{ claude_users | join(', ') }}"
+          - ""
+          - "Each account authenticates itself, on the target host:"
+          - "  claude auth login"
+          - ""
+          - "Credentials stay in that account's $HOME and are not managed here."

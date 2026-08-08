@@ -1,94 +1,209 @@
-- name: Install and configure vertex-ai-proxy as a user systemd service
-  hosts: localhost
-  connection: local
-  gather_facts: no
+---
+# Runs vertex-ai-proxy as a per-account systemd *user* service on a remote host.
+#
+#   /usr/lib/node_modules/vertex-ai-proxy   the package itself, installed once as root
+#   ~/.config/systemd/user/….service        one unit per provisioned account
+#   /var/lib/systemd/linger/<user>          so the unit survives logout
+#
+# This playbook is deliberately split down the middle: the npm package is shared and
+# root-owned, while the service that runs it is per-identity, because each account
+# needs its own port-8001 proxy and its own gcloud ADC credentials. Only the second
+# half loops over target_users.
+#
+# Usage:
+#   cd _personal
+#   ansible-playbook ai-agent/vertex-ai-proxy.yml -e host=ws01 -e target_users=alice \
+#     -e google_cloud_location=asia-northeast1
+
+- name: Run vertex-ai-proxy as a per-account user service
+  hosts: "{{ host }}"
+  remote_user: ubuntu
+  become: false
+  gather_facts: true
+
   vars:
-    current_user: "{{ lookup('env', 'USER') }}"
-    user_home: "{{ lookup('env', 'HOME') }}"
-    systemd_user_dir: "{{ lookup('env', 'HOME') }}/.config/systemd/user"
+    # Accounts to provision. Accepts "alice,bob" or a YAML/JSON list.
+    target_users: []
+    # Non-secret endpoint config (MIGRATION2 A1), and it has to be a play var for a
+    # second reason: a systemd user unit does not read the account's shell profile, so
+    # the ${GOOGLE_CLOUD_LOCATION} the source playbook interpolated into ExecStart
+    # expanded to an empty string at service start no matter what env-tmpl.sh set.
+    # It is written into the unit as an explicit Environment= line below.
+    google_cloud_location: ''
+    proxy_port: 8001
+    proxy_region: us-east5
+
+  pre_tasks:
+    - name: 0. Normalise target_users into a list
+      ansible.builtin.set_fact:
+        proxy_users: >-
+          {{ (target_users.split(',') if target_users is string else target_users)
+             | map('trim') | select | list }}
+
+    - name: 0a. Require at least one target user
+      ansible.builtin.assert:
+        that: proxy_users | length > 0
+        fail_msg: >-
+          No target_users given. Name the accounts to provision explicitly, e.g.
+          -e target_users=alice or -e target_users=alice,bob.
+
+    - name: 0b. Require a Google Cloud location
+      ansible.builtin.assert:
+        that: google_cloud_location | length > 0
+        fail_msg: >-
+          google_cloud_location is unset, which would start the proxy with an empty
+          --google-region. Pass it explicitly, e.g. -e google_cloud_location=asia-northeast1.
+
+    - name: 0c. Read the target host's passwd database
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: 0d. Require every target user to exist on the host
+      ansible.builtin.assert:
+        that: item in ansible_facts.getent_passwd
+        fail_msg: "No account '{{ item }}' on {{ inventory_hostname }}."
+      loop: "{{ proxy_users }}"
+
+    # Stated out loud because the list can be silently truncated upstream of the
+    # playbook: `ansible-playbook -e target_users="alice, bob"` splits on whitespace
+    # and binds only "alice,", and a stray trailing comma drops an account the same
+    # way. Read this line before letting the run continue.
+    - name: 0e. Show the accounts this run will provision
+      ansible.builtin.debug:
+        msg: >-
+          Provisioning {{ proxy_users | length }} account(s) on {{ inventory_hostname }}:
+          {{ proxy_users | join(', ') }}
 
   tasks:
     - name: 1. Check system-wide Node.js is installed via apt
-      command: dpkg -s nodejs
+      ansible.builtin.command: dpkg -s nodejs
       register: nodejs_dpkg
       changed_when: false
-      ignore_errors: true
+      failed_when: false
 
     - name: 1a. Fail if Node.js is not installed as a system package
-      fail:
+      ansible.builtin.fail:
         msg: >-
-          System-wide Node.js is not installed.
-          Run: sudo apt install nodejs npm
+          System-wide Node.js is not installed on {{ inventory_hostname }}.
+          Run: ansible-playbook core/nodejs.yml
       when: nodejs_dpkg.rc != 0
 
-    - name: 1b. Resolve node binary path
-      command: which node
+    - name: 1b. Resolve the node binary path
+      ansible.builtin.command: which node
       register: node_path
       changed_when: false
 
     - name: 1c. Fail if node in PATH is managed by a version manager
-      fail:
+      ansible.builtin.fail:
         msg: >-
-          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by a version manager.
-          Ensure /usr/bin/node takes precedence, or unset version manager shims for this session.
+          Node.js in PATH is '{{ node_path.stdout }}', which appears to be managed by a
+          version manager. A user-manager service cannot rely on a per-account shim;
+          ensure /usr/bin/node takes precedence.
       when: "'/usr/' not in node_path.stdout"
 
     - name: 2. Install vertex-ai-proxy globally via npm
-      command: npm install -g vertex-ai-proxy@latest
       become: true
+      ansible.builtin.command: npm install -g vertex-ai-proxy@latest
+      register: npm_install
+      changed_when: "'up to date' not in npm_install.stdout"
 
-    - name: 3. Resolve vertex-ai-proxy binary path
-      command: which vertex-ai-proxy
+    - name: 3. Resolve the vertex-ai-proxy binary path
+      ansible.builtin.command: which vertex-ai-proxy
       register: proxy_bin
       changed_when: false
 
-    - name: 4. Create systemd user directory
-      file:
-        path: "{{ systemd_user_dir }}"
+    - name: 4. Create the systemd user unit directory for each account
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.file:
+        path: "{{ ansible_facts.getent_passwd[item][4] }}/.config/systemd/user"
         state: directory
         mode: '0755'
+      loop: "{{ proxy_users }}"
 
-    - name: 5. Install systemd user service unit
-      copy:
-        dest: "{{ systemd_user_dir }}/vertex-ai-proxy.service"
+    - name: 5. Install the systemd user unit for each account
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.copy:
+        dest: "{{ ansible_facts.getent_passwd[item][4] }}/.config/systemd/user/vertex-ai-proxy.service"
         mode: '0644'
         content: |
           [Unit]
-          Description=Vertex AI Proxy
+          Description=Vertex AI Proxy ({{ item }})
           After=network.target
 
           [Service]
           Type=forking
-          ExecStart={{ proxy_bin.stdout }} start --port 8001 --region us-east5 --google-region ${GOOGLE_CLOUD_LOCATION}
+          Environment=GOOGLE_CLOUD_LOCATION={{ google_cloud_location }}
+          ExecStart={{ proxy_bin.stdout }} start --port {{ proxy_port }} --region {{ proxy_region }} --google-region {{ google_cloud_location }}
           Restart=on-failure
           RestartSec=5
 
           [Install]
           WantedBy=default.target
+      loop: "{{ proxy_users }}"
+      register: proxy_unit
 
-    - name: 6. Enable systemd lingering so the service starts at boot
-      command: loginctl enable-linger {{ current_user }}
+    # Lingering has to come before any systemctl --user call, not after it: without a
+    # login session there is no user manager and no /run/user/<uid> for the next task
+    # to talk to. The linger marker file makes this idempotent.
+    - name: 6. Enable lingering so the user manager runs without a login session
       become: true
-      changed_when: true
+      ansible.builtin.command: "loginctl enable-linger {{ item }}"
+      args:
+        creates: "/var/lib/systemd/linger/{{ item }}"
+      loop: "{{ proxy_users }}"
 
-    - name: 7. Reload systemd user daemon
-      command: systemctl --user daemon-reload
+    - name: 7. Wait for each account's runtime directory to appear
+      become: true
+      ansible.builtin.wait_for:
+        path: "/run/user/{{ ansible_facts.getent_passwd[item][1] }}"
+        timeout: 30
+      loop: "{{ proxy_users }}"
+
+    # systemd_service with scope: user replaces three `systemctl --user` shell-outs.
+    # Both env vars are required: sudo to another account gets no login session, so
+    # XDG_RUNTIME_DIR alone leaves the client with no bus to connect to.
+    # Looping over the previous task's results rather than over proxy_users keeps the
+    # restart per-account: rewriting alice's unit must not bounce bob's proxy.
+    - name: 8. Enable and start the service in each account's user manager
+      become: true
+      become_user: "{{ item.item }}"
+      ansible.builtin.systemd_service:
+        name: vertex-ai-proxy
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if item.changed else 'started' }}"
       environment:
-        XDG_RUNTIME_DIR: "/run/user/{{ lookup('pipe', 'id -u') }}"
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.item][1] }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[item.item][1] }}/bus"
+      loop: "{{ proxy_unit.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
-    - name: 8. Enable and start vertex-ai-proxy service
-      command: systemctl --user enable --now vertex-ai-proxy
+    - name: 9. Verify the service is running for each account
+      become: true
+      become_user: "{{ item }}"
+      ansible.builtin.systemd_service:
+        name: vertex-ai-proxy
+        scope: user
       environment:
-        XDG_RUNTIME_DIR: "/run/user/{{ lookup('pipe', 'id -u') }}"
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item][1] }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[item][1] }}/bus"
+      register: proxy_state
+      failed_when: proxy_state.status.ActiveState != 'active'
+      loop: "{{ proxy_users }}"
 
-    - name: 9. Show service status
-      command: systemctl --user status vertex-ai-proxy
-      register: svc_status
-      changed_when: false
-      failed_when: false
-      environment:
-        XDG_RUNTIME_DIR: "/run/user/{{ lookup('pipe', 'id -u') }}"
-
-    - name: 10. Display status
-      debug:
-        msg: "{{ svc_status.stdout_lines }}"
+    - name: 10. Print post-install instructions
+      ansible.builtin.debug:
+        msg:
+          - "vertex-ai-proxy running on port {{ proxy_port }} for: {{ proxy_users | join(', ') }}"
+          - ""
+          - "Each account still supplies its own credentials, on the target host:"
+          - "  vertex-ai-proxy config                     # project, credentials"
+          - "  gcloud auth application-default login      # ADC"
+          - ""
+          - "Manage the service as that account:"
+          - "  systemctl --user status vertex-ai-proxy"
+          - "  journalctl --user -u vertex-ai-proxy -f"

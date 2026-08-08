@@ -5,19 +5,23 @@
 NanoClaw agent setup (Docker-based, lightweight OpenClaw alternative)
 
 ```bash
-ansible-playbook _personal/ai-agent/nanoclaw.yml
+cd _personal
+ansible-playbook ai-agent/nanoclaw.yml -e host=ws01 -e target_users=alice
 ```
 
 **Prerequisites:**
-- Docker installed and current user in the `docker` group:
+- Docker installed on the target host
+- **Every account in `target_users`** in the `docker` group — checked per account, not for the
+  connecting user, since `container/docker.yml` adds only whoever ran it:
   ```bash
-  ansible-playbook container/docker.yml
+  usermod -aG docker <account>
   ```
-  The playbook will fail with a clear message if Docker is missing or the user is not in the `docker` group.
+  The playbook fails with a clear message naming the account if Docker is missing or any target
+  account is not in the group.
 
 This playbook:
 - Installs `build-essential`, `python3`, `curl`, `git` via apt
-- Clones `https://github.com/nanocoai/nanoclaw.git` to `~/nanoclaw`
+- Clones `https://github.com/nanocoai/nanoclaw.git` to each account's `~/nanoclaw`, as that account
 - Enables systemd lingering
 - **Does NOT run the interactive installer** — manual steps required (see below)
 
@@ -88,7 +92,9 @@ cat report.txt | claw --pipe "Summarize this"
 Install vertex-ai-proxy and run it as a user-level systemd service
 
 ```bash
-ansible-playbook _personal/ai-agent/vertex-ai-proxy.yml
+cd _personal
+ansible-playbook ai-agent/vertex-ai-proxy.yml -e host=ws01 -e target_users=alice \
+  -e google_cloud_location=asia-northeast1
 ```
 
 **Prerequisites:**
@@ -96,27 +102,34 @@ ansible-playbook _personal/ai-agent/vertex-ai-proxy.yml
   - version manager-managed Node.js will cause the playbook to fail
 
 This playbook:
-- Installs `vertex-ai-proxy` globally via npm
-- Creates `~/.config/systemd/user/vertex-ai-proxy.service`
+- Installs `vertex-ai-proxy` globally via npm, once, as root — the package is shared
+- Creates `~/.config/systemd/user/vertex-ai-proxy.service` for each account in `target_users`
 - Enables systemd lingering so the service survives logout
-- Enables and starts the service immediately
+- Enables and starts the service immediately, and fails the run if it does not come up active
 
-The service listens on **port 8001** and passes `$GOOGLE_CLOUD_LOCATION` (set in `cloud-cli/env-tmpl.sh`) as the Gemini region.
+The service listens on **port 8001** and takes its Gemini region from the required
+`google_cloud_location` var, written into the unit as an `Environment=` line.
 
-**Required setup before starting the service:**
-
-Ensure `GOOGLE_CLOUD_LOCATION` is exported in your environment (via `cloud-cli/env-tmpl.sh`), then run `vertex-ai-proxy config` once to configure the proxy (Google Cloud project, credentials, etc.):
+This is deliberately *not* read from `env-tmpl.sh` or any other shell profile. A systemd user
+unit does not source the account's shell, so the `${GOOGLE_CLOUD_LOCATION}` the pre-migration
+playbook interpolated into `ExecStart` expanded to an empty string at service start regardless
+of what was exported. Pass it on the command line instead:
 
 ```bash
-vertex-ai-proxy config
+-e google_cloud_location=asia-northeast1
 ```
 
-Also ensure gcloud ADC credentials are valid:
+**Required setup before the proxy is usable:**
+
+Installation needs no credentials, but each account supplies its own before the proxy can serve
+it. On the target host, as that account:
+
 ```bash
+vertex-ai-proxy config              # Google Cloud project, credentials
 gcloud auth application-default login
 ```
 
-**Managing the service:**
+**Managing the service** (as the account that owns it):
 ```bash
 systemctl --user status vertex-ai-proxy   # Check status
 systemctl --user restart vertex-ai-proxy  # Restart
@@ -129,23 +142,27 @@ systemctl --user stop vertex-ai-proxy     # Stop
 Install Claude Code CLI
 
 ```bash
-ansible-playbook _personal/ai-agent/claude-code.yml
+cd _personal
+ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice
 ```
 
-Installs the Claude Code CLI tool using the official installation script. The playbook:
+Installs the Claude Code CLI tool using the official installation script, once per account in
+`target_users`. The playbook:
 - Installs prerequisites (curl, ca-certificates)
-- Downloads and runs the official Claude Code installer
-- Ensures `~/.local/bin` is added to PATH in `.bashrc`, `.profile`, and `/etc/environment`
-- Respects `HTTPS_PROXY` environment variable
-- Verifies installation and displays version
+- Runs the official installer **as each account**, so the CLI lands in that account's `~/.local/bin`
+- Ensures `~/.local/bin` is on PATH via that account's `.bashrc` and `.profile`
+- Verifies the CLI runs **as each provisioned account**, and fails the run if it does not
 
-**Optional environment variables (set in `env-tmpl.sh`):**
+**Optional vars** (pass with `-e`):
 
-- `CLAUDE_CODE_USE_VERTEX` — Use Vertex AI for Claude Code
-- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project ID for Vertex AI
-- `CLOUD_ML_REGION` — GCP region for Vertex AI
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `https_proxy_url` | `''` | Proxy for the installer download |
 
-After installation, authenticate with:
+Note this is a play var, not an environment variable read from the operator's shell: in a push
+model an env lookup evaluates on the control node, not on the target.
+
+After installation, each account authenticates itself on the target host:
 
 ```bash
 claude auth login
