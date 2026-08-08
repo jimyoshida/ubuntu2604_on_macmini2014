@@ -63,10 +63,14 @@
           {{ nanoclaw_users | join(', ') }}
 
   tasks:
+    # check_mode: false so the probe runs under --check too. Without it the task is
+    # skipped and registers rc: 0, which reads as "Docker present" and lets 1a pass on
+    # a host that has no Docker at all.
     - name: 1. Check Docker is installed
       ansible.builtin.command: docker --version
       register: docker_check
       changed_when: false
+      check_mode: false
       failed_when: false
 
     - name: 1a. Fail if Docker is not installed
@@ -79,10 +83,14 @@
     # Checked per account, not for the connecting user: container/docker.yml adds only
     # whoever ran it to the docker group, so membership is exactly the kind of thing
     # that differs between the account Ansible logs in as and the ones being set up.
+    # check_mode: false for the same reason as task 1, failing the other way: skipped
+    # under --check the task registers an empty stdout, so 1c sees no docker group and
+    # fails every account no matter its real membership.
     - name: 1b. Read the group membership of each target account
       ansible.builtin.command: "id -nG {{ item }}"
       register: user_groups
       changed_when: false
+      check_mode: false
       loop: "{{ nanoclaw_users }}"
 
     - name: 1c. Fail if any target account is not in the docker group
