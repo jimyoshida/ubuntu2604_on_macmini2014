@@ -28,11 +28,10 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 | [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
 | [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, Krew) |
 | [cloud-cli/](cloud-cli/README.md) | Cloud provider CLI tools (AWS, Azure, GCP, GitHub, GitLab) |
-| [ai-agent/](ai-agent/README.md) | AI agent tools (Claude Code, Antigravity CLI, Gemini CLI, NanoClaw) |
 | [gui-tools/](gui-tools/README.md) | GUI tools (VS Code) |
 | [services/](services/README.md) | Self-hosted services (Vault, n8n, Jellyfin, Samba, FreshRSS) |
 
-## Playbooks (new)
+## Playbooks (multi-user)
 
 Multi-user successors to the retired `tool/`: root-owned system paths and `/etc` drop-ins instead of
 per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every account on a
@@ -44,18 +43,30 @@ per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every a
 | [_multi-user/tools/](_multi-user/tools/README.md) | Developer tools (bats, gomplate, shellcheck, trivy, hadolint, grype-syft, modern-cli-tools, yq, junit2html, markdownlint, kube-score) |
 | [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws-cli; migration in progress, see [MIGRATION2.md](MIGRATION2.md)) |
 
+## Playbooks (personal)
+
+The opposite staging tree: playbooks that are per-identity **by nature** and are not candidates
+for migration, because what they install is an identity rather than a tool — an agent's
+credentials, a user systemd service, a checkout in `$HOME`. Run on the machine being
+provisioned, like the old tree. The leading underscore means staging, same convention as
+`_multi-user/`.
+
+| Directory | Description |
+|-----------|-------------|
+| [_personal/ai-agent/](_personal/ai-agent/README.md) | AI agent tools (Claude Code, NanoClaw, vertex-ai-proxy) |
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 53 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 51 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-12) | 12 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-13) | 13 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Effectively shared](#effectively-shared-12) | 12 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-14) | 14 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-14) | 14 | The whole install lands in one `$HOME` or one account |
+| [Personal only](#personal-only-13) | 13 | The whole install lands in one `$HOME` or one account |
 
 Everything outside `_multi-user/` is `hosts: localhost` with `connection: local`, so even the
 "effectively shared" playbooks are personal in *execution model* — run on the box, by one
@@ -69,7 +80,7 @@ All of `_multi-user/tools/` (11) and `_multi-user/cloud-cli/aws-cli.yml`. Each u
 `setpriv --reuid=65534` task that proves the tool works for an account that is not the
 connecting user.
 
-### Effectively shared (13)
+### Effectively shared (12)
 
 | Playbook | Why it is already safe |
 |----------|------------------------|
@@ -77,7 +88,7 @@ connecting user.
 | `cloud-cli/aws-cli.yml` | Installs to `/usr/local/bin/aws` — but its `creates:` guard makes `--update` unreachable, which is what `_multi-user/cloud-cli/aws-cli.yml` fixes |
 | `cloud-cli/gitlab-cli.yml` | Upstream `.deb` |
 | `core/nodejs.yml`, `core/disable-rsyslog.yml` | apt / systemd only |
-| `container/devcontainers.yml`, `ai-agent/gemini-cli.yml` | `npm install -g` as root |
+| `container/devcontainers.yml` | `npm install -g` as root |
 | `gui-tools/vscode.yml` | apt (`vscode_user` is declared but never used) |
 | `services/jellyfin.yml` | apt plus a system service |
 
@@ -96,15 +107,18 @@ connecting user.
 | `services/freshrss.yml` | Container and network | Data directory under `/home/{{ target_user }}` |
 | `services/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
-### Personal only (14)
+### Personal only (13)
+
+Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
+meant to end up. The rest are still mixed in with the shared trees.
 
 | Playbook | Cause |
 |----------|-------|
 | `cloud-cli/{gcx,influx,jira,vault}-cli.yml` | Homebrew as `lookup('env', 'USER')` |
 | `core/homebrew.yml` | The root of that cause — the tree is owned by one account |
-| `ai-agent/claude-code.yml`, `ai-agent/antigravity-cli.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
-| `ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
-| `ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
+| `_personal/ai-agent/claude-code.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
+| `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
+| `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
 | `container/krew.yml` | `~/.krew` prefix plus `~/.bashrc` PATH |
 | `core/rust.yml` | rustup into `~/.cargo` |
 | `core/ssh-key-setup.yml` | `become: no`, `~/.ssh` |

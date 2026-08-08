@@ -5,7 +5,7 @@
 NanoClaw agent setup (Docker-based, lightweight OpenClaw alternative)
 
 ```bash
-ansible-playbook ai-agent/nanoclaw.yml
+ansible-playbook _personal/ai-agent/nanoclaw.yml
 ```
 
 **Prerequisites:**
@@ -88,7 +88,7 @@ cat report.txt | claw --pipe "Summarize this"
 Install vertex-ai-proxy and run it as a user-level systemd service
 
 ```bash
-ansible-playbook ai-agent/vertex-ai-proxy.yml
+ansible-playbook _personal/ai-agent/vertex-ai-proxy.yml
 ```
 
 **Prerequisites:**
@@ -124,61 +124,12 @@ journalctl --user -u vertex-ai-proxy -f   # View logs
 systemctl --user stop vertex-ai-proxy     # Stop
 ```
 
-## gemini-cli.yml
-
-Install Gemini CLI
-
-```bash
-ansible-playbook ai-agent/gemini-cli.yml
-```
-
-**Prerequisites:**
-- System-wide Node.js installed via `core/nodejs.yml`
-  - version manager-managed Node.js will cause the playbook to fail
-- `gcloud` CLI installed and authenticated
-
-This playbook:
-- Installs `@google/gemini-cli` globally via npm
-
-**Required environment variables (set in `env-tmpl.sh`):**
-
-- `GOOGLE_GENAI_USE_VERTEXAI` — Use Vertex AI for Gemini CLI
-- `GOOGLE_CLOUD_PROJECT` — GCP project ID
-- `GOOGLE_CLOUD_LOCATION` — GCP region (e.g., `global`)
-
-**Required setup before use:**
-
-Authenticate with Google Cloud ADC so Gemini CLI can access Vertex AI:
-
-```bash
-gcloud auth application-default login
-```
-
-Also ensure the target project has the Vertex AI API enabled:
-
-```bash
-gcloud services enable aiplatform.googleapis.com --project $GOOGLE_CLOUD_PROJECT
-```
-
-**Usage:**
-
-```bash
-gemini
-```
-
-**Updating Gemini CLI:**
-```bash
-sudo npm update -g @google/gemini-cli
-```
-
-Documentation: https://github.com/google-gemini/gemini-cli
-
 ## claude-code.yml
 
 Install Claude Code CLI
 
 ```bash
-ansible-playbook ai-agent/claude-code.yml
+ansible-playbook _personal/ai-agent/claude-code.yml
 ```
 
 Installs the Claude Code CLI tool using the official installation script. The playbook:
@@ -201,27 +152,3 @@ claude auth login
 ```
 
 Documentation: <https://claude.ai/code>
-
-## antigravity-cli.yml
-
-Install Antigravity CLI
-
-```bash
-ansible-playbook ai-agent/antigravity-cli.yml
-```
-
-Installs the Antigravity CLI tool (`agy`) using the official installation script. The playbook:
-
-- Installs prerequisites (curl, ca-certificates, libsecret-1-0)
-- Downloads and runs the official Antigravity installer
-- Ensures `~/.local/bin` is added to PATH in `.bashrc`, `.profile`, and `/etc/environment`
-- Respects `HTTPS_PROXY` environment variable
-- Verifies installation and displays version
-
-After installation, authenticate with:
-
-```bash
-agy auth login
-```
-
-Documentation: <https://antigravity.google>
