@@ -1,0 +1,258 @@
+---
+# Install the GitLab CLI system-wide on a multi-user workstation.
+#
+#   /usr/bin/glab   from the upstream .deb
+#
+# The .deb already installs to root-owned paths, so this migration is
+# correctness work -- but of a sharper kind than the other wave-2 playbooks.
+# The source playbook (cloud-cli/gitlab-cli.yml) queried GitLab's release API
+# for whatever release was newest at that moment and installed it unverified:
+# two hosts provisioned a week apart silently got different versions, and
+# nothing checked that the bytes were the ones GitLab published.
+#
+# Ubuntu's own archive carries glab too, but far behind upstream
+# (1.53.0-1build1 in resolute/universe at the time of writing), so apt is not
+# an option and there is no vendor apt repository either. The .deb it is,
+# pinned and checksum-verified.
+#
+# The identity stays per-user: `glab auth login` writes
+# ~/.config/glab-cli/config.yml, and GITLAB_TOKEN is a secret belonging in
+# each user's own environment. Nothing here touches either.
+#
+# Usage:
+#   ansible-playbook cloud-cli/gitlab-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/gitlab-cli.yml -e host=ws01 -e gitlab_cli_version=1.112.0
+
+- name: Install the GitLab CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    gitlab_cli_version: "1.112.0"
+    # The direct release-asset path. Deliberately not the release API the
+    # source playbook used: a pinned version needs no query, and a URL built
+    # from the pin cannot drift to a newer release between two hosts.
+    gitlab_cli_base_url: "https://gitlab.com/gitlab-org/cli/-/releases/v{{ gitlab_cli_version }}/downloads"
+    # ansible_facts['architecture'] -> upstream asset name. The release
+    # publishes amd64 and arm64 .debs (and 386, armv6, ppc64le, s390x); the
+    # source playbook matched linux_amd64 with a regex and would have
+    # installed an amd64 package on an arm64 host.
+    gitlab_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    gitlab_cli_arch: "{{ gitlab_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    gitlab_cli_deb: "glab_{{ gitlab_cli_version }}_linux_{{ gitlab_cli_arch }}.deb"
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts (see
+    # MIGRATION.md). The source playbook staged in /tmp.
+    gitlab_cli_stage_dir: "/var/tmp/glab-install-{{ gitlab_cli_version }}"
+    gitlab_cli_smoke_home: /var/tmp/gitlab-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    gitlab_cli_verify_uid: 65534    # nobody
+    gitlab_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No GitLab CLI .deb is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to gitlab_cli_arch_map.
+      when: gitlab_cli_arch | length == 0
+
+    - name: 3. Check the currently installed glab version
+      # check_mode: false because this reads state that already exists. A
+      # skipped command task registers rc 0 and an empty stdout, which task 4
+      # would read as a version merely different from the pin.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' glab
+      register: gitlab_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether glab needs installing
+      # The installed version is compared, not the presence of the binary.
+      ansible.builtin.set_fact:
+        gitlab_cli_install_needed: >-
+          {{ gitlab_cli_installed.rc != 0
+             or gitlab_cli_installed.stdout != gitlab_cli_version }}
+        gitlab_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (gitlab_cli_installed.rc != 0
+                       or gitlab_cli_installed.stdout != gitlab_cli_version)) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install glab {{ gitlab_cli_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (gitlab_cli_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ gitlab_cli_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: gitlab_cli_install_needed | bool
+
+    - name: 6. Fetch the release checksums
+      # The hash is resolved from the release's own published checksums file
+      # at run time rather than hardcoded, so overriding gitlab_cli_version
+      # stays a one-flag change (policy point 7).
+      #
+      # check_mode: false because uri skips itself under --check, and a
+      # skipped fetch registers no content at all -- which task 7 reduces to
+      # an empty checksum and task 8 then reports as "checksums.txt has no
+      # entry for this asset", i.e. a dry run accusing a perfectly good
+      # version pin of not existing. Fetching a published checksums file
+      # changes nothing on the host, and running it means --check genuinely
+      # validates the pin against upstream.
+      ansible.builtin.uri:
+        url: "{{ gitlab_cli_base_url }}/checksums.txt"
+        return_content: true
+      register: gitlab_cli_checksums
+      check_mode: false
+      when: gitlab_cli_install_needed | bool
+
+    - name: 7. Extract the expected checksum for this architecture
+      # Anchored at both ends against the exact filename. Without the anchors
+      # a pin of, say, glab_1.11.0 would also match glab_1.112.0, and without
+      # escaping, the dots in the version would match any character. This
+      # release's checksums.txt lists 35 assets, several differing only by
+      # architecture or suffix.
+      ansible.builtin.set_fact:
+        gitlab_cli_sha256: >-
+          {{ (gitlab_cli_checksums.content | default('')
+              | regex_search('(?m)^([0-9a-f]{64})\s+' ~ (gitlab_cli_deb | regex_escape) ~ '$', '\1')
+              | first | default('')) }}
+      when: gitlab_cli_install_needed | bool
+
+    - name: 8. Fail if the checksums file does not list this asset
+      ansible.builtin.fail:
+        msg: >-
+          checksums.txt for glab {{ gitlab_cli_version }} has no entry for
+          {{ gitlab_cli_deb }}. Check the version pin and the asset naming.
+      when:
+        - gitlab_cli_install_needed | bool
+        - (gitlab_cli_sha256 | default('')) | length != 64
+
+    - name: 9. Download the glab .deb and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check.
+      #
+      # Not under --check: get_url is not skipped in check mode, it validates
+      # its destination, and task 5 has not really created the staging
+      # directory -- so a dry run fails on "Destination ... does not exist"
+      # rather than reporting a download it would make.
+      ansible.builtin.get_url:
+        url: "{{ gitlab_cli_base_url }}/{{ gitlab_cli_deb }}"
+        dest: "{{ gitlab_cli_stage_dir }}/{{ gitlab_cli_deb }}"
+        checksum: "sha256:{{ gitlab_cli_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - gitlab_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Install the glab .deb
+      # Not under --check: task 9 does not really download, so there would be
+      # no file to install and this would fail on a missing path rather than
+      # report what it would do. What a dry run does still establish is
+      # everything up to here -- that the pinned version exists upstream and
+      # that its checksums file lists an asset for this architecture.
+      ansible.builtin.apt:
+        deb: "{{ gitlab_cli_stage_dir }}/{{ gitlab_cli_deb }}"
+        state: present
+      when:
+        - gitlab_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ gitlab_cli_stage_dir }}"
+        state: absent
+
+    - name: 12. Verify the installed glab package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' glab
+      register: gitlab_cli_dpkg
+      changed_when: false
+      failed_when: gitlab_cli_dpkg.stdout != gitlab_cli_version
+      when: gitlab_cli_can_verify | bool
+
+    - name: 13. Create a scratch HOME for the unprivileged checks
+      # glab reads and writes ~/.config/glab-cli.
+      ansible.builtin.file:
+        path: "{{ gitlab_cli_smoke_home }}"
+        state: directory
+        owner: "{{ gitlab_cli_verify_uid }}"
+        group: "{{ gitlab_cli_verify_gid }}"
+        mode: '0700'
+      when: gitlab_cli_can_verify | bool
+
+    - name: 14. Report the glab version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ gitlab_cli_verify_uid }} --regid={{ gitlab_cli_verify_gid }} --clear-groups
+          env HOME={{ gitlab_cli_smoke_home }} glab --version
+      register: gitlab_cli_smoke_version
+      changed_when: false
+      failed_when: gitlab_cli_version not in gitlab_cli_smoke_version.stdout
+      when: gitlab_cli_can_verify | bool
+
+    - name: 15. Read glab configuration as an unprivileged user
+      # Stronger than --version: `glab config get` walks the configuration
+      # discovery path and falls back to glab's built-in default, which is the
+      # zero-configuration behaviour A4 asks to have proven. It needs no
+      # credentials -- this playbook configures no identity.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ gitlab_cli_verify_uid }} --regid={{ gitlab_cli_verify_gid }} --clear-groups
+          env HOME={{ gitlab_cli_smoke_home }} glab config get git_protocol
+      register: gitlab_cli_smoke_config
+      changed_when: false
+      failed_when: (gitlab_cli_smoke_config.stdout | trim) | length == 0
+      when: gitlab_cli_can_verify | bool
+
+    - name: 16. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ gitlab_cli_smoke_home }}"
+        state: absent
+
+    - name: 17. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            GitLab CLI {{ gitlab_cli_version }} ({{ gitlab_cli_arch }})
+            {{ gitlab_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  /usr/bin/glab"
+          - ""
+          - >-
+            {{ gitlab_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ gitlab_cli_verify_uid
+                         ~ '), reading its own default configuration (git_protocol='
+                         ~ (gitlab_cli_smoke_config.stdout | default('') | trim) ~ ').',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - "The .deb was checked against the sha256 published in the release's checksums.txt."
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  glab auth login              # writes ~/.config/glab-cli/config.yml"
+          - "  glab auth status             # confirm which account is active"
+          - ""
+          - "GITLAB_TOKEN is a SECRET: keep it in your own environment at mode 0600,"
+          - "never in /etc/environment, which is shared and world-readable."

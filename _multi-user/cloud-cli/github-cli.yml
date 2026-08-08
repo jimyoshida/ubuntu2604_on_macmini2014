@@ -1,0 +1,264 @@
+---
+# Install the GitHub CLI system-wide on a multi-user workstation.
+#
+#   /usr/bin/gh                                  from the vendor apt package
+#   /etc/apt/sources.list.d/github-cli.sources   repository definition
+#   /etc/apt/keyrings/github-cli.gpg             repository signing keyring
+#
+# The apt package already installs to root-owned paths, so this migration is
+# correctness work: the source playbook (cloud-cli/github-cli.yml) installed
+# the same package from the same repository, unpinned, with the architecture
+# hardcoded and the keyring re-downloaded with force: true on every run.
+#
+# The identity stays per-user: `gh auth login` writes ~/.config/gh/hosts.yml,
+# and GH_TOKEN is a secret that belongs in each user's own environment, never
+# in /etc/environment. Nothing here touches either.
+#
+# Usage:
+#   ansible-playbook cloud-cli/github-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/github-cli.yml -e host=ws01 -e github_cli_version=2.97.0
+
+- name: Install the GitHub CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    github_cli_version: "2.97.0"
+    github_cli_repo_uri: "https://cli.github.com/packages"
+    github_cli_suite: stable
+    github_cli_key_url: "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+    # ansible_facts['architecture'] -> apt architecture name. The repository
+    # publishes amd64 and arm64; the source playbook hardcoded arch=amd64.
+    github_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    github_cli_arch: "{{ github_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    # The source playbook's apt source for this same repository.
+    github_cli_legacy_source: /etc/apt/sources.list.d/github-cli.list
+    github_cli_smoke_home: /var/tmp/github-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    github_cli_verify_uid: 65534    # nobody
+    github_cli_verify_gid: 65534    # nogroup
+    # GitHub publishes a *binary* keyring, not an armored key, so it cannot be
+    # embedded in Signed-By the way azure-cli.yml embeds Microsoft's. It is
+    # fetched by URL and its identity pinned by fingerprint instead -- which is
+    # the right form here for a second reason: the keyring currently holds two
+    # keys, and the one actually signing the repository
+    # (2C6106201985B60E6C7AC87323F3D4EA75716059) EXPIRES 2026-09-05. A pinned
+    # copy of today's key would simply stop working. Fetching each run means a
+    # host picks up the rotation to the successor below as soon as GitHub
+    # publishes it.
+    #
+    # The assertion is therefore against the successor -- the non-expiring key
+    # that will still be in the keyring after the rotation -- and not against
+    # the expiring one, which would turn a routine rotation into a failed run.
+    github_cli_key_fingerprint: "7F38BBB59D064DBCB3D84D725612B36462313325"
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 6. The source
+      # playbook's apt-transport-https and curl are gone: apt has spoken https
+      # natively since 1.5, and the module does the fetching.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No GitHub CLI apt architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to github_cli_arch_map.
+      when: github_cli_arch | length == 0
+
+    - name: 3. Remove the single-user playbook's apt source for this repository
+      # cloud-cli/github-cli.yml wrote github-cli.list for the same repository.
+      # Left beside the .sources file below, apt reads the repository twice and
+      # warns that the target is configured multiple times. Its keyring
+      # (/usr/share/keyrings/githubcli-archive-keyring.gpg) is left alone: no
+      # other playbook references it, and an unused keyring is inert.
+      ansible.builtin.file:
+        path: "{{ github_cli_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the GitHub CLI apt repository
+      # deb822_repository rather than get_url + apt_repository. Given a URL it
+      # downloads the keyring and compares it by checksum, so the repeated
+      # `force: true` download the source playbook did -- which reported
+      # `changed` on every run -- becomes a no-op when nothing moved.
+      ansible.builtin.deb822_repository:
+        name: github-cli
+        types:
+          - deb
+        uris:
+          - "{{ github_cli_repo_uri }}"
+        suites:
+          - "{{ github_cli_suite }}"
+        components:
+          - main
+        architectures:
+          - "{{ github_cli_arch }}"
+        signed_by: "{{ github_cli_key_url }}"
+        state: present
+        mode: '0644'
+      register: github_cli_repo
+
+    - name: 5. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring. It
+      # tolerates a miss (failed_when: false) because on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ github_cli_repo.key_filename | default('/etc/apt/keyrings/github-cli.gpg') }}
+      register: github_cli_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Confirm the keyring holds GitHub's signing key
+      # Guards against the repository being pointed at some other key: apt
+      # would happily trust whatever arrived at that URL. Skipped only in the
+      # one case where there is genuinely nothing to read yet.
+      ansible.builtin.fail:
+        msg: >-
+          The keyring at
+          {{ github_cli_repo.key_filename | default('/etc/apt/keyrings/github-cli.gpg') }}
+          does not contain GitHub's signing key {{ github_cli_key_fingerprint }}.
+          Refusing to install from a repository signed by an unknown key.
+      when:
+        - github_cli_key_fingerprint not in (github_cli_fpr.stdout | default(''))
+        - not (ansible_check_mode and github_cli_fpr.rc | default(1) != 0)
+
+    - name: 7. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: github_cli_repo.changed
+
+    - name: 8. Check the currently installed gh version
+      # check_mode: false because this reads state that already exists. A
+      # skipped command task registers rc 0 and an empty stdout, which task 9
+      # would read as a version merely different from the pin.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' gh
+      register: github_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether gh needs installing
+      ansible.builtin.set_fact:
+        github_cli_install_needed: >-
+          {{ github_cli_installed.rc != 0
+             or github_cli_installed.stdout != github_cli_version }}
+        github_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (github_cli_installed.rc != 0
+                       or github_cli_installed.stdout != github_cli_version)) }}
+
+    - name: 9a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install gh {{ github_cli_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (github_cli_can_verify | bool)
+
+    - name: 10. Install gh via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
+      ansible.builtin.apt:
+        name: "gh={{ github_cli_version }}"
+        state: present
+        allow_downgrade: true
+      # The second clause is about --check on a host that does not yet have this
+      # vendor repository: the repository task reported `changed` without
+      # writing anything, so apt has no candidate for the pinned version and
+      # this task would fail outright rather than simulate. Where the
+      # repository IS already configured, it still runs under --check, so a
+      # dry run keeps showing what apt would do.
+      when:
+        - github_cli_install_needed | bool
+        - not (ansible_check_mode and github_cli_repo.changed)
+
+    - name: 11. Verify the installed gh package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' gh
+      register: github_cli_dpkg
+      changed_when: false
+      failed_when: github_cli_dpkg.stdout != github_cli_version
+      when: github_cli_can_verify | bool
+
+    - name: 12. Create a scratch HOME for the unprivileged checks
+      # gh reads and writes ~/.config/gh. /var/tmp rather than /tmp, which is
+      # a size-capped tmpfs on these hosts (see MIGRATION.md).
+      ansible.builtin.file:
+        path: "{{ github_cli_smoke_home }}"
+        state: directory
+        owner: "{{ github_cli_verify_uid }}"
+        group: "{{ github_cli_verify_gid }}"
+        mode: '0700'
+      when: github_cli_can_verify | bool
+
+    - name: 13. Report the gh version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ github_cli_verify_uid }} --regid={{ github_cli_verify_gid }} --clear-groups
+          env HOME={{ github_cli_smoke_home }} gh --version
+      register: github_cli_smoke_version
+      changed_when: false
+      failed_when: github_cli_version not in github_cli_smoke_version.stdout
+      when: github_cli_can_verify | bool
+
+    - name: 14. Read gh configuration as an unprivileged user
+      # Stronger than --version: `gh config get` walks the configuration
+      # discovery path and falls back to gh's built-in default, which is the
+      # zero-configuration behaviour A4 asks to have proven. GH_CONFIG_DIR is
+      # deliberately left unset. It needs no credentials -- this playbook
+      # configures no identity.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ github_cli_verify_uid }} --regid={{ github_cli_verify_gid }} --clear-groups
+          env HOME={{ github_cli_smoke_home }} gh config get git_protocol
+      register: github_cli_smoke_config
+      changed_when: false
+      failed_when: (github_cli_smoke_config.stdout | trim) | length == 0
+      when: github_cli_can_verify | bool
+
+    - name: 15. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ github_cli_smoke_home }}"
+        state: absent
+
+    - name: 16. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            GitHub CLI {{ github_cli_version }} ({{ github_cli_arch }})
+            {{ github_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  /usr/bin/gh"
+          - "  /etc/apt/sources.list.d/github-cli.sources"
+          - "  {{ github_cli_repo.key_filename | default('/etc/apt/keyrings/github-cli.gpg') }}"
+          - ""
+          - >-
+            {{ github_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ github_cli_verify_uid
+                         ~ '), reading its own default configuration (git_protocol='
+                         ~ (github_cli_smoke_config.stdout | default('') | trim) ~ ').',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - "Repository keyring pinned to GitHub's key {{ github_cli_key_fingerprint }}."
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  gh auth login                # writes ~/.config/gh/hosts.yml"
+          - "  gh auth status               # confirm which account is active"
+          - ""
+          - "GH_TOKEN is a SECRET: keep it in your own environment at mode 0600,"
+          - "never in /etc/environment, which is shared and world-readable."

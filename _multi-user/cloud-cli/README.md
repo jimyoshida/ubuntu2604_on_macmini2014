@@ -275,3 +275,180 @@ a shared default under an unread name is invisible, since the variable is set,
 `/etc/environment` looks right, and every user still gets an error.
 
 Note how close `AZURE_DEVOPS_EXT__DEFAULTS_*` sits to the secret `AZURE_DEVOPS_EXT_PAT`.
+
+## gcloud-cli.yml
+
+Installs the [Google Cloud CLI](https://cloud.google.com/sdk/docs) from Google's apt
+repository.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/lib/google-cloud-sdk/` | the SDK itself |
+| `/usr/bin/gcloud`, `/usr/bin/gsutil`, `/usr/bin/bq` | wrappers |
+| `/etc/apt/sources.list.d/google-cloud-sdk.sources` | repository definition, key inline |
+
+**What changed versus `cloud-cli/gcloud-cli.yml`.** Same package, same repository; the
+work was correctness plus removing two environment lookups:
+
+- **A5 cleanup** — `deb822_repository` with Google's armored key embedded in `Signed-By`,
+  replacing `get_url` + `shell: gpg --dearmor` + `apt_repository`.
+- **Pinned** (`gcloud_cli_version`) with `allow_downgrade`. The package version carries a
+  Debian revision (`579.0.0-0`) while the CLI reports `579.0.0`, so the two are composed
+  from one pin rather than written out separately.
+- **Architecture from facts.** The source playbook set none at all.
+- **`GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` are gone.** The source playbook read
+  them from the *installer's* environment with `lookup('env', ...)` and printed them back
+  as instructions, so the advice each user saw depended on whoever ran the playbook. A
+  project and a region are per-identity (A3), so they are not set system-wide at all.
+
+### Per-user setup
+
+```bash
+gcloud auth login                       # token store in ~/.config/gcloud
+gcloud auth application-default login   # for client libraries
+gcloud config set project YOUR_PROJECT
+gcloud config set compute/region YOUR_REGION
+```
+
+Service account key files are secrets: keep them in `$HOME` at mode `0600`.
+
+## github-cli.yml
+
+Installs the [GitHub CLI](https://cli.github.com/) from GitHub's apt repository.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/gh` | the CLI |
+| `/etc/apt/sources.list.d/github-cli.sources` | repository definition |
+| `/etc/apt/keyrings/github-cli.gpg` | repository signing keyring |
+
+**What changed versus `cloud-cli/github-cli.yml`.** Same package, same repository:
+A5 cleanup, a version pin with `allow_downgrade`, architecture from facts (the source
+hardcoded `arch=amd64`), and the keyring no longer re-downloaded with `force: true` on
+every run.
+
+### The signing key is fetched, not pinned — deliberately
+
+Unlike `azure-cli.yml`, `opentofu.yml` and `gcloud-cli.yml`, which embed an armored key
+in `Signed-By`, this playbook passes `deb822_repository` the **key URL** and asserts a
+pinned **fingerprint** afterwards. Two reasons, and the second is the important one:
+
+1. GitHub publishes a *binary* keyring, which cannot be embedded in a deb822 field.
+2. The keyring holds two keys, and the one currently signing the repository
+   (`2C6106201985B60E6C7AC87323F3D4EA75716059`) **expires 2026-09-05**. A pinned copy of
+   today's key would stop working; fetching each run means a host picks up GitHub's
+   rotation to the successor as soon as it is published.
+
+The assertion is therefore against the successor — the non-expiring
+`7F38BBB59D064DBCB3D84D725612B36462313325`, which will still be in the keyring after the
+rotation — rather than against the expiring key, which would turn a routine rotation into
+a failed run. If GitHub ever replaces *both*, task 6 fails loudly and the fingerprint is
+a one-line edit.
+
+### Per-user setup
+
+```bash
+gh auth login      # writes ~/.config/gh/hosts.yml
+gh auth status     # confirm which account is active
+```
+
+`GH_TOKEN` is a secret and must never go in `/etc/environment`.
+
+## gitlab-cli.yml
+
+Installs the [GitLab CLI](https://gitlab.com/gitlab-org/cli) from the upstream `.deb`.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/glab` | the CLI |
+
+**What changed versus `cloud-cli/gitlab-cli.yml`.** This one was doing more than cosmetic
+damage:
+
+- **The version is pinned.** The source playbook queried GitLab's release API for whatever
+  was newest *at that moment*, so two hosts provisioned a week apart silently got
+  different versions and no run record said which.
+- **The download is verified** against the sha256 in the release's own `checksums.txt`,
+  resolved at run time so a version override stays a one-flag change. The source playbook
+  verified nothing.
+- **Architecture from facts.** The source matched `glab_.*_linux_amd64\.deb` with a regex
+  and would have installed an amd64 package on an arm64 host.
+- **Staging moved to `/var/tmp`**, which is disk-backed; `/tmp` is a size-capped tmpfs.
+
+Why not apt: Ubuntu `resolute/universe` carries `glab 1.53.0-1build1`, far behind
+upstream, and there is no vendor apt repository.
+
+A dry run is genuinely useful here: `--check` fetches `checksums.txt` and validates that
+the pinned version exists upstream with an asset for this architecture, without
+downloading or installing anything.
+
+### Per-user setup
+
+```bash
+glab auth login    # writes ~/.config/glab-cli/config.yml
+glab auth status
+```
+
+`GITLAB_TOKEN` is a secret and must never go in `/etc/environment`.
+
+## opentofu.yml
+
+Installs [OpenTofu](https://opentofu.org/) from the packagecloud-hosted vendor repository.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/tofu` | the CLI |
+| `/etc/apt/sources.list.d/opentofu.sources` | repository definition, key inline |
+
+**What changed versus `cloud-cli/opentofu.yml`.** A5 cleanup (which here removes *two*
+`shell: gpg --dearmor` tasks and two downloads), a version pin with `allow_downgrade`, and
+architecture from facts.
+
+### One signing key, not two
+
+The source playbook put two keys in `signed-by`:
+`https://get.opentofu.org/opentofu.gpg` and the packagecloud repository key. Only the
+second is dropped-in-anger material — the repository's `InRelease` is signed by subkey
+`59D41234F9F7AFD007143F6A70DF59811A8B9109` of the packagecloud key
+(`F4AF70F66EAC4337EEECC97407D3DFCD4C61499F`), verified directly against the published
+`InRelease`. The other key's own user ID says it signs OpenTofu **providers**, not the apt
+repository. A key that signs nothing apt reads does not belong in `Signed-By`, so it is
+dropped.
+
+### The smoke test formats a deliberately broken file
+
+`tofu fmt -check` on already-tidy input is indistinguishable from a `tofu` that parsed
+nothing, so the playbook writes a misformatted `main.tf` and asserts that tofu **names**
+it. The task needs `chdir` — see the note in the playbook: an unprivileged process
+inherits a working directory it cannot read, and tofu re-expresses any path it is given
+relative to that directory before failing on it.
+
+## prometheus-cli.yml
+
+Installs `promtool` and `amtool` from the Ubuntu archive.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/promtool` | from the `promtool` package |
+| `/usr/bin/amtool` | from the `prometheus-alertmanager` package |
+
+This installs **clients only**. `prometheus-alertmanager` is here purely because it is
+what ships `amtool`; its daemon is stopped and disabled, as the source playbook also did.
+Deploying an actual Alertmanager is out of scope.
+
+**What changed versus `cloud-cli/prometheus-cli.yml`.** Both packages are pinned with
+`allow_downgrade`, the versions are verified after install, and both tools now validate a
+real config file as uid 65534. The source playbook installed two packages unpinned and
+checked nothing.
+
+Unlike the vendor-repo playbooks, these pins are **release-specific**: apt candidates
+differ between 24.04 and 26.04, and an install fails outright when the pin is not what the
+target's sources carry. Check `apt-cache policy` on the target before bumping — the
+`shellcheck.yml` finding in MIGRATION.md.
+
+Version overrides:
+
+```bash
+ansible-playbook cloud-cli/prometheus-cli.yml -e host=ws01 \
+  -e promtool_version=2.53.5+ds1-3 -e alertmanager_version=0.28.1+ds-3
+```

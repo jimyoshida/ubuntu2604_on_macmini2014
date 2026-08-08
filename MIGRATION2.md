@@ -3,7 +3,7 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: in progress.** 3 of 13 source playbooks migrated and verified. See
+**Status: in progress.** 8 of 13 source playbooks migrated and verified. Wave 2 is complete. See
 [Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
@@ -305,9 +305,11 @@ Four waves, each ending in a commit and a status-table update:
    `vault-cli`/`services/vault.yml` overlap, and the shared A5 vendor-repo block. These three
    are referenced by nearly every playbook; deciding them mid-migration means rewriting
    earlier ones.
-2. **Vendor-repo and apt playbooks — #1–#7.** Already system-wide, so this is correctness
-   work: A5 cleanup, pins, version-aware guards, smoke tests. Establishes the house style for
-   the wave that follows.
+2. **Vendor-repo and apt playbooks — #1–#7. Done.** Already system-wide, so this was
+   correctness work: A5 cleanup, pins, version-aware guards, smoke tests. It established the
+   house style for the wave that follows, and settled the shared A5 vendor-repo block that
+   wave 1 left open — including the two key-pinning forms and the four `--check` defects
+   recorded under [Verification status](#verification-status).
 3. **De-brew — #8–#11.** The reach work. Each is an independent tool with an independent
    version pin.
 4. **The configured ones — #12–#13.** Both depend on wave 1's decisions and on wave 2 (#13
@@ -337,12 +339,12 @@ additions:
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `github-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
-| `opentofu.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
-| `prometheus-cli.yml` | apt | apt, pinned | TBD | Planned |
+| `github-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 2.97.0 | Verified (localhost) |
+| `opentofu.yml` | vendor apt repo (2 keys) | vendor apt repo, A5 cleanup, 1 key | 1.12.5 | Verified (localhost) |
+| `prometheus-cli.yml` | apt | apt, pinned | promtool 2.53.5+ds1-3, alertmanager 0.28.1+ds-3 | Verified (localhost) |
 | `azure-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 2.89.0-1~noble | Verified (localhost) |
-| `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
-| `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | TBD | Planned |
+| `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 579.0.0-0 | Verified (localhost) |
+| `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | 1.112.0 | Verified (localhost) |
 | `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Verified (localhost) |
 | `jira-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
 | `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
@@ -451,6 +453,76 @@ from version + mapped suite rather than written out, and a suite change carries 
 it. The `azure-cli` package also ships `/etc/bash_completion.d/azure-cli` itself, so `az` does
 **not** belong on the list of tools blocked on the `/etc/profile.d` bootstrap.
 
+### Wave 2 (`github-cli`, `opentofu`, `prometheus-cli`, `gcloud-cli`, `gitlab-cli`)
+
+All five verified against `localhost`, `failed=0`, with the same caveats as everything
+else here: ansible-core 2.20 only, and a local connection exercises neither the 2.16
+control node nor the SSH path. Re-runs are identical to first runs task for task, every
+`changed` being a scratch directory created and removed. Post-run checks independent of
+the playbooks: `gh 2.97.0`, `tofu 1.12.5`, `gcloud 579.0.0`, `glab 1.112.0`,
+`promtool 2.53.5+ds1`, `amtool 0.28.1+ds`; `apt-get update` warns about nothing; the
+Alertmanager daemon is `disabled`/`inactive`; `/var/tmp` holds no leftovers.
+
+**A5 now has two forms, and the choice is not stylistic.** Where a vendor publishes a
+single armored key with no expiry, it is pinned by content, inline in `Signed-By`
+(`azure-cli`, `opentofu`, `gcloud-cli`): the bytes are the trust anchor, and a rotation
+fails apt's Release check loudly. Where that does not hold, the key is fetched by URL and
+its **fingerprint** pinned and asserted instead (`github-cli`). The rule to apply to the
+remaining playbooks:
+
+> Pin the fingerprint always. Pin the key bytes too, only when the key has no expiry.
+
+`github-cli` is the case that forces the distinction, and it is not hypothetical: GitHub
+publishes a *binary* keyring holding two keys, and the one currently signing the
+repository (`2C6106201985B60E6C7AC87323F3D4EA75716059`) **expires 2026-09-05** — about
+four weeks after this was written. A pinned copy would simply stop working. The playbook
+therefore fetches each run (the module compares by checksum, so this is still idempotent)
+and asserts the *non-expiring successor* `7F38BBB59D064DBCB3D84D725612B36462313325`, which
+survives the rotation. Asserting the expiring key instead would convert a routine rotation
+into a failed run. This is the same lesson as `aws-cli.yml`'s expired-keyserver finding
+seen from the other side: **key expiry is part of the pinning decision, not a detail.**
+
+**`opentofu.yml` installs one key where the source playbook installed two.** The source put
+both `get.opentofu.org/opentofu.gpg` and the packagecloud repository key in `signed-by`.
+Verified directly against the published `InRelease`: it is signed by subkey
+`59D41234F9F7AFD007143F6A70DF59811A8B9109` of the packagecloud key, and the other key's own
+user ID says it signs OpenTofu **providers**. A key that signs nothing apt reads does not
+belong in `Signed-By`. Worth checking wherever a source playbook lists more than one key —
+it is a plausible-looking way to be wrong.
+
+**Three distinct `--check` defects, all in the same family: a task that is skipped, or
+half-skipped, feeding a task that is not.** MIGRATION.md's step 10 says `--check` is not a
+meaningful dry run for these playbooks, and that remains true of the install itself — but
+"not meaningful" and "fails with a misleading error" are different things, and all three of
+these produced the latter. Every wave-2 and wave-4 playbook is now `failed=0` under
+`--check`, both on a host that already has the pinned version and on one that does not.
+
+- **`chdir` is validated before check mode skips the task.** `opentofu.yml`'s smoke tests
+  set `chdir` to a scratch directory an earlier task creates. `command` is skipped under
+  `--check`, so the task should never run — but the action validates `chdir` first and the
+  dry run dies on `Unable to change directory before execution`. Fixed by giving the
+  create and remove tasks `check_mode: false`, so the throwaway directory really exists for
+  the length of the run. Applies to any `command` with `chdir` — `tools/trivy.yml` has the
+  same shape.
+- **`get_url` is not skipped under `--check`; it validates its destination.**
+  `gitlab-cli.yml`'s download failed a dry run with `Destination ... does not exist`,
+  naming the staging directory that `--check` had not created. Guarded with
+  `not ansible_check_mode`, along with the `.deb` install that follows it.
+- **`uri` *is* skipped, and registers nothing.** `gitlab-cli.yml` resolves its checksum
+  from the release's `checksums.txt`; skipped, that fetch left an empty checksum, which the
+  next guard reported as *"checksums.txt has no entry for this asset"* — a dry run accusing
+  a perfectly good version pin of not existing. Given `check_mode: false` (fetching a
+  published checksums file changes nothing), `--check` now genuinely validates the pin
+  against upstream without downloading or installing: the most useful dry run in this
+  directory.
+
+**The vendor-repo playbooks had a fourth, shared `--check` defect**, found the same way and
+fixed in all five including the two wave-4 ones: on a host that does not yet have the
+repository, the repository task reports `changed` without writing, so apt has no candidate
+and the pinned install fails outright instead of simulating. The install task now carries
+`not (ansible_check_mode and <repo>.changed)`. Where the repository *is* already
+configured, it still runs under `--check`, so a dry run keeps showing what apt would do.
+
 `aws-cli.yml` turned up one thing worth carrying forward to the other playbooks: **AWS's
 signing key is expired at the public keyservers.** `keyserver.ubuntu.com` serves a
 self-signature for `FB5DB77FD5C118B80511ADA8A6310ACC4672475C` that `gpg` reports as expired on
@@ -509,6 +581,6 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   `ansible_facts['architecture']` works on 2.16 as well, so this is a safe repo-wide change
   whenever it is worth doing — it is not specific to `cloud-cli/` and should be done in one
   pass across `tools/` and `cloud-cli/` together, not tool by tool. New playbooks are written
-  with the non-deprecated spelling from the start rather than adding to the debt, so
-  `azure-cli.yml` and `azure-devops-cli.yml` are already done and that pass has two fewer
-  files to touch.
+  with the non-deprecated spelling from the start rather than adding to the debt, so all
+  seven migrated `cloud-cli/` playbooks except `aws-cli.yml` are already done and that pass
+  has six fewer files to touch.

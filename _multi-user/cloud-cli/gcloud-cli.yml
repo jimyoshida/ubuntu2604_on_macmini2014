@@ -1,0 +1,249 @@
+---
+# Install the Google Cloud CLI system-wide on a multi-user workstation.
+#
+#   /usr/bin/gcloud, /usr/bin/gsutil, /usr/bin/bq   wrappers
+#   /usr/lib/google-cloud-sdk/                      the SDK itself
+#   /etc/apt/sources.list.d/google-cloud-sdk.sources  repository, key inline
+#
+# The apt package already installs to root-owned paths, so this migration is
+# correctness work: the source playbook (cloud-cli/gcloud-cli.yml) installed
+# the same package from the same repository, unpinned, via get_url plus a
+# `shell: gpg --dearmor` that reported `changed` on every run.
+#
+# Two things are dropped rather than migrated. The source playbook read
+# GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION from the *installer's*
+# environment with lookup('env', ...) and printed them back as instructions,
+# so the advice each user got depended on whoever happened to run the
+# playbook. Per A2 an endpoint default would be a play var; per A3 a project
+# and a region are per-identity, so they are neither -- each user sets them
+# for themselves, and the closing summary says so without pretending to know
+# the value.
+#
+# The identity stays per-user: `gcloud auth login` writes its token store to
+# ~/.config/gcloud, which this playbook never touches.
+#
+# Usage:
+#   ansible-playbook cloud-cli/gcloud-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/gcloud-cli.yml -e host=ws01 -e gcloud_cli_version=579.0.0
+
+- name: Install the Google Cloud CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    gcloud_cli_version: "579.0.0"
+    # Google's Debian revision. Kept separate so the version the CLI reports
+    # (579.0.0) and the version apt installs (579.0.0-0) stay in step.
+    gcloud_cli_deb_revision: "0"
+    gcloud_cli_pkg_version: "{{ gcloud_cli_version }}-{{ gcloud_cli_deb_revision }}"
+    gcloud_cli_repo_uri: "https://packages.cloud.google.com/apt"
+    gcloud_cli_suite: cloud-sdk
+    # ansible_facts['architecture'] -> apt architecture name. The repository
+    # publishes amd64 and arm64; the source playbook set no architecture at
+    # all and took whatever dpkg defaulted to.
+    gcloud_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    gcloud_cli_arch: "{{ gcloud_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    gcloud_cli_legacy_source: /etc/apt/sources.list.d/google-cloud-sdk.list
+    gcloud_cli_smoke_home: /var/tmp/gcloud-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    gcloud_cli_verify_uid: 65534    # nobody
+    gcloud_cli_verify_gid: 65534    # nogroup
+    # Google's Artifact Registry repository signing key, fingerprint
+    # 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3, as served at
+    # https://packages.cloud.google.com/apt/doc/apt-key.gpg. Armored and with
+    # no expiry, so it is pinned by content: deb822_repository embeds it
+    # straight into Signed-By, and a rotation fails apt's Release check loudly
+    # rather than being followed silently.
+    gcloud_cli_signing_key: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+
+      xsBNBGCRt7MBCADkYJHHQQoL6tKrW/LbmfR9ljz7ib2aWno4JO3VKQvLwjyUMPpq
+      /SXXMOnx8jXwgWizpPxQYDRJ0SQXS9ULJ1hXRL/OgMnZAYvYDeV2jBnKsAIEdiG/
+      e1qm8P4W9qpWJc+hNq7FOT13RzGWRx57SdLWSXo0KeY38r9lvjjOmT/cuOcmjwlD
+      T9XYf/RSO+yJ/AsyMdAr+ZbDeQUd9HYJiPdI04lGaGM02MjDMnx+monc+y54t+Z+
+      ry1WtQdzoQt9dHlIPlV1tR+xV5DHHsejCZxu9TWzzSlL5wfBBeEz7R/OIzivGJpW
+      QdJzd+2QDXSRg9q2XYWP5ZVtSgjVVJjNlb6ZABEBAAHNVEFydGlmYWN0IFJlZ2lz
+      dHJ5IFJlcG9zaXRvcnkgU2lnbmVyIDxhcnRpZmFjdC1yZWdpc3RyeS1yZXBvc2l0
+      b3J5LXNpZ25lckBnb29nbGUuY29tPsLAjgQTAQoAOBYhBDW6oLM+nrOW9ZyoOMC6
+      XObcYxWjBQJgkbezAhsDBQsJCAcCBhUKCQgLAgQWAgMBAh4BAheAAAoJEMC6XObc
+      YxWj+igIAMFh6DrAYMeq9sbZ1ZG6oAMrinUheGQbEqe76nIDQNsZnhDwZ2wWqgVC
+      7DgOMqlhQmOmzm7M6Nzmq2dvPwq3xC2OeI9fQyzjT72deBTzLP7PJok9PJFOMdLf
+      ILSsUnmMsheQt4DUO0jYAX2KUuWOIXXJaZ319QyoRNBPYa5qz7qXS7wHLOY89IDq
+      fHt6Aud8ER5zhyOyhytcYMeaGC1g1IKWmgewnhEq02FantMJGlmmFi2eA0EPD02G
+      C3742QGqRxLwjWsm5/TpyuU24EYKRGCRm7QdVIo3ugFSetKrn0byOxWGBvtu4fH8
+      XWvZkRT+u+yzH1s5yFYBqc2JTrrJvRU=
+      =QnvN
+      -----END PGP PUBLIC KEY BLOCK-----
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file. The source playbook's apt-transport-https, curl and gnupg are
+      # gone: apt speaks https natively and nothing dearmors a key any more.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No Google Cloud CLI apt architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to gcloud_cli_arch_map.
+      when: gcloud_cli_arch | length == 0
+
+    - name: 3. Remove the single-user playbook's apt source for this repository
+      # cloud-cli/gcloud-cli.yml wrote google-cloud-sdk.list for the same
+      # repository. Left beside the .sources file below, apt reads the
+      # repository twice and warns that the target is configured multiple
+      # times. Its keyring (/usr/share/keyrings/cloud.google.gpg) is left
+      # alone: nothing else references it, and an unused keyring is inert.
+      ansible.builtin.file:
+        path: "{{ gcloud_cli_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the Google Cloud SDK apt repository
+      ansible.builtin.deb822_repository:
+        name: google-cloud-sdk
+        types:
+          - deb
+        uris:
+          - "{{ gcloud_cli_repo_uri }}"
+        suites:
+          - "{{ gcloud_cli_suite }}"
+        components:
+          - main
+        architectures:
+          - "{{ gcloud_cli_arch }}"
+        signed_by: "{{ gcloud_cli_signing_key }}"
+        state: present
+        mode: '0644'
+      register: gcloud_cli_repo
+
+    - name: 5. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: gcloud_cli_repo.changed
+
+    - name: 6. Check the currently installed google-cloud-cli version
+      # check_mode: false because this reads state that already exists.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' google-cloud-cli
+      register: gcloud_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 7. Decide whether the Google Cloud CLI needs installing
+      ansible.builtin.set_fact:
+        gcloud_cli_install_needed: >-
+          {{ gcloud_cli_installed.rc != 0
+             or gcloud_cli_installed.stdout != gcloud_cli_pkg_version }}
+        gcloud_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (gcloud_cli_installed.rc != 0
+                       or gcloud_cli_installed.stdout != gcloud_cli_pkg_version)) }}
+
+    - name: 7a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install google-cloud-cli {{ gcloud_cli_pkg_version }},
+          so the version check and the unprivileged smoke test below are skipped
+          rather than failed. Re-run without --check to verify the install.
+      when: not (gcloud_cli_can_verify | bool)
+
+    - name: 8. Install the Google Cloud CLI via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
+      ansible.builtin.apt:
+        name: "google-cloud-cli={{ gcloud_cli_pkg_version }}"
+        state: present
+        allow_downgrade: true
+      # The second clause is about --check on a host that does not yet have this
+      # vendor repository: the repository task reported `changed` without
+      # writing anything, so apt has no candidate for the pinned version and
+      # this task would fail outright rather than simulate. Where the
+      # repository IS already configured, it still runs under --check, so a
+      # dry run keeps showing what apt would do.
+      when:
+        - gcloud_cli_install_needed | bool
+        - not (ansible_check_mode and gcloud_cli_repo.changed)
+
+    - name: 9. Verify the installed google-cloud-cli package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' google-cloud-cli
+      register: gcloud_cli_dpkg
+      changed_when: false
+      failed_when: gcloud_cli_dpkg.stdout != gcloud_cli_pkg_version
+      when: gcloud_cli_can_verify | bool
+
+    - name: 10. Create a scratch HOME for the unprivileged check
+      # gcloud writes ~/.config/gcloud on first invocation. /var/tmp rather
+      # than /tmp, which is a size-capped tmpfs on these hosts.
+      ansible.builtin.file:
+        path: "{{ gcloud_cli_smoke_home }}"
+        state: directory
+        owner: "{{ gcloud_cli_verify_uid }}"
+        group: "{{ gcloud_cli_verify_gid }}"
+        mode: '0700'
+      when: gcloud_cli_can_verify | bool
+
+    - name: 11. Report the Google Cloud CLI version as an unprivileged user
+      # A4's tier 2: `gcloud version` starts the bundled Python, imports the
+      # SDK and enumerates installed components, so it fails if anything under
+      # /usr/lib/google-cloud-sdk is unreadable to an account that did not
+      # install it. CLOUDSDK_CONFIG is deliberately left unset -- default
+      # discovery is the thing under test.
+      #
+      # CLOUDSDK_CORE_DISABLE_PROMPTS is not a discovery variable: it stops
+      # gcloud blocking on an interactive prompt in a non-tty run.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ gcloud_cli_verify_uid }} --regid={{ gcloud_cli_verify_gid }} --clear-groups
+          env HOME={{ gcloud_cli_smoke_home }} CLOUDSDK_CORE_DISABLE_PROMPTS=1
+          gcloud version
+      register: gcloud_cli_smoke
+      changed_when: false
+      failed_when: gcloud_cli_version not in gcloud_cli_smoke.stdout
+      when: gcloud_cli_can_verify | bool
+
+    - name: 12. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ gcloud_cli_smoke_home }}"
+        state: absent
+
+    - name: 13. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Google Cloud CLI {{ gcloud_cli_pkg_version }} ({{ gcloud_cli_arch }})
+            {{ gcloud_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  /usr/bin/gcloud, /usr/bin/gsutil, /usr/bin/bq"
+          - "  /usr/lib/google-cloud-sdk/"
+          - "  /etc/apt/sources.list.d/google-cloud-sdk.sources  suite {{ gcloud_cli_suite }}, key inline"
+          - ""
+          - >-
+            {{ gcloud_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ gcloud_cli_verify_uid
+                         ~ ') with no configuration of its own.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "No identity and no project are configured by this playbook. Each user runs,"
+          - "for themselves:"
+          - "  gcloud auth login                       # token store in ~/.config/gcloud"
+          - "  gcloud auth application-default login   # for client libraries"
+          - "  gcloud config set project YOUR_PROJECT"
+          - "  gcloud config set compute/region YOUR_REGION"
+          - "  gcloud config list                      # confirm the active configuration"
+          - ""
+          - "A project and a region are per-identity, so they are deliberately not set"
+          - "system-wide. Service account keys are SECRETS: keep them in your own"
+          - "$HOME at mode 0600, never in /etc/environment."
