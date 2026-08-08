@@ -15,6 +15,15 @@
 #
 # The addresses below are from the RFC 5737 documentation range and route nowhere.
 
+# This machine, provisioned in place rather than over SSH. ansible_connection=local
+# makes the playbooks' remote_user: ubuntu a no-op; tasks run as the invoking account
+# and escalate with sudo as usual.
+#
+#   ansible-playbook tools/gomplate.yml -e host=localhost
+[local]
+localhost ansible_connection=local
+
+# Real workstations, reached over SSH.
 [workstations]
 ws01 ansible_host=192.0.2.11
 ws02 ansible_host=192.0.2.12
