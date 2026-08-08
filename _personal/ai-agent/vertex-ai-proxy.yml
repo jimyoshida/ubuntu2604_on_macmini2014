@@ -27,7 +27,7 @@
     # Non-secret endpoint config (MIGRATION2 A1), and it has to be a play var for a
     # second reason: a systemd user unit does not read the account's shell profile, so
     # the ${GOOGLE_CLOUD_LOCATION} the source playbook interpolated into ExecStart
-    # expanded to an empty string at service start no matter what env-tmpl.sh set.
+    # expanded to an empty string at service start no matter what any profile set.
     # It is written into the unit as an explicit Environment= line below.
     google_cloud_location: ''
     proxy_port: 8001
