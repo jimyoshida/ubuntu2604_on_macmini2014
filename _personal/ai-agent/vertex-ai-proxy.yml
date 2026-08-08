@@ -75,10 +75,16 @@
           {{ proxy_users | join(', ') }}
 
   tasks:
+    # check_mode: false on both preflight probes below. They read state that already
+    # exists, so running them under --check is safe -- and skipping them is not: a
+    # skipped command task still registers, with rc: 0 and an empty stdout, which 1a
+    # reads as "Node.js present" and 1c reads as "node is not under /usr/". A dry run
+    # would clear both guards on a host that fails them for real.
     - name: 1. Check system-wide Node.js is installed via apt
       ansible.builtin.command: dpkg -s nodejs
       register: nodejs_dpkg
       changed_when: false
+      check_mode: false
       failed_when: false
 
     - name: 1a. Fail if Node.js is not installed as a system package
@@ -92,6 +98,7 @@
       ansible.builtin.command: which node
       register: node_path
       changed_when: false
+      check_mode: false
 
     - name: 1c. Fail if node in PATH is managed by a version manager
       ansible.builtin.fail:
@@ -107,10 +114,33 @@
       register: npm_install
       changed_when: "'up to date' not in npm_install.stdout"
 
+    # Unlike the probes above, this one reads what task 2 just installed, so under
+    # --check there may be nothing to find: task 2 did not really run. check_mode: false
+    # still beats skipping -- a skipped task registers an empty stdout that task 5 would
+    # silently bake into the unit as `ExecStart= start --port ...` -- but it has to
+    # tolerate a miss, hence failed_when: false and the two guards below.
     - name: 3. Resolve the vertex-ai-proxy binary path
       ansible.builtin.command: which vertex-ai-proxy
       register: proxy_bin
       changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 3a. Fail if the binary path could not be resolved
+      ansible.builtin.fail:
+        msg: >-
+          vertex-ai-proxy is not on PATH after installing it via npm. The unit's
+          ExecStart cannot be written without an absolute path.
+      when: proxy_bin.rc != 0 and not ansible_check_mode
+
+    - name: 3b. Note that the unit diff below is incomplete
+      ansible.builtin.debug:
+        msg: >-
+          vertex-ai-proxy is not installed yet, and --check did not install it, so the
+          ExecStart shown in the next task's diff is missing its binary path. Re-run
+          without --check, or against a host that already has the package, to see the
+          unit as it would really be written.
+      when: proxy_bin.rc != 0 and ansible_check_mode
 
     - name: 4. Create the systemd user unit directory for each account
       become: true
