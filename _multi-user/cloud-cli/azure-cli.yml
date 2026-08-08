@@ -202,7 +202,15 @@
         name: "azure-cli={{ azure_cli_pkg_version }}"
         state: present
         allow_downgrade: true
-      when: azure_cli_install_needed | bool
+      # The second clause is about --check on a host that does not yet have this
+      # vendor repository: the repository task reported `changed` without
+      # writing anything, so apt has no candidate for the pinned version and
+      # this task would fail outright rather than simulate. Where the
+      # repository IS already configured, it still runs under --check, so a
+      # dry run keeps showing what apt would do.
+      when:
+        - azure_cli_install_needed | bool
+        - not (ansible_check_mode and azure_cli_repo.changed)
 
     - name: 9. Verify the installed azure-cli package version
       ansible.builtin.command: dpkg-query -W -f='${Version}' azure-cli
