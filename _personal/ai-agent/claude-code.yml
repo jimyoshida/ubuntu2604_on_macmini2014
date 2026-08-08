@@ -125,18 +125,34 @@
     # The regression guard, and the mirror image of the _multi-user/ policy: those
     # playbooks verify as an arbitrary uid to prove the install is not tied to one
     # account, so these verify as the provisioned account to prove that it is.
-    # Unlike the source playbook this is allowed to fail the run.
+    # Unlike the source playbook this is allowed to fail the run -- 6a is what does it.
+    # The probe itself has to tolerate a miss so --check can reach it: check_mode: false
+    # runs it against an already-provisioned account instead of skipping and registering
+    # the empty stdout task 7 would print as a bare "alice: ", but under --check on a
+    # host where task 5 never installed anything there is no binary to run.
     - name: 6. Verify Claude Code runs as each provisioned account
       become: true
       become_user: "{{ item }}"
       ansible.builtin.command: "{{ ansible_facts.getent_passwd[item][4] }}/.local/bin/claude --version"
       register: claude_version
       changed_when: false
+      check_mode: false
+      failed_when: false
       loop: "{{ claude_users }}"
+
+    - name: 6a. Fail if Claude Code does not run for an account
+      ansible.builtin.fail:
+        msg: >-
+          Claude Code was installed for '{{ item.item }}' but ~/.local/bin/claude does
+          not run as that account.
+      when: item.rc != 0 and not ansible_check_mode
+      loop: "{{ claude_version.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: 7. Display the installed version per account
       ansible.builtin.debug:
-        msg: "{{ item.item }}: {{ item.stdout }}"
+        msg: "{{ item.item }}: {{ item.stdout or 'not installed -- nothing to run under --check' }}"
       loop: "{{ claude_version.results }}"
       loop_control:
         label: "{{ item.item }}"

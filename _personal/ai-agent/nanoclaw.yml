@@ -132,19 +132,36 @@
         creates: "/var/lib/systemd/linger/{{ item }}"
       loop: "{{ nanoclaw_users }}"
 
+    # check_mode: false so the branch is really read; skipped, the task registers an
+    # empty stdout that task 6 prints as "(branch )". Like task 3 in vertex-ai-proxy.yml
+    # this reads what an earlier task produced, so under --check against a host with no
+    # clone yet there is legitimately nothing to read -- hence failed_when: false, with
+    # 5a keeping the real run's failure.
     - name: 5. Verify the clone is readable by the account that owns it
       become: true
       become_user: "{{ item }}"
       ansible.builtin.command: "git -C {{ ansible_facts.getent_passwd[item][4] }}/nanoclaw rev-parse --abbrev-ref HEAD"
       register: nanoclaw_branch
       changed_when: false
+      check_mode: false
+      failed_when: false
       loop: "{{ nanoclaw_users }}"
+
+    - name: 5a. Fail if the clone is not readable by its owning account
+      ansible.builtin.fail:
+        msg: >-
+          The clone at ~/nanoclaw is not readable by '{{ item.item }}', so that account
+          cannot run the onboarding installer against it.
+      when: item.rc != 0 and not ansible_check_mode
+      loop: "{{ nanoclaw_branch.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: 6. Print onboarding instructions
       ansible.builtin.debug:
         msg:
           - "NanoClaw prerequisites installed on {{ inventory_hostname }} for:"
-          - "  {{ nanoclaw_users | join(', ') }} (branch {{ nanoclaw_branch.results[0].stdout }})"
+          - "  {{ nanoclaw_users | join(', ') }} (branch {{ nanoclaw_branch.results[0].stdout or 'not read -- clone absent under --check' }})"
           - ""
           - "Onboarding is interactive and must be run by each account itself, over SSH:"
           - "  ssh <account>@{{ inventory_hostname }}"
