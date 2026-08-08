@@ -3,7 +3,7 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: in progress.** 1 of 13 source playbooks migrated and verified. See
+**Status: in progress.** 3 of 13 source playbooks migrated and verified. See
 [Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
@@ -191,12 +191,34 @@ migrated playbook touches anything in the "Per-user state" column, it is wrong.
 | `influx` | `~/.influxdbv2/configs` | `INFLUX_HOST`, `INFLUX_ORG` | `INFLUX_TOKEN` |
 | `vault` | `~/.vault-token` | `VAULT_ADDR` | `VAULT_TOKEN` |
 | `jenkins-cli` | none | `JENKINS_URL` | `JENKINS_USER_ID`, `JENKINS_API_TOKEN` |
-| `az devops` | `~/.azure/config` defaults | `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT` | `AZURE_DEVOPS_EXT_PAT` |
+| `az devops` | `~/.azure/azuredevops/config` defaults | `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION`, `AZURE_DEVOPS_EXT__DEFAULTS_PROJECT` (double underscore — see below) | `AZURE_DEVOPS_EXT_PAT` |
 
 `cloud-cli/env-tmpl.sh` mixes all three columns into one file. Its successor should ship as two
 pieces: the shared, non-secret half applied by the playbooks per A1, and a per-user
 `~/.config/cloud-cli/env.sh` template (mode `0600`, sourced by the user, gitignored) for the
 rest. Decide this before migrating `jenkins-cli.yml`, the first playbook that needs it.
+
+**The `az devops` row was wrong, and wrong in the way that matters.** `AZURE_DEVOPS_ORG` and
+`AZURE_DEVOPS_PROJECT` were carried into this table from the source playbook, where they were
+inputs to the *playbook* — read with `lookup('env', ...)` and fed to
+`az devops configure --defaults`. The CLI itself never reads them. The extension builds its
+knack config with `config_env_var_prefix = 'AZURE_DEVOPS_EXT_'`
+(`azext_devops/dev/common/const.py`) and knack appends another `_` before
+`{section}_{option}`, so the only environment override for `defaults.organization` is
+`AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION`. Verified on the target, as uid 65534 with an empty
+`HOME`: with that name `az devops project list` gets past organization resolution and fails on
+credentials; with `AZURE_DEVOPS_ORG`, or with `AZURE_DEFAULTS_ORGANIZATION` (the azure-cli
+*core* spelling, which `az config get defaults.organization` does honour), it still fails with
+`--organization must be specified`.
+
+The general lesson for the remaining A1 shared-config rows: **a variable name taken from a
+source playbook's `lookup('env', ...)` is not evidence that the tool reads it.** Half of these
+names were the old playbooks' own inputs. Confirm each against the tool before writing it to
+`/etc/environment`, and prefer asserting it in the playbook — a shared default under a name
+the tool ignores is invisible, because the variable is set, `/etc/environment` looks correct,
+and every user still gets an error. `azure-devops-cli.yml` task 20a is the pattern: run the
+tool as an unprivileged uid with the variable set and assert that the "not configured" error
+is *not* what comes back.
 
 ## Per-tool migration plan
 
@@ -318,7 +340,7 @@ additions:
 | `github-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
 | `opentofu.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
 | `prometheus-cli.yml` | apt | apt, pinned | TBD | Planned |
-| `azure-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
+| `azure-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 2.89.0-1~noble | Verified (localhost) |
 | `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | TBD | Planned |
 | `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | TBD | Planned |
 | `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Verified (localhost) |
@@ -327,7 +349,7 @@ additions:
 | `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/bin` | TBD | Planned |
 | `vault-cli.yml` | brew + tap | HashiCorp apt repo (see note) | TBD | Planned |
 | `jenkins-cli.yml` | system-wide + `$JENKINS_URL` | unchanged shape; URL from a play var | n/a | Planned |
-| `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | TBD | Planned |
+| `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | az 2.89.0-1~noble, ext 1.0.6 | Verified (localhost) |
 
 Versions are deliberately left `TBD`: MIGRATION.md's step 3 requires checking upstream at the
 time each playbook is written, and the [upstream survey](#upstream-survey-2026-08-06) below
@@ -370,6 +392,65 @@ root-owned with no non-world-readable file in the tree, `/var/tmp` holds no stag
 scratch-`HOME` leftovers, and `aws --version` runs under
 `setpriv --reuid=65534 --regid=65534 --clear-groups` with `HOME=/nonexistent`.
 
+`azure-cli.yml` and `azure-devops-cli.yml` are verified against `localhost`, with the same two
+caveats as `aws-cli.yml`: ansible-core 2.20 only, and no SSH/`remote_user` path. Both re-run
+idempotently — `ok=11 changed=2 skipped=4` and `ok=19 changed=4 skipped=7`, every change being
+a scratch `HOME` created and removed. `--check` was exercised first on both and wrote nothing:
+no `.sources` file, no package change, no scratch directories left behind.
+
+`azure-devops-cli.yml` was taken out of wave-4 order, immediately after `azure-cli.yml` (#4),
+its only real dependency. It does not in fact need wave 1's `env-tmpl.sh` decision: its shared
+half is two non-secret variables written straight to `/etc/environment` per A1/A2, and its
+secret (`AZURE_DEVOPS_EXT_PAT`) is simply not touched — there is nothing for a per-user
+template to hold. `jenkins-cli.yml` (#12) still blocks on that decision.
+
+Five findings from these two, in rough order of how much they will affect the remaining
+playbooks:
+
+- **A1 shared-config variable names cannot be taken on trust.** The largest finding, recorded
+  in full under [per-tool identity state](#per-tool-identity-state): `AZURE_DEVOPS_ORG` is not
+  a variable the CLI reads, and neither is the plausible-looking
+  `AZURE_DEFAULTS_ORGANIZATION`. Six rows of that table still carry unverified names.
+- **`az extension add --system` writes under the CLI's bundled Python version**, at
+  `/opt/az/lib/python3.<minor>/site-packages/azure-cli-extensions`, and that minor version
+  moves with the package: `2.86.0-1~noble` bundles Python 3.13, `2.89.0-1~noble` bundles 3.14.
+  An extension installed before such an upgrade is orphaned, silently. `azure-devops-cli.yml`
+  resolves the path from `az extension show --query path` at run time rather than hardcoding
+  it, and because its guard compares the *reported* extension version, an orphan reads as
+  uninstalled and is reinstalled on the next run — one run does the package and the extension,
+  in that order. Any playbook installing a plugin into another tool's private prefix has this
+  shape; resolve the prefix at run time, as `tools/markdownlint.yml` does for npm.
+- **`az` needs a writable `HOME` and forks a telemetry uploader that outlives the command.**
+  A4 already called for the writable `HOME` (`az` aborts with `PermissionError` on
+  `/nonexistent`); what it did not anticipate is that the uploader **recreates the scratch
+  `HOME` after the playbook removes it**, leaving a `nobody`-owned directory in `/var/tmp`.
+  Verified both ways: with `AZURE_CORE_COLLECT_TELEMETRY=0` the directory stays gone, without
+  it the directory is back within seconds. This is not one of A4's discovery variables and
+  setting it does not weaken the test — `AZURE_EXTENSION_SYS_DIR` and `AZURE_CONFIG_DIR` are
+  left unset, which is what A4 is about. Expect the same class of leftover from any tool with
+  opt-out telemetry (`gcloud` in particular).
+- **A5's `deb822_repository` works as planned, with one cosmetic wart.** The inline
+  `Signed-By` route removes the `shell: gpg --dearmor` task entirely, and the repository task
+  now reports `ok` rather than `changed` on every run, which was A5's whole objective. The
+  wart: the module serialises its own `install_python_debian` option into the file as
+  `Install-Python-Debian: no`. apt ignores it — `apt-get update` hits the repository with no
+  warning — but it will appear in all seven A5 playbooks' `.sources` files.
+- **A superseded `.list` and a new `.sources` for the same repository do collide.** Both
+  Azure playbooks remove `/etc/apt/sources.list.d/azure-cli.list`, which the two source
+  playbooks wrote; left in place, apt reads the repository twice and warns that the target is
+  configured multiple times. The stale keyring (`/etc/apt/keyrings/microsoft.gpg`) is left
+  alone as inert. This applies to every migrated vendor-repo playbook whose predecessor has
+  been run on the same host — which is the case on `localhost` for all seven, though not on a
+  fresh `ws01`/`ws02` build. A5's `grep` catches the in-repo convention; it does not catch
+  what is already on the host, so check `ls /etc/apt/sources.list.d/` on the target too.
+
+Also confirmed while writing these: Microsoft publishes `noble` but neither `resolute` nor
+`plucky` for `/repos/azure-cli` (both 404), so A5's codename map is required, not optional —
+and the suite is embedded in the package version (`2.89.0-1~noble`), so the pin is composed
+from version + mapped suite rather than written out, and a suite change carries the pin with
+it. The `azure-cli` package also ships `/etc/bash_completion.d/azure-cli` itself, so `az` does
+**not** belong on the list of tools blocked on the `/etc/profile.d` bootstrap.
+
 `aws-cli.yml` turned up one thing worth carrying forward to the other playbooks: **AWS's
 signing key is expired at the public keyservers.** `keyserver.ubuntu.com` serves a
 self-signature for `FB5DB77FD5C118B80511ADA8A6310ACC4672475C` that `gpg` reports as expired on
@@ -407,8 +488,9 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
 
 - **`/etc/profile.d` bootstrap** — already solved by `_multi-user/tools/modern-cli-tools.yml`
   (which patches `/etc/bash.bashrc`), but it becomes a hard dependency again for any tool here
-  that ships shell completions (`jira`, `gh`, `glab`, `tofu`, `az`). Order those after it, or
-  install completions to `/etc/bash_completion.d` instead, which needs no bootstrap.
+  that ships shell completions (`jira`, `gh`, `glab`, `tofu`). Order those after it, or
+  install completions to `/etc/bash_completion.d` instead, which needs no bootstrap. `az` is
+  off this list: its apt package ships `/etc/bash_completion.d/azure-cli` itself.
 - **`PATH` precedence on hosts that already have Homebrew** — carried over from MIGRATION.md
   and now more acute: four of these tools currently live in `/home/linuxbrew/.linuxbrew/bin`,
   and if `brew shellenv` still wins, users keep silently running the brew copy of `vault` or
@@ -426,4 +508,7 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   in `_multi-user/` maps it onto upstream asset names. Currently a warning, not an error.
   `ansible_facts['architecture']` works on 2.16 as well, so this is a safe repo-wide change
   whenever it is worth doing — it is not specific to `cloud-cli/` and should be done in one
-  pass across `tools/` and `cloud-cli/` together, not tool by tool.
+  pass across `tools/` and `cloud-cli/` together, not tool by tool. New playbooks are written
+  with the non-deprecated spelling from the start rather than adding to the debt, so
+  `azure-cli.yml` and `azure-devops-cli.yml` are already done and that pass has two fewer
+  files to touch.
