@@ -27,9 +27,9 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 |-----------|-------------|
 | [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
 | [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, Krew) |
-| [cloud-cli/](cloud-cli/README.md) | Cloud provider CLI tools (AWS, Azure, GCP, GitHub, GitLab) |
+| [cloud-cli/](cloud-cli/README.md) | `jenkins-cli.yml` only — the other twelve were migrated to [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) and deleted |
 | [gui-tools/](gui-tools/README.md) | GUI tools (VS Code) |
-| [services/](services/README.md) | Self-hosted services (Vault, n8n, Jellyfin, Samba, FreshRSS) |
+| [services/](services/README.md) | Self-hosted services (n8n, Jellyfin, Samba, FreshRSS) |
 
 ## Playbooks (multi-user)
 
@@ -41,7 +41,7 @@ per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every a
 | Directory | Description |
 |-----------|-------------|
 | [_multi-user/tools/](_multi-user/tools/README.md) | Developer tools (bats, gomplate, shellcheck, trivy, hadolint, grype-syft, modern-cli-tools, yq, junit2html, markdownlint, kube-score) |
-| [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws-cli; migration in progress, see [MIGRATION2.md](MIGRATION2.md)) |
+| [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jira, tofu, promtool/amtool, vault; only `jenkins-cli.yml` is left to migrate, see [MIGRATION2.md](MIGRATION2.md)) |
 
 ## Playbooks (personal)
 
@@ -68,22 +68,24 @@ ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice,bob
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 61 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 49 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-23) | 23 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-12) | 12 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
-| [Mixed](#mixed--shared-install-personal-tail-13) | 13 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-13) | 13 | The whole install lands in one `$HOME` or one account |
+| [Effectively shared](#effectively-shared-5) | 5 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Mixed](#mixed--shared-install-personal-tail-12) | 12 | Shared install plus a tail that benefits only the invoker |
+| [Personal only](#personal-only-9) | 9 | The whole install lands in one `$HOME` or one account |
 
-The count grows as `cloud-cli/` is migrated: each `_multi-user/cloud-cli/` playbook is a new
-file, and its legacy counterpart stays in place until the new build is proven. Twelve of the
-thirteen are done — see [MIGRATION2.md](MIGRATION2.md#migration-status). One playbook has
-gone the other way and been deleted rather than migrated: `services/vault.yml`, which
+Nearly half the repo is now multi-user, and the balance moved in one step rather than
+gradually: a migrated playbook is a *new* file, so during a migration both generations are
+counted, and the total drops back when the originals are retired. That has now happened
+twice — `tool/` after MIGRATION.md, and twelve of `cloud-cli/`'s thirteen after
+MIGRATION2.md, leaving only [`cloud-cli/jenkins-cli.yml`](cloud-cli/README.md). One playbook
+went the other way and was deleted rather than migrated: `services/vault.yml`, which
 deployed a Vault *server* that nothing here used.
 
-The 35 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 23 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
@@ -101,19 +103,19 @@ The `cloud-cli/` ones add a rule the `tools/` ones did not need: every tool ther
 identity, so the playbook installs the client and stops. None of them runs `aws configure`,
 `gcloud auth login` or `jira init`, and none writes a secret anywhere.
 
-### Effectively shared (12)
+### Effectively shared (5)
+
+This category used to be mostly `cloud-cli/`; those seven playbooks have been migrated and
+deleted, so what is left is the tail.
 
 | Playbook | Why it is already safe |
 |----------|------------------------|
-| `cloud-cli/{azure,gcloud,github,opentofu,prometheus}-cli.yml` | Vendor apt repository plus apt package |
-| `cloud-cli/aws-cli.yml` | Installs to `/usr/local/bin/aws` — but its `creates:` guard makes `--update` unreachable, which is what `_multi-user/cloud-cli/aws-cli.yml` fixes |
-| `cloud-cli/gitlab-cli.yml` | Upstream `.deb` |
 | `core/nodejs.yml`, `core/disable-rsyslog.yml` | apt / systemd only |
 | `container/devcontainers.yml` | `npm install -g` as root |
 | `gui-tools/vscode.yml` | apt (`vscode_user` is declared but never used) |
 | `services/jellyfin.yml` | apt plus a system service |
 
-### Mixed — shared install, personal tail (13)
+### Mixed — shared install, personal tail (12)
 
 | Playbook | Shared part | Personal part |
 |----------|-------------|---------------|
@@ -121,21 +123,19 @@ identity, so the playbook installs the client and stops. None of them runs `aws 
 | `container/{docker,podman}.yml` | Daemon and packages | Only `$USER` is added to the `docker` group; `~/.bashrc` |
 | `core/golang.yml` | `/usr/local/go` | `PATH` and `GOPATH` in the invoker's `.bashrc` |
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
-| `cloud-cli/jenkins-cli.yml` | `/usr/local/lib/jenkins-cli.jar` and wrapper | The invoker's `JENKINS_URL` is baked into the shared wrapper |
-| `cloud-cli/azure-devops-cli.yml` | `az` via apt | Tasks 7–9 run `become: no`, so the extension and org/project defaults land in the invoker's `~/.azure` |
+| `cloud-cli/jenkins-cli.yml` | `/usr/local/lib/jenkins-cli.jar` and wrapper | The invoker's `JENKINS_URL` is baked into the shared wrapper — the last playbook left in `cloud-cli/` |
 | `services/n8n.yml` | systemd unit | `User={{ target_user }}`; `/var/lib/n8n` owned by the invoker |
 | `services/freshrss.yml` | Container and network | Data directory under `/home/{{ target_user }}` |
 | `services/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
-### Personal only (13)
+### Personal only (9)
 
 Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
 meant to end up. The rest are still mixed in with the shared trees.
 
 | Playbook | Cause |
 |----------|-------|
-| `cloud-cli/{gcx,influx,jira,vault}-cli.yml` | Homebrew as `lookup('env', 'USER')` |
-| `core/homebrew.yml` | The root of that cause — the tree is owned by one account |
+| `core/homebrew.yml` | Owned by one account. It used to be the root cause of four more entries here — `cloud-cli/{gcx,influx,jira,vault}-cli.yml`, all `brew install` as `lookup('env', 'USER')` — which wave 3 of MIGRATION2.md moved to root-owned paths |
 | `_personal/ai-agent/claude-code.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
 | `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
 | `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |

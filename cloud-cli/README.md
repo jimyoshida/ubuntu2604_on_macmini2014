@@ -1,48 +1,35 @@
 # Cloud CLI Tools
 
-## aws-cli.yml
+**Twelve of the thirteen playbooks that lived here have been migrated and deleted.** Their
+successors are in [`_multi-user/cloud-cli/`](../_multi-user/cloud-cli/README.md), which
+installs the same tools to root-owned system paths for **every** account on the box rather
+than for whoever runs the playbook. See [MIGRATION2.md](../MIGRATION2.md) for what changed
+per tool and why.
 
-Install AWS CLI
+| Was here | Now |
+| --- | --- |
+| `aws-cli.yml`, `azure-cli.yml`, `azure-devops-cli.yml`, `gcloud-cli.yml`, `gcx-cli.yml`, `github-cli.yml`, `gitlab-cli.yml`, `influx-cli.yml`, `jira-cli.yml`, `opentofu.yml`, `prometheus-cli.yml`, `vault-cli.yml` | `_multi-user/cloud-cli/<same name>` |
 
-```bash
-ansible-playbook cloud-cli/aws-cli.yml
-```
-
-## azure-cli.yml
-
-Install Azure CLI
-
-```bash
-ansible-playbook cloud-cli/azure-cli.yml
-```
-
-## gcloud-cli.yml
-
-Install Google Cloud CLI
+The migrated playbooks are run differently — they push to a host instead of running on
+`localhost`, so they take an inventory target:
 
 ```bash
-ansible-playbook cloud-cli/gcloud-cli.yml
+cd _multi-user
+ansible-playbook cloud-cli/aws-cli.yml -e host=<inventory host or group>
 ```
 
-## github-cli.yml
-
-Install GitHub CLI
-
-```bash
-ansible-playbook cloud-cli/github-cli.yml
-```
-
-## gitlab-cli.yml
-
-Install GitLab CLI
-
-```bash
-ansible-playbook cloud-cli/gitlab-cli.yml
-```
+The originals are in git history if one is ever needed: `git log --diff-filter=D -- cloud-cli/`.
 
 ## jenkins-cli.yml
 
-Install Jenkins CLI (`jenkins-cli.jar`) from a running Jenkins instance, with a wrapper script at `/usr/local/bin/jenkins-cli`.
+The one playbook not yet migrated. It is still single-user in the way MIGRATION2.md
+describes: it renders the **invoking shell's** `$JENKINS_URL` into
+`/usr/local/bin/jenkins-cli`, a file every account executes, so one person's environment
+silently becomes everyone's default. Migrating it is blocked on the `env-tmpl.sh` decision
+below.
+
+Install Jenkins CLI (`jenkins-cli.jar`) from a running Jenkins instance, with a wrapper
+script at `/usr/local/bin/jenkins-cli`.
 
 ```bash
 # Default (http://localhost:8080)
@@ -64,128 +51,30 @@ proxy_set_header Connection "upgrade";
 
 Without these, the CLI handshake fails with HTTP 400.
 
-## azure-devops-cli.yml
+## env-tmpl.sh
 
-Install Azure DevOps CLI (the `azure-devops` extension for Azure CLI). Installs Azure CLI as a prerequisite.
+A template of the environment variables the playbooks here used to read. It is kept because
+`jenkins-cli.yml` still reads its shell environment, and because
+[MIGRATION2.md's A1](../MIGRATION2.md#policy-amendments) plans to split it in two — the
+shared, non-secret half applied by the playbooks, and a per-user
+`~/.config/cloud-cli/env.sh` at mode `0600` for the tokens. That split is what
+`jenkins-cli.yml` is waiting on.
 
-```bash
-# Basic install
-ansible-playbook cloud-cli/azure-devops-cli.yml
+**None of the migrated playbooks reads this file, or any environment variable.** They take
+endpoint configuration from `vars:` overridable with `-e`, and they set no secret anywhere:
+`/etc/environment` is world-readable, which on a shared workstation is exactly the problem.
+Each account configures its own identity — the commands are printed by each playbook's
+closing summary.
 
-# With default org and project pre-configured
-AZURE_DEVOPS_ORG=https://dev.azure.com/YOUR_ORG \
-AZURE_DEVOPS_PROJECT=YOUR_PROJECT \
-ansible-playbook cloud-cli/azure-devops-cli.yml
-```
+Two entries in the template name variables **no tool actually reads** — they were the old
+playbooks' own inputs, used only to interpolate an instruction into a message. Verified
+against the binaries:
 
-After installation, authenticate and configure defaults:
+| In the template | Reality |
+| --- | --- |
+| `JIRA_URL`, `JIRA_LOGIN` | jira-cli reads neither. Both come from `~/.config/.jira/.config.yml`, written by `jira init`. |
+| `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT` | The extension reads `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION` / `AZURE_DEVOPS_EXT__DEFAULTS_PROJECT` (note the double underscore). |
 
-```bash
-az login
-az devops configure --defaults organization=https://dev.azure.com/YOUR_ORG project=YOUR_PROJECT
-```
-
-## jira-cli.yml
-
-Install Jira CLI (`ankitpokhrel/jira-cli`) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
-
-```bash
-ansible-playbook cloud-cli/jira-cli.yml
-```
-
-After installation, run `jira init` to configure your instance interactively:
-
-```bash
-jira init --installation cloud --server https://YOUR_ORG.atlassian.net --login your@email.com --project YOUR_PROJECT
-```
-
-## gcx-cli.yml
-
-Install gcx (Grafana CLI) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
-
-```bash
-ansible-playbook cloud-cli/gcx-cli.yml
-```
-
-After installation, authenticate with a service account token:
-
-```bash
-gcx login my-grafana --server https://YOUR_INSTANCE.grafana.net --token glsa_xxx --yes
-```
-
-Or set `GRAFANA_SERVER` / `GRAFANA_TOKEN` env vars for CI/CD, then verify with `gcx config check`.
-
-## opentofu.yml
-
-Install OpenTofu
-
-```bash
-ansible-playbook cloud-cli/opentofu.yml
-```
-
-Installs OpenTofu from the official apt repository. The apt package name is `tofu`; the binary is available as `tofu` after installation.
-
-**After installation:**
-
-```bash
-tofu version
-tofu init       # Initialize a working directory
-tofu plan       # Preview infrastructure changes
-tofu apply      # Apply changes
-```
-
-## prometheus-cli.yml
-
-Install promtool and amtool
-
-```bash
-ansible-playbook cloud-cli/prometheus-cli.yml
-```
-
-Installs `promtool` (Prometheus config/rule validation and query CLI) from the Ubuntu apt repository. `amtool` (Alertmanager CLI) is bundled inside the `prometheus-alertmanager` package, so that package is also installed — but the Alertmanager daemon it ships is stopped and disabled immediately after, since this playbook is only for the CLI tools, not a running Alertmanager service.
-
-Usage examples:
-
-```bash
-promtool check config /etc/prometheus/prometheus.yml   # Validate Prometheus config
-promtool check rules /etc/prometheus/rules.yml          # Validate alerting/recording rules
-promtool query instant http://localhost:9090 'up'       # Run an instant query
-amtool check-config /etc/prometheus/alertmanager.yml    # Validate Alertmanager config
-amtool alert query --alertmanager.url=http://localhost:9093  # List active alerts
-amtool silence add alertname=Foo --alertmanager.url=http://localhost:9093  # Create a silence
-```
-
-**Note:** `amtool` commands that talk to a running Alertmanager (`alert`, `silence`) require an Alertmanager instance reachable at `--alertmanager.url` (default `http://localhost:9093`). This playbook does not deploy that service.
-
-## influx-cli.yml
-
-Install influx (InfluxDB v2 CLI) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
-
-```bash
-ansible-playbook cloud-cli/influx-cli.yml
-```
-
-After installation, create a CLI config for your instance:
-
-```bash
-influx config create --config-name default --host-url http://localhost:8086 --org YOUR_ORG --token YOUR_TOKEN --active
-```
-
-Or set `INFLUX_HOST` / `INFLUX_ORG` / `INFLUX_TOKEN` env vars, which `influx` reads natively — no config needed for CI/CD.
-
-## vault-cli.yml
-
-Install Vault CLI (HashiCorp) via Homebrew. Requires Homebrew (`core/homebrew.yml`).
-
-```bash
-ansible-playbook cloud-cli/vault-cli.yml
-```
-
-Installs the `vault` binary only — this playbook does not deploy or start a Vault server. After installation, log in interactively:
-
-```bash
-vault login -address=https://YOUR_VAULT_ADDR:8200
-```
-
-Or set `VAULT_ADDR` / `VAULT_TOKEN` env vars, which `vault` reads natively — no login needed for CI/CD.
-
+The rest are real: `JENKINS_URL`, `GRAFANA_SERVER`, `INFLUX_HOST`, `INFLUX_ORG` and
+`VAULT_ADDR` are all read by their tools, and every `*_TOKEN` / `*_PAT` is a secret that
+belongs in `$HOME` at mode `0600` and nowhere else.

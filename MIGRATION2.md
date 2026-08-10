@@ -3,9 +3,10 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: in progress.** 12 of 13 source playbooks migrated and verified. Waves 2 and 3 are
-complete; only `jenkins-cli.yml` (#12) remains, and it is still blocked on wave 1's
-`env-tmpl.sh` decision. See [Migration status](#migration-status).
+**Status: in progress.** 12 of 13 source playbooks migrated, verified, and **retired** — the
+originals were deleted on 2026-08-10, as `tool/` was before them. Waves 2 and 3 are complete;
+only `jenkins-cli.yml` (#12) remains, still blocked on wave 1's `env-tmpl.sh` decision, and it
+is now the only playbook left in `cloud-cli/`. See [Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
 `_multi-user/tools/` and is complete. Everything there still applies: the
@@ -92,7 +93,13 @@ underscore on `_multi-user/` still means "staging", same as before.
 **Out of scope:**
 
 - `{core,container,ai-agent,services,gui-tools,media}/` — still a separate question.
-- `cloud-cli/*` itself stays in place until the new build is proven, same as `tool/` did.
+- ~~`cloud-cli/*` itself stays in place until the new build is proven, same as `tool/` did.~~
+  **Retired 2026-08-10.** The twelve migrated originals were deleted once their successors
+  were verified, the same way `tool/` was. Only `cloud-cli/jenkins-cli.yml` and
+  `cloud-cli/env-tmpl.sh` remain, both waiting on wave 4. Note what "proven" actually covers
+  before relying on the deletion: `localhost` only, ansible-core 2.20 only, and no
+  SSH/`remote_user` path — `ws01`/`ws02` have never been provisioned by either generation.
+  The originals are recoverable from git history (`git log --diff-filter=D -- cloud-cli/`).
 - Deploying any of the *servers* these CLIs talk to (Jenkins, Vault, InfluxDB, Alertmanager).
   Every playbook here installs a client only, and that stays true after migration.
 
@@ -396,9 +403,15 @@ additions:
 | `jenkins-cli.yml` | system-wide + `$JENKINS_URL` | unchanged shape; URL from a play var | n/a | Planned |
 | `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | az 2.89.0-1~noble, ext 1.0.6 | Verified (localhost) |
 
-Versions are deliberately left `TBD`: MIGRATION.md's step 3 requires checking upstream at the
-time each playbook is written, and the [upstream survey](#upstream-survey-2026-08-06) below
-will be stale by then.
+Every row but `jenkins-cli.yml` is also **retired**: the source playbook named in the first
+column no longer exists, having been deleted on 2026-08-10 once its successor was verified.
+The column is kept because it is what each migrated playbook is a successor *to*, and its
+header comment still refers to it by name. `git log --diff-filter=D -- cloud-cli/` recovers
+any of them.
+
+The `TBD` pins the wave-3 rows once carried are filled in above. Leaving them `TBD` until
+write time was deliberate: MIGRATION.md's step 3 requires checking upstream when the playbook
+is written, and the [upstream survey](#upstream-survey-2026-08-06) below is stale by then.
 
 `aws-cli.yml` was taken first, ahead of its position in wave 2. Nothing depends on it and it
 depends on none of wave 1's three decisions — it sets no environment variable, shares no vendor

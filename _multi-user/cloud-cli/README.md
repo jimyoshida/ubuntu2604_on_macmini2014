@@ -32,6 +32,15 @@ directory carries an identity:
    path — with discovery variables left unset so that default discovery is what gets
    tested.
 
+Each section below has a **"What changed versus `cloud-cli/<tool>.yml`"** paragraph. Those
+source playbooks no longer exist: they were retired on 2026-08-10 once their successors here
+were verified, leaving only `cloud-cli/jenkins-cli.yml`, which is not migrated yet. Read the
+comparison as history — `git log --diff-filter=D -- cloud-cli/` brings any of them back.
+
+The `ansible-playbook cloud-cli/<tool>.yml` commands in this file are relative to
+`_multi-user/`, which is where they must be run from, so they refer to the playbooks here and
+not to the retired ones.
+
 ## aws-cli.yml
 
 Installs the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/) from AWS's
