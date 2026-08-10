@@ -3,11 +3,10 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: in progress.** 12 of 13 source playbooks migrated, verified, and **retired** — the
-originals were deleted on 2026-08-10, as `tool/` was before them. Waves 2 and 3 are complete;
-only `jenkins-cli.yml` (#12) remains, and it is now the only file left in `cloud-cli/`. It is
-no longer blocked: wave 1's last open decision, the `env-tmpl.sh` split, was settled on
-2026-08-10 by deleting that file and documenting the setup in the READMEs instead. See
+**Status: complete.** All 13 source playbooks are migrated and verified. Twelve of the
+originals were deleted on 2026-08-10, as `tool/` was before them; `cloud-cli/jenkins-cli.yml`
+is the last one still in place. Wave 1's three decisions all landed (the `env-tmpl.sh` split
+last, by deleting the file), and waves 2, 3 and 4 are done. See
 [Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
@@ -304,7 +303,7 @@ order](MIGRATION.md#install-mechanism-decision-order).
 | 9 | `gcx-cli.yml` | **brew + tap** | (3) GitHub release tarball → `/usr/local/bin/gcx` | de-brew; `gcx_<v>_checksums.txt`; drop the `GRAFANA_SERVER` env lookup per A2 |
 | 10 | `influx-cli.yml` | **brew** | (3) `dl.influxdata.com` tarball → `/usr/local/bin/influx` | de-brew; **not on GitHub releases** — see note; `.sha256` sibling has a path-prefixed entry |
 | 11 | `vault-cli.yml` | **brew + tap** | (2) HashiCorp apt repo | de-brew; **overlaps `services/vault.yml`** — see note |
-| 12 | `jenkins-cli.yml` | already system-wide | (3)-ish, unchanged shape | A2: `jenkins_url` becomes a play var; wrapper reads a shared default from `/etc`, not from install-time `$JENKINS_URL`; unprivileged smoke test instead of `become: no` |
+| 12 | `jenkins-cli.yml` | jar fetched from a **running Jenkins** | (3) pinned jar from `repo.jenkins-ci.org` | "already system-wide" was too generous — see note; A2: `jenkins_url` becomes a play var; wrapper reads a shared default from `/etc`, not from install-time `$JENKINS_URL`; unprivileged smoke test instead of `become: no` |
 | 13 | `azure-devops-cli.yml` | apt `az` + **per-user extension** | (2) + `az extension add --system` | the real work of this migration — see note |
 
 ### Notes on the four that need a decision
@@ -399,8 +398,11 @@ Four waves, each ending in a commit and a status-table update:
    `/home/linuxbrew` into root-owned system paths. Each was an independent tool with an
    independent version pin, and the wave needed no shared decision that wave 2 had not
    already settled.
-4. **The configured ones — #12–#13.** Both depend on wave 1's decisions and on wave 2 (#13
-   needs `azure-cli.yml` finished; #12 needs the shared-config mechanism).
+4. **The configured ones — #12–#13. Done.** Both depend on wave 1's decisions and on wave 2
+   (#13 needs `azure-cli.yml` finished; #12 needs the shared-config mechanism). They ran at
+   opposite ends of the migration: #13 was pulled forward to sit beside `azure-cli.yml`, its
+   only real dependency, while #12 waited for the `env-tmpl.sh` decision and went last of all
+   thirteen.
 
 ## Procedure
 
@@ -437,7 +439,7 @@ additions:
 | `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | 1.0.0 | Verified (localhost) |
 | `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/lib` + symlink | 2.8.0 | Verified (localhost) |
 | `vault-cli.yml` | brew + tap | HashiCorp apt repo, A5 cleanup | 2.0.4-1 | Verified (localhost) |
-| `jenkins-cli.yml` | system-wide + `$JENKINS_URL` | unchanged shape; URL from a play var | n/a | Planned |
+| `jenkins-cli.yml` | jar from a running Jenkins + `$JENKINS_URL` | pinned jar from `repo.jenkins-ci.org` + checksum; URL from a play var | 2.576 | Verified (localhost) |
 | `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | az 2.89.0-1~noble, ext 1.0.6 | Verified (localhost) |
 
 Every row but `jenkins-cli.yml` is also **retired**: the source playbook named in the first
@@ -753,6 +755,79 @@ Smaller things, recorded because the next playbook will meet them:
 - **`gcx` does not recreate its scratch `HOME` after removal**, unlike `az`. Its telemetry
   (`GCX_TELEMETRY`) writes `~/.local/state/gcx/device-id` synchronously, so the directory stays
   gone. Verified rather than assumed, which is the point of the `az` finding.
+
+### Wave 4, second half (`jenkins-cli`) — and the plan's worst mis-classification
+
+Verified against `localhost`, `failed=0`, same caveats as the rest: ansible-core 2.20 only,
+local connection. Re-runs are idempotent (`ok=16 changed=2`, both the scratch `HOME`), and
+`--check` is `failed=0` both on a host with the pinned version and on one without.
+
+**"Already system-wide" was the wrong reading of this playbook, and the [per-tool
+plan](#per-tool-migration-plan) carried that error from the first draft to the last wave.**
+The row for #12 said the target mechanism was "(3)-ish, unchanged shape" and the work was the
+`JENKINS_URL` A2 fix. That is true of the paths it writes, and it is what you conclude from
+reading its task list. What it misses is task 2:
+
+```yaml
+url: "{{ jenkins_url }}/jnlpJars/jenkins-cli.jar"
+```
+
+The CLI was downloaded **from a running Jenkins**. Three consequences, none of which the plan
+records:
+
+- A host with no reachable Jenkins **cannot install the CLI at all**. For a playbook whose
+  job is provisioning a fresh workstation, that is not a wart; it is the playbook not working.
+- The version installed is whatever server answered — unpinnable by construction. This
+  workstation had `2.541.3`, from a server that happened to be up in May.
+- Nothing verified the bytes, and nothing could: there is no published checksum for
+  `/jnlpJars/jenkins-cli.jar`.
+
+The fix is a different source, not a different shape: `repo.jenkins-ci.org` publishes
+`org.jenkins-ci.main:cli` per release with a `.sha256` sibling, so the jar becomes pinned,
+verified, and installable on a host that has never heard of a Jenkins server. **The general
+lesson is the same one the A1 variable names taught, one level up: a source playbook's
+*mechanism* is no more trustworthy than its variable names.** Both were classified by reading
+what the playbook said it did.
+
+The trade-off this introduces, stated because it is real: Jenkins' own documentation says to
+fetch the jar from your server so CLI and server versions match. Pinning decouples them. The
+CLI is tolerant in practice, and the version is a play var to be set near the server's — but
+it is a deliberate divergence from vendor guidance, unlike anything else in this directory.
+
+Confirmed before adopting it: the published artifact is the same shaded, standalone-runnable
+jar the server serves — 11.7MB, `Main-Class: hudson.cli.CLI`, `Implementation-Version: 2.576`,
+sha256 matching the published `.sha256`. Not an assumption worth skipping: Maven repositories
+usually publish thin jars, and `cli-2.576-jar-with-dependencies.jar` is a 404 here, so the
+plain artifact being the fat one is the surprise, not the default.
+
+Three mechanics for the next playbook of this shape:
+
+- **`java -jar jenkins-cli.jar -help` hangs.** It does not print usage and exit. A smoke test
+  built on it blocks the play forever, and the source playbook's `jenkins-cli help` (with
+  `failed_when: false`, so it asserted nothing) was one listening socket away from doing
+  exactly that. The check here aims a real subcommand at a port nothing listens on and asserts
+  the connection failure, with `timeout` and `stdin: ""` as belt and braces.
+- **A4 has no tier 1 or tier 2 for this tool.** Every subcommand is executed by the server,
+  and the command list itself is fetched from it, so there is no offline path to exercise.
+  What remains provable is the whole local stack up to the network boundary — JVM, jar,
+  shaded websocket client, argument parsing — failing *only* because nothing answers. A
+  missing JRE, an unreadable jar or a truncated download each fail earlier and differently.
+- **`repo.jenkins-ci.org` 302s to a presigned object-store URL.** `get_url` follows redirects,
+  so the playbook is fine; a bare `curl` without `-L` writes a **zero-byte file and exits 0**,
+  which then "fails" its checksum in a way that looks like a bad pin. Cost twenty minutes
+  while researching this.
+
+The version guard reads `Implementation-Version` from the jar's own `META-INF/MANIFEST.MF`.
+Worth contrasting with `influx-cli.yml`, which needs a versioned directory and a symlink for
+the same job: that is a workaround for binaries upstream ships unstamped, not the house style.
+**Where an artifact describes itself, ask it.**
+
+`JENKINS_URL` is the only A1 shared-config value any playbook here actually writes, to
+`/etc/profile.d/jenkins-cli.sh`. It is written conditionally (`: "${JENKINS_URL:=...}"`) so an
+account that exports its own keeps it, and the wrapper carries the same value as a fallback
+because profile.d does not apply to cron or scripts. Both are rendered from one play var in
+one run, so they cannot drift — verified by re-running with `-e jenkins_url=...` and watching
+both files change, and the jar not.
 
 ## Upstream survey (2026-08-06)
 

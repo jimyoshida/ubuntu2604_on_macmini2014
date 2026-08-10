@@ -22,10 +22,19 @@ The originals are in git history if one is ever needed: `git log --diff-filter=D
 
 ## jenkins-cli.yml
 
-The one playbook not yet migrated. It is still single-user in the way MIGRATION2.md
-describes: it renders the **invoking shell's** `$JENKINS_URL` into
-`/usr/local/bin/jenkins-cli`, a file every account executes, so one person's environment
-silently becomes everyone's default.
+**Superseded by [`_multi-user/cloud-cli/jenkins-cli.yml`](../_multi-user/cloud-cli/README.md#jenkins-cliyml),
+which is verified. Use that one.** This copy is kept only until the new build is proven on a
+real host, exactly as the other twelve were.
+
+Two reasons not to run this one:
+
+- It renders the **invoking shell's** `$JENKINS_URL` into `/usr/local/bin/jenkins-cli`, a
+  file every account executes, so one person's environment silently becomes everyone's
+  default.
+- It downloads `jenkins-cli.jar` **from a running Jenkins**, so it cannot install anything on
+  a host with no Jenkins reachable, installs whatever version that server happens to be, and
+  verifies nothing. The successor takes a pinned, checksum-verified jar from
+  `repo.jenkins-ci.org` instead.
 
 Install Jenkins CLI (`jenkins-cli.jar`) from a running Jenkins instance, with a wrapper
 script at `/usr/local/bin/jenkins-cli`.

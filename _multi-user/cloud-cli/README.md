@@ -96,9 +96,11 @@ playbooks' own inputs, used only to interpolate an instruction into a message.
 | ~~`AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT`~~ | `az devops` | — | **not read.** Nor is `AZURE_DEFAULTS_ORGANIZATION`. Use the `EXT__DEFAULTS` names above. |
 | ~~`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`~~ | `gcloud` | — | **not read by the CLI.** With `GOOGLE_CLOUD_PROJECT` set, `gcloud config get project` still prints `(unset)`; `CLOUDSDK_CORE_PROJECT` works. Google's *client libraries* read `GOOGLE_CLOUD_PROJECT`, which is where the confusion comes from. |
 
-`JENKINS_URL`, `JENKINS_USER_ID` and `JENKINS_API_TOKEN` are not in this table because
-`jenkins-cli.yml` has not been migrated yet — see
-[`cloud-cli/README.md`](../../cloud-cli/README.md#per-user-setup).
+`jenkins-cli` is the one exception to "no playbook here sets an environment variable":
+`JENKINS_URL` is shared, non-secret endpoint configuration, and
+[`jenkins-cli.yml`](#jenkins-cliyml) writes it to `/etc/profile.d/jenkins-cli.sh` from a play
+var. Its two credential variables, `JENKINS_USER_ID` and `JENKINS_API_TOKEN`, are per-account
+and are not written anywhere — both are read by the wrapper from your own environment.
 
 ---
 
@@ -581,6 +583,97 @@ influx config list                           # confirm which config is active
 `INFLUX_HOST` and `INFLUX_ORG` are shared, non-secret configuration and the CLI does read
 them (verified), but no playbook sets them: there is no site-wide InfluxDB here.
 `INFLUX_TOKEN` is a secret and must never go in `/etc/environment`.
+
+## jenkins-cli.yml
+
+Installs the [Jenkins CLI](https://www.jenkins.io/doc/book/managing/cli/) from the Jenkins
+project's own Maven repository.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/jenkins-cli.jar` | the CLI, root-owned, mode 0644 |
+| `/usr/local/bin/jenkins-cli` | wrapper script |
+| `/usr/local/bin/jenkins` | alias symlink to the wrapper |
+| `/etc/profile.d/jenkins-cli.sh` | the shared, non-secret default `JENKINS_URL` |
+
+No architecture map, unlike everything else here: a jar is a jar. The JRE
+(`default-jre-headless`) is the only native dependency and comes from apt.
+
+**What changed versus `cloud-cli/jenkins-cli.yml`.** MIGRATION2.md filed this playbook under
+one defect — the invoking shell's `$JENKINS_URL` baked into a file every account executes —
+but the bigger one is where the jar came from:
+
+- **The jar is no longer downloaded from a running Jenkins.** The source playbook fetched
+  `{{ jenkins_url }}/jnlpJars/jenkins-cli.jar`, so a host with no reachable Jenkins **could
+  not install the CLI at all** — fatal when provisioning a fresh workstation — and the
+  version installed was whatever server happened to be up, unpinned and unverified. This
+  workstation had `2.541.3` by that route.
+- **Pinned and checksum-verified** (`jenkins_cli_version`) from
+  `repo.jenkins-ci.org/releases/org/jenkins-ci/main/cli/<version>/`, where each release
+  publishes the jar with a `.sha256` sibling.
+- **`jenkins_url` is a play var** (A2), rendered into both the wrapper's fallback and the
+  `/etc/profile.d` default in the same run, so the two cannot drift.
+- **The smoke test is real**, where the source playbook ran `jenkins-cli help` with
+  `failed_when: false` — which asserts nothing at all.
+
+Overrides:
+
+```bash
+ansible-playbook cloud-cli/jenkins-cli.yml -e host=ws01 \
+  -e jenkins_url=http://ci.example.com:8080 -e jenkins_cli_version=2.576
+```
+
+Changing `jenkins_url` re-renders the wrapper and the profile drop-in without touching the
+jar, so pointing a fleet at a new Jenkins is a cheap re-run.
+
+### Pinning a jar the server also serves
+
+Jenkins' documentation tells you to fetch the CLI from your own server so that CLI and server
+versions match, and pinning a Maven artifact deliberately decouples them. The CLI is tolerant
+in practice, but **set `jenkins_cli_version` near your server's Jenkins version** rather than
+leaving it at whatever this file last said.
+
+The published artifact is the same shaded, standalone-runnable jar the server hands out —
+verified before adopting it: 11.7MB, `Main-Class: hudson.cli.CLI`, `Implementation-Version`
+matching the release, and its sha256 matching the published one.
+
+Two mechanics worth knowing if you touch this playbook:
+
+- `repo.jenkins-ci.org` answers with a 302 to a presigned object-store URL. `get_url` follows
+  redirects, but a bare `curl` without `-L` **silently writes a zero-byte file** here.
+- The version guard reads `Implementation-Version` out of the jar's own
+  `META-INF/MANIFEST.MF` rather than encoding the version in a path. Where an artifact
+  describes itself, ask it; `influx-cli.yml` needs its versioned directory only because
+  upstream ships those binaries unstamped.
+
+### The smoke test aims at a closed port
+
+Every `jenkins-cli` subcommand is executed by the server, and the command list itself is
+fetched from it, so there is no offline code path to exercise — A4's tiers 1 and 2 do not
+exist for this tool. What the check asserts instead is that an arbitrary uid gets all the way
+to the network boundary: JVM starts, jar loads, the shaded websocket client initialises,
+arguments parse, a connection is attempted, and it fails **only** because nothing is
+listening on `127.0.0.1:1`. A missing JRE, an unreadable jar or a truncated download all fail
+earlier and differently, which is exactly what this distinguishes.
+
+**Do not build a smoke test on `-help`: it hangs.** It does not print usage and exit, so any
+check using it blocks the play indefinitely. Every invocation in this playbook is wrapped in
+`timeout` and given `stdin: ""` for the same reason.
+
+### Per-user setup
+
+The playbook configures no identity. Each account exports, for itself:
+
+```bash
+export JENKINS_USER_ID=<user>
+export JENKINS_API_TOKEN=<api-token>   # Jenkins > Configure > API Token
+jenkins who-am-i                       # confirm which account is active
+```
+
+Keep them in `~/.config/cloud-cli/env.sh` at mode `0600` as described under
+[Environment variables](#environment-variables). `JENKINS_API_TOKEN` is a secret and must
+never go in `/etc/environment` or `/etc/profile.d`, both of which are world-readable.
+`JENKINS_URL` is not a secret and *is* set there — exporting your own overrides it.
 
 ## jira-cli.yml
 
