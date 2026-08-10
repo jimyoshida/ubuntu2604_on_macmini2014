@@ -638,44 +638,48 @@ Version override:
 ansible-playbook cloud-cli/vault-cli.yml -e host=ws01 -e vault_cli_version=2.0.4-1
 ```
 
-### Read this before running it on a Vault server
+### Read this before running it on a host that also serves Vault
 
-`vault` is **one package** for client and server. There is no CLI-only package, so this
-playbook installs the same package `services/vault.yml` does. On a host running both:
+`vault` is **one package** for client and server. There is no CLI-only package, so on a
+host that also runs a Vault server:
 
 - Bumping `vault_cli_version` upgrades the server's binary too. The running process keeps
-  executing the old code — after an upgrade here, `dpkg-query` reported `2.0.4-1` while the
-  server still reported `2.0.0` on its status endpoint. The new binary takes effect at the
-  next `vault.service` restart, which for file storage means unsealing again.
-- `/etc/vault.d/vault.hcl` is a dpkg conffile that `services/vault.yml` rewrites. The
-  upgrade keeps the modified file (ansible's `apt` module passes `force-confold`).
+  executing the old code — during this migration, `dpkg-query` reported `2.0.4-1` while the
+  running server still reported `2.0.0` on its status endpoint. The new binary takes effect
+  at the next `vault.service` restart, which for file storage means unsealing again.
+- `/etc/vault.d/vault.hcl` is a dpkg conffile. An upgrade keeps a locally modified copy
+  (ansible's `apt` module passes `force-confold`), so a server's configuration survives.
 - **The unit is left alone.** Unlike `prometheus-cli.yml`, which must disable the
   Alertmanager daemon its package enables, HashiCorp's `postinst` does not enable or start
-  `vault.service` — it only runs `daemon-reload`. If the unit is enabled on your host,
-  `services/vault.yml` enabled it deliberately, and turning it off would be this playbook
-  breaking another one's server. Task 19 reports the state instead of changing it.
+  `vault.service` — it only runs `daemon-reload`. Anything other than `disabled` was put
+  there by something else on the host, and turning off a server this playbook did not start
+  is not a CLI installer's business. Task 19 reports the state instead of changing it.
+
+This repo ships no Vault server playbook: [`services/vault.yml`](../../services/README.md)
+was deleted rather than migrated, along with the local server it had deployed.
 
 A "client-only" install still lays down server scaffolding, because the package does:
 a `vault` system user, a self-signed cert under `/opt/vault/tls`, `/opt/vault/data`, a
 `vault.service` unit, and `setcap cap_ipc_lock=+ep` on the binary. All of it is inert until
 something enables the unit.
 
-### It supersedes `services/vault.yml`'s apt source
+### It supersedes the deleted `services/vault.yml`'s apt source
 
 Task 3 removes `/etc/apt/sources.list.d/apt_releases_hashicorp_com.list`, which
-`services/vault.yml` writes for this same repository. Left beside the new `.sources` file,
+`services/vault.yml` wrote for this same repository. Left beside the new `.sources` file,
 apt reads the repository twice and warns that the target is configured multiple times. The
 old keyring (`/etc/apt/keyrings/hashicorp-archive-keyring.asc`) is left alone — it holds
 the same key, byte for byte, and an unused keyring is inert.
 
-`services/vault.yml` is out of scope for this migration and still writes that `.list` when
-it runs, so on a host that runs both, **run this playbook second** — or migrate
-`services/vault.yml`, which is the real fix.
+The task stays although the playbook that wrote the file is gone: every host it ran on
+still has the file, and nothing else will remove it. Same shape as `github-cli.yml` and
+`azure-cli.yml` clearing their own predecessors' `.list` files.
 
 The suite is mapped to `noble` for the same reason. HashiCorp's Artifactory does publish
 `resolute` (contrary to what MIGRATION2.md originally recorded), with identical content,
-but `services/vault.yml` configures the repository with `noble` and two entries for one URI
-under different suites are two repositories to apt.
+but the deleted playbook configured the repository with `noble`, and two entries for one
+URI under different suites are two repositories to apt — so `noble` keeps the two agreeing
+on hosts task 3 has not yet reached.
 
 ### The signing key is fetched, not pinned
 
@@ -701,8 +705,8 @@ vault token lookup           # confirm which identity is active
 ```
 
 `VAULT_ADDR` is shared, non-secret configuration and the CLI does read it, but no playbook
-sets it: `services/vault.yml`'s habit of appending it to one account's `~/.bashrc` is
-exactly the single-user breakage this migration removes. `VAULT_TOKEN` is a secret and must
+sets it: the deleted `services/vault.yml`'s habit of appending it to one account's
+`~/.bashrc` is exactly the single-user breakage this migration removes. `VAULT_TOKEN` is a secret and must
 never go in `/etc/environment`.
 
 ## Replacing the Homebrew installs

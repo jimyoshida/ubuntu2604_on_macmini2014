@@ -150,8 +150,9 @@ Two mechanics that bit `tool/` and will bite harder here:
 
 **A5. Vendor apt repositories get one shared convention. (amends point 1)**
 Seven of thirteen tools install from a vendor apt repository, and three of those repositories
-are already configured by playbooks outside this directory (`services/vault.yml` adds the
-HashiCorp repo; `core/` and `container/` add others). Every migrated playbook must therefore:
+are already configured by playbooks outside this directory (`services/vault.yml` added the
+HashiCorp repo before it was deleted — its `.list` survives on hosts it ran on; `core/` and
+`container/` add others). Every migrated playbook must therefore:
 
 - Use `ansible.builtin.deb822_repository` (added in ansible-core 2.15, so it clears the 2.16
   floor; the module handles `Signed-By` inline) instead of `get_url` + a `shell`
@@ -304,6 +305,19 @@ Whichever is chosen, check on the target whether HashiCorp's `.deb` enables `vau
 install. If it does, a CLI-only playbook must stop and disable it, exactly as
 `prometheus-cli.yml` already does for `prometheus-alertmanager`. Also note the HashiCorp repo
 publishes for `noble`, not `resolute` — the A5 codename map is required, not optional.
+
+> **Outcome (2026-08-10).** (a), and then the collision dissolved: `services/vault.yml` was
+> **deleted** rather than migrated, together with the local Vault server it had deployed
+> (service stopped and disabled; `/opt/vault`, `/etc/vault.d`, the `vault` system user and
+> the `~/.bashrc` block removed; storage deleted without a backup). It deployed a server
+> nothing in this repo used, in exactly the shape this migration removes — a `0.0.0.0:8200`
+> listener with `tls_disable = 1`, and `VAULT_ADDR` appended to whoever ran it — and
+> deploying servers is out of scope here, so there was nothing to migrate it into.
+> `vault-cli.yml` is now the only Vault playbook in the repo and keeps both its `noble` pin
+> and its removal of the old `.list`, because hosts the deleted playbook ran on still carry
+> that file. The two premises in the paragraph above are both wrong: the `.deb` does **not**
+> enable `vault.service`, and HashiCorp does publish `resolute`. See
+> [wave 3](#wave-3-jira-cli-gcx-cli-influx-cli-vault-cli).
 
 **`azure-devops-cli.yml` (#13) — the one genuinely broken install.** `az extension add`
 without `--system` writes to `$HOME/.azure/cliextensions`, so today only the account that ran
@@ -606,9 +620,10 @@ index, generated in the same run as `noble` and carrying the same 184 `vault` ve
 `vault-cli.yml` keeps it and maps to `noble` anyway, because `services/vault.yml` configures
 this same repository with `noble`, and two entries for one URI under different suites are two
 repositories to apt: both get downloaded, and they can resolve to different candidates.
-Matching the suite is what A5's "do not fight" rule means when the other playbook is still
-live. Worth restating as a rule: **check the vendor's `dists/` yourself; a 404 recorded during
-planning may be a suite the vendor has since added.**
+Matching the suite is what A5's "do not fight" rule means. It still holds now that
+`services/vault.yml` has been deleted, because the `.list` it wrote survives on every host it
+ran on. Worth restating as a rule: **check the vendor's `dists/` yourself; a 404 recorded
+during planning may be a suite the vendor has since added.**
 
 **The HashiCorp `.deb` does not enable `vault.service` — so `vault-cli.yml` does not disable
 it.** The plan called for the `prometheus-cli.yml` treatment (stop and disable) if the package
@@ -616,9 +631,9 @@ enabled its daemon. It does not: `postinst` only runs `daemon-reload`. What it *
 worth knowing for a "client-only" install — `preinst` creates a `vault` system user, and
 `postinst` generates a self-signed cert under `/opt/vault/tls`, creates `/opt/vault/data`,
 ships `vault.service`, and applies `setcap cap_ipc_lock=+ep` to the binary. That scaffolding is
-inert until something enables the unit, and on a host where the unit *is* enabled,
-`services/vault.yml` enabled it deliberately; disabling it there would be this playbook
-breaking another one's server. Task 19 reports the unit state instead of changing it.
+inert until something enables the unit, and where the unit *is* enabled something outside this
+playbook is serving Vault on the host; disabling it there would be a CLI installer taking down
+a server it did not start. Task 19 reports the unit state instead of changing it.
 
 Two consequences of `vault` being one package for both client and server, observed on
 `localhost`, which already ran `services/vault.yml`:
@@ -646,8 +661,21 @@ run and only its fingerprint is asserted — the `github-cli` form, not the `azu
 is byte-identical to the copy `services/vault.yml` already installed at
 `/etc/apt/keyrings/hashicorp-archive-keyring.asc`; the new `.sources` uses the module's own
 `/etc/apt/keyrings/hashicorp.asc`, and the superseded `.list` is removed, so `apt-get update`
-reads the repository once. Re-running `services/vault.yml` will recreate its `.list` and the
-duplicate-target warning with it — the fix is to migrate that playbook, not to fight it.
+reads the repository once. At the time of the run, re-running `services/vault.yml` would have
+recreated that `.list` and the duplicate-target warning with it; that playbook has since been
+deleted, so the removal task is now plain cleanup of a predecessor's leavings, exactly like
+`github-cli.yml`'s and `azure-cli.yml`'s.
+
+**Postscript (2026-08-10): `services/vault.yml` was deleted, and the local Vault server with
+it.** The server was stopped and disabled and its storage removed without a backup. Two
+observations above are historical rather than current as a result: the local host no longer
+runs a Vault server, and there is no server playbook in the repo for `vault-cli.yml` to
+coexist with. What does not change is `vault-cli.yml` itself — the `noble` pin and the `.list`
+removal both stay, because the file the deleted playbook wrote survives on every host it ran
+on. See the [outcome note on #11](#notes-on-the-four-that-need-a-decision). It is also the
+cleanest confirmation of the client/server split this playbook was built around: with the
+server gone, `vault-cli.yml` re-runs `failed=0` and its summary flips from
+`vault.service is enabled` to `disabled`, which is what a client-only host should look like.
 
 Smaller things, recorded because the next playbook will meet them:
 
@@ -712,11 +740,13 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   not perform.
 - **`cloud-cli/env-tmpl.sh` successor** — see [A1](#policy-amendments) and the note under the
   identity-state table. Blocks wave 4.
-- **Repo-wide vendor-repo ownership** — `services/vault.yml` is one instance of a broader
-  question: several directories add apt repositories independently, with no shared convention
-  for keyring paths or `sources.list.d` filenames. A5 makes the migrated playbooks internally
-  consistent; making them consistent with `core/`, `container/`, and `services/` is a separate
-  cleanup that this migration should document but not attempt.
+- **Repo-wide vendor-repo ownership** — several directories add apt repositories
+  independently, with no shared convention for keyring paths or `sources.list.d` filenames.
+  A5 makes the migrated playbooks internally consistent; making them consistent with
+  `core/`, `container/` and `gui-tools/` is a separate cleanup that this migration should
+  document but not attempt. One instance is closed rather than solved: `services/vault.yml`
+  was the HashiCorp case, and it was deleted (see #11's outcome note), so `vault-cli.yml`
+  now owns that repository alone.
 - **Bare `ansible_architecture` is deprecated.** ansible-core 2.20 warns on every run that
   reads it (`Use ansible_facts["fact_name"] (no ansible_ prefix) instead`), and every playbook
   in `_multi-user/` maps it onto upstream asset names. Currently a warning, not an error.

@@ -68,28 +68,38 @@ ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice,bob
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 51 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 61 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
-| [Multi-user](#multi-user-12) | 12 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
+| [Multi-user](#multi-user-23) | 23 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
 | [Effectively shared](#effectively-shared-12) | 12 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
-| [Mixed](#mixed--shared-install-personal-tail-14) | 14 | Shared install plus a tail that benefits only the invoker |
+| [Mixed](#mixed--shared-install-personal-tail-13) | 13 | Shared install plus a tail that benefits only the invoker |
 | [Personal only](#personal-only-13) | 13 | The whole install lands in one `$HOME` or one account |
 
-The 36 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The count grows as `cloud-cli/` is migrated: each `_multi-user/cloud-cli/` playbook is a new
+file, and its legacy counterpart stays in place until the new build is proven. Twelve of the
+thirteen are done — see [MIGRATION2.md](MIGRATION2.md#migration-status). One playbook has
+gone the other way and been deleted rather than migrated: `services/vault.yml`, which
+deployed a Vault *server* that nothing here used.
+
+The 35 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
 because it belongs to accounts named explicitly rather than to whoever is logged in.
 
-### Multi-user (12)
+### Multi-user (23)
 
-All of `_multi-user/tools/` (11) and `_multi-user/cloud-cli/aws-cli.yml`. Each uses
+All of `_multi-user/tools/` (11) and all of `_multi-user/cloud-cli/` (12). Each uses
 `hosts: "{{ host }}"`, installs to root-owned system paths, puts shell configuration in
-`/etc/profile.d` or `/etc/environment`, pins its version in `vars:`, and ends with a
-`setpriv --reuid=65534` task that proves the tool works for an account that is not the
-connecting user.
+`/etc/profile.d`, `/etc/bash_completion.d` or `/etc/environment`, pins its version in
+`vars:`, and ends with a `setpriv --reuid=65534` task that proves the tool works for an
+account that is not the connecting user.
+
+The `cloud-cli/` ones add a rule the `tools/` ones did not need: every tool there carries an
+identity, so the playbook installs the client and stops. None of them runs `aws configure`,
+`gcloud auth login` or `jira init`, and none writes a secret anywhere.
 
 ### Effectively shared (12)
 
@@ -103,7 +113,7 @@ connecting user.
 | `gui-tools/vscode.yml` | apt (`vscode_user` is declared but never used) |
 | `services/jellyfin.yml` | apt plus a system service |
 
-### Mixed — shared install, personal tail (14)
+### Mixed — shared install, personal tail (13)
 
 | Playbook | Shared part | Personal part |
 |----------|-------------|---------------|
@@ -113,7 +123,6 @@ connecting user.
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
 | `cloud-cli/jenkins-cli.yml` | `/usr/local/lib/jenkins-cli.jar` and wrapper | The invoker's `JENKINS_URL` is baked into the shared wrapper |
 | `cloud-cli/azure-devops-cli.yml` | `az` via apt | Tasks 7–9 run `become: no`, so the extension and org/project defaults land in the invoker's `~/.azure` |
-| `services/vault.yml` | Vault service and `/etc/vault.d` | `VAULT_ADDR` in `~/.bashrc` |
 | `services/n8n.yml` | systemd unit | `User={{ target_user }}`; `/var/lib/n8n` owned by the invoker |
 | `services/freshrss.yml` | Container and network | Data directory under `/home/{{ target_user }}` |
 | `services/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |

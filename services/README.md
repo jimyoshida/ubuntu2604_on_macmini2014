@@ -1,37 +1,30 @@
 # Services
 
-## vault.yml
+## vault.yml — removed 2026-08-10
 
-Install HashiCorp Vault OSS
+There is no Vault playbook here any more, and no Vault server on this workstation. The
+service was stopped and disabled and `/opt/vault` (file storage and the self-signed
+certificate), `/etc/vault.d`, the `vault` system user and the `VAULT_ADDR` block in
+`~/.bashrc` were all deleted. The storage was **not** backed up, so nothing is left to
+restore: a future Vault would start from `vault operator init`.
 
-```bash
-ansible-playbook services/vault.yml
-```
+The `vault` **package** is still installed, because the same package is also the CLI. The
+client half is owned by
+[`_multi-user/cloud-cli/vault-cli.yml`](../_multi-user/cloud-cli/README.md#vault-cliyml),
+which installs `/usr/bin/vault` system-wide, configures no identity, and deliberately
+leaves `vault.service` alone.
 
-Installs Vault from the official HashiCorp APT repository (pinned to `noble`). Configures file storage at `/opt/vault/data`, enables the UI, and starts the `vault` systemd service on port `8200`. Adds `VAULT_ADDR=http://127.0.0.1:8200` to `~/.bashrc`.
+Why it went rather than being migrated: the playbook deployed a *server* that nothing in
+this repo used, in a shape the multi-user work is explicitly removing — a `0.0.0.0:8200`
+listener with `tls_disable = 1`, and `VAULT_ADDR` appended to whichever account happened to
+run it. Deploying the servers these CLIs talk to is out of scope for that migration
+(MIGRATION2.md), so there was nothing to migrate it into.
 
-> **Not installed on this workstation.** The local Vault server was removed on 2026-08-10: the service is stopped and disabled, and `/opt/vault`, `/etc/vault.d`, the `vault` system user and the `~/.bashrc` block are gone. The `vault` **package** is still installed, because it is also the CLI — see [`_multi-user/cloud-cli/vault-cli.yml`](../_multi-user/cloud-cli/README.md#vault-cliyml), which owns the client half. Running this playbook reinstalls and starts the server, and it will need `vault operator init` again: the previous storage was deleted, not preserved.
-
-> **The `noble` pin is not a workaround for a missing suite.** HashiCorp's Artifactory does publish `resolute` (and `plucky`) — verified: `dists/resolute/InRelease` is a real signed index carrying the same package set. `noble` is used because `_multi-user/cloud-cli/vault-cli.yml` configures the same repository with `noble`, and two entries for one URI under different suites are two repositories to apt. Keep the two playbooks on the same suite.
-
-**After installation:**
-
-```bash
-source ~/.bashrc
-
-# 1. Initialize (run once — save the output securely)
-vault operator init
-
-# 2. Unseal (run 3 times with 3 different unseal keys from above)
-vault operator unseal
-
-# 3. Log in with the root token
-vault login <root-token>
-```
-
-UI is available at `http://127.0.0.1:8200/ui`.
-
-> **Note:** TLS is disabled in the default config. For production use, configure a certificate in `/etc/vault.d/vault.hcl` and remove `tls_disable = 1`.
+If a Vault server is wanted again, write it fresh rather than restoring this one, and keep
+its apt repository on the `noble` suite so it agrees with `vault-cli.yml` — two entries for
+one URI under different suites are two repositories to apt. (HashiCorp does publish
+`resolute` and `plucky`; the pin is about agreement between playbooks, not about a missing
+suite.)
 
 ## n8n.yml
 

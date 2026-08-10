@@ -12,13 +12,14 @@
 # publishes an apt repository, so decision-order point 2 applies and this
 # becomes an ordinary vendor-repo playbook.
 #
-# CLIENT ONLY -- but read this before running it on a Vault *server*:
+# CLIENT ONLY -- but read this before running it on a host that also runs a
+# Vault *server*, because one package is both:
 #
-#   * `vault` is one package. There is no CLI-only package to install, so this
-#     playbook installs the same package services/vault.yml does, and on a host
-#     running both, bumping vault_cli_version upgrades the server's binary too.
-#     The running process keeps executing the old code until vault.service is
-#     restarted, and the file-storage server needs unsealing after that.
+#   * `vault` is one package. There is no CLI-only package to install, so on a
+#     host that also serves Vault, bumping vault_cli_version upgrades the
+#     server's binary too. The running process keeps executing the old code
+#     until vault.service is restarted, and a file-storage server needs
+#     unsealing after that.
 #   * The package's postinst is NOT a server install by itself: it does not
 #     enable or start vault.service. It does create a `vault` system user,
 #     generate a self-signed cert under /opt/vault/tls, create /opt/vault/data,
@@ -26,17 +27,22 @@
 #     That scaffolding is inert until something enables the unit.
 #   * This playbook therefore does NOT stop or disable vault.service, unlike
 #     prometheus-cli.yml, which must because its apt package really does enable
-#     the Alertmanager daemon. Task 15 only reports the unit's state. If it is
-#     enabled here, services/vault.yml enabled it deliberately.
-#   * /etc/vault.d/vault.hcl is a dpkg conffile, and services/vault.yml
-#     rewrites it. An apt upgrade keeps the modified file (ansible's apt module
-#     passes force-confold), so a server's configuration survives.
+#     the Alertmanager daemon. Task 19 only reports the unit's state: something
+#     other than this package enabled it, and turning off a server this
+#     playbook did not start is not its business.
+#   * /etc/vault.d/vault.hcl is a dpkg conffile. An apt upgrade keeps a
+#     locally modified copy (ansible's apt module passes force-confold), so a
+#     server's configuration survives a CLI version bump.
+#
+# This repo has no Vault server playbook: services/vault.yml was deleted on
+# 2026-08-10 rather than migrated, along with the local server it had
+# deployed. Its leavings are still handled below -- see task 3.
 #
 # The identity stays per-user: `vault login` writes ~/.vault-token, and
 # VAULT_TOKEN is a secret belonging in each user's own environment. Nothing
 # here touches either, and the VAULT_ADDR env lookup the source playbook read
 # is gone per A2/A3 -- VAULT_ADDR is a name the CLI genuinely reads, but there
-# is no site-wide Vault for this playbook to name, and services/vault.yml's
+# is no site-wide Vault for this playbook to name, and the deleted playbook's
 # habit of appending it to one account's ~/.bashrc is exactly the single-user
 # breakage this migration removes.
 #
@@ -64,11 +70,12 @@
     # the same 184 vault versions as noble, generated in the same run.
     #
     # noble is used anyway, and the map is kept rather than reading
-    # ansible_facts['distribution_release'] directly, because services/vault.yml
-    # configures this same repository with noble. Two entries for one URI under
-    # different suites are two repositories to apt: both get downloaded, and
-    # they can resolve to different candidates. Matching the suite keeps a host
-    # that runs both playbooks describing one repository (A5).
+    # ansible_facts['distribution_release'] directly, because the now-deleted
+    # services/vault.yml configured this same repository with noble and hosts
+    # it ran on still carry that entry. Two entries for one URI under different
+    # suites are two repositories to apt: both get downloaded, and they can
+    # resolve to different candidates. Staying on noble means the two describe
+    # one repository (A5) even before task 3 has cleaned up.
     vault_cli_suite_map:
       resolute: noble
       plucky: noble
@@ -87,8 +94,8 @@
     # and only its identity is asserted. Embedding today's bytes would turn the
     # eventual rotation into a signature failure on every host.
     vault_cli_key_fingerprint: "798AEC654E5C15428C8E42EEAA16FCBCA621E701"
-    # The apt source services/vault.yml writes for this same repository, via
-    # apt_repository (which derives the filename from the URI).
+    # The apt source the deleted services/vault.yml wrote for this same
+    # repository, via apt_repository (which derives the filename from the URI).
     vault_cli_legacy_source: /etc/apt/sources.list.d/apt_releases_hashicorp_com.list
     vault_cli_bin: /usr/bin/vault
     vault_cli_completion: /etc/bash_completion.d/vault
@@ -122,24 +129,25 @@
       when: vault_cli_arch | length == 0
 
     - name: 3. Remove the single-user playbook's apt source for this repository
-      # services/vault.yml writes apt_releases_hashicorp_com.list for the same
-      # repository. Left beside the .sources file below, apt reads the
-      # repository twice and warns that the target is configured multiple
+      # The deleted services/vault.yml wrote apt_releases_hashicorp_com.list
+      # for the same repository. Left beside the .sources file below, apt reads
+      # the repository twice and warns that the target is configured multiple
       # times. Its keyring (/etc/apt/keyrings/hashicorp-archive-keyring.asc) is
       # left alone: it holds the same key and an unused keyring is inert.
       #
-      # services/vault.yml is out of scope for this migration and still writes
-      # that file when it runs, so on a host that runs both, run this playbook
-      # second -- or migrate services/vault.yml. See the README.
+      # The task stays although the playbook that wrote the file is gone: every
+      # host it ran on still has the file, and nothing else will remove it.
+      # Same shape as github-cli.yml and azure-cli.yml clearing their own
+      # predecessors' .list files.
       ansible.builtin.file:
         path: "{{ vault_cli_legacy_source }}"
         state: absent
 
     - name: 4. Add the HashiCorp apt repository
       # deb822_repository rather than get_url + apt_repository. Given a URL it
-      # downloads the key and compares it by checksum, so services/vault.yml's
-      # `force: yes` download -- which reported `changed` on every run -- becomes
-      # a no-op when nothing moved.
+      # downloads the key and compares it by checksum, so the `force: yes`
+      # download the deleted services/vault.yml did -- which reported `changed`
+      # on every run -- becomes a no-op when nothing moved.
       ansible.builtin.deb822_repository:
         name: hashicorp
         types:
@@ -345,8 +353,8 @@
     - name: 19. Report the vault.service unit state
       # Informational only, and deliberately so. The package does not enable
       # the unit, so on a client-only host this reads disabled/inactive. If it
-      # reads enabled, services/vault.yml put it there on purpose and this
-      # playbook has no business turning off a running server.
+      # reads enabled, something outside this playbook started serving Vault on
+      # the host, and turning that off is not a CLI installer's business.
       ansible.builtin.command: systemctl is-enabled vault.service
       register: vault_cli_unit
       changed_when: false
@@ -376,8 +384,8 @@
           - ""
           - >-
             vault.service is {{ vault_cli_unit.stdout | default('unknown') | trim }}.
-            The package does not enable it; services/vault.yml does. This playbook
-            installs the client and leaves the unit alone.
+            The package does not enable it, and neither does this playbook: anything
+            other than 'disabled' was put there by something else on the host.
           - ""
           - "This replaces the Homebrew install. If /home/linuxbrew/.linuxbrew/bin/vault"
           - "still exists, `brew uninstall hashicorp/tap/vault` it, and check each user's"
