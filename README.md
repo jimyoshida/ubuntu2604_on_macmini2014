@@ -1,10 +1,10 @@
-# Ubuntu 26.04 Workstation Setup
+# Ubuntu 26.04 Agent Workstation Setup
 
-This directory contains Ansible playbooks for automated Ubuntu 26.04 agent environment setup.
+This directory contains Ansible playbooks for multi-user Ubuntu 26.04 agent workstation setup.
 
 ## Prerequisites
 
-Ubuntu 26.04 with system packages up to date and Ansible 2.20 installed:
+Ubuntu 24.04 or 26.04 with system packages up to date and Ansible 2.16 or 2.20 installed respectively:
 
 ```bash
 sudo apt update && sudo apt upgrade -y
@@ -13,7 +13,7 @@ sudo apt install -y ansible
 
 ## Passwordless Sudo Setup
 
-For a smoother experience, especially on Ubuntu 26.04+, configure passwordless sudo first:
+Configure passwordless sudo first:
 
 ```bash
 ./setup-passwordless-sudo.sh
@@ -33,7 +33,7 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 
 ## Playbooks (multi-user)
 
-Multi-user successors to the retired `tool/`: root-owned system paths and `/etc` drop-ins instead of
+Multi-user successors to the retired old ones: root-owned system paths and `/etc` drop-ins instead of
 per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every account on a
 **shared** workstation. Run against a remote host (`-e host=<inventory host or group>`), not
 `localhost`; see [MIGRATION.md](MIGRATION.md) for the migration policy and per-playbook status.
