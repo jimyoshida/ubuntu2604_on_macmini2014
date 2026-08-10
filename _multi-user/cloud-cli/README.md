@@ -105,9 +105,10 @@ and are not written anywhere — both are read by the wrapper from your own envi
 ---
 
 Each section below has a **"What changed versus `cloud-cli/<tool>.yml`"** paragraph. Those
-source playbooks no longer exist: they were retired on 2026-08-10 once their successors here
-were verified, leaving only `cloud-cli/jenkins-cli.yml`, which is not migrated yet. Read the
-comparison as history — `git log --diff-filter=D -- cloud-cli/` brings any of them back.
+source playbooks no longer exist: all thirteen were retired on 2026-08-10 once their
+successors here were verified, and `cloud-cli/` is gone with them — this directory is the
+only generation left. Read the comparison as history; `git log --diff-filter=D -- cloud-cli/`
+brings any of them back.
 
 The `ansible-playbook cloud-cli/<tool>.yml` commands in this file are relative to
 `_multi-user/`, which is where they must be run from, so they refer to the playbooks here and

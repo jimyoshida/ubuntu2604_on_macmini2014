@@ -3,11 +3,10 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: complete.** All 13 source playbooks are migrated and verified. Twelve of the
-originals were deleted on 2026-08-10, as `tool/` was before them; `cloud-cli/jenkins-cli.yml`
-is the last one still in place. Wave 1's three decisions all landed (the `env-tmpl.sh` split
-last, by deleting the file), and waves 2, 3 and 4 are done. See
-[Migration status](#migration-status).
+**Status: complete.** All 13 source playbooks are migrated, verified, and retired — the
+originals were deleted on 2026-08-10 and `cloud-cli/` is gone with them, as `tool/` was
+before it. Wave 1's three decisions all landed (the `env-tmpl.sh` split last, by deleting the
+file), and waves 2, 3 and 4 are done. See [Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
 `_multi-user/tools/` and is complete. Everything there still applies: the
@@ -56,7 +55,7 @@ MIGRATION.md's three causes of single-user breakage all recur here, plus two new
 
 | | |
 | --- | --- |
-| Source | `cloud-cli/*.yml` (13 playbooks) + `cloud-cli/env-tmpl.sh` (both retired — see below) |
+| Source | `cloud-cli/*.yml` (13 playbooks) + `cloud-cli/env-tmpl.sh` — the whole directory, now retired |
 | Target | `_multi-user/cloud-cli/*.yml` |
 | Applies to | New multi-user workstation builds |
 | Control node | Ubuntu 24.04 (ansible-core **2.16**) **or** Ubuntu 26.04 (ansible-core 2.20) |
@@ -95,9 +94,10 @@ underscore on `_multi-user/` still means "staging", same as before.
 
 - `{core,container,ai-agent,services,gui-tools,media}/` — still a separate question.
 - ~~`cloud-cli/*` itself stays in place until the new build is proven, same as `tool/` did.~~
-  **Retired 2026-08-10.** The twelve migrated originals were deleted once their successors
-  were verified, the same way `tool/` was. `cloud-cli/env-tmpl.sh` went with them, leaving
-  `cloud-cli/jenkins-cli.yml` as the only file in the directory. Note what "proven" covers
+  **Retired 2026-08-10.** All thirteen originals were deleted once their successors were
+  verified, the same way `tool/` was — twelve first, then `jenkins-cli.yml` once it too had a
+  successor. `env-tmpl.sh` and the directory's README went with them, so `cloud-cli/` no
+  longer exists. Note what "proven" covers
   before relying on the deletion: `localhost` only, ansible-core 2.20 only, and no
   SSH/`remote_user` path — `ws01`/`ws02` have never been provisioned by either generation.
   The originals are recoverable from git history (`git log --diff-filter=D -- cloud-cli/`).
@@ -219,7 +219,8 @@ rest. Decide this before migrating `jenkins-cli.yml`, the first playbook that ne
 > [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables)
 > as instructions, together with the table of which names each tool actually reads;
 > `jenkins-cli.yml`'s three variables are in
-> [`cloud-cli/README.md`](cloud-cli/README.md#per-user-setup).
+> [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#jenkins-cliyml), which
+> is where they moved when that playbook was migrated in turn.
 >
 > This closes the last of wave 1's three decisions and **unblocks #12**, which no longer has
 > a file to depend on: its `jenkins_url` becomes a play var per A2, and its two credential
@@ -442,11 +443,11 @@ additions:
 | `jenkins-cli.yml` | jar from a running Jenkins + `$JENKINS_URL` | pinned jar from `repo.jenkins-ci.org` + checksum; URL from a play var | 2.576 | Verified (localhost) |
 | `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | az 2.89.0-1~noble, ext 1.0.6 | Verified (localhost) |
 
-Every row but `jenkins-cli.yml` is also **retired**: the source playbook named in the first
-column no longer exists, having been deleted on 2026-08-10 once its successor was verified.
-The column is kept because it is what each migrated playbook is a successor *to*, and its
-header comment still refers to it by name. `git log --diff-filter=D -- cloud-cli/` recovers
-any of them.
+Every row is also **retired**: none of the source playbooks named in the first column still
+exists, each having been deleted on 2026-08-10 once its successor was verified, and
+`cloud-cli/` was removed with the last of them. The column is kept because it is what each
+migrated playbook is a successor *to*, and every playbook's header comment still refers to it
+by name. `git log --diff-filter=D -- cloud-cli/` recovers any of them.
 
 The `TBD` pins the wave-3 rows once carried are filled in above. Leaving them `TBD` until
 write time was deliberate: MIGRATION.md's step 3 requires checking upstream when the playbook
@@ -868,7 +869,7 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
 - ~~**`cloud-cli/env-tmpl.sh` successor**~~ — **closed 2026-08-10.** There is none: the file
   is deleted and its content is now documentation, in
   [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables)
-  and [`cloud-cli/README.md`](cloud-cli/README.md#per-user-setup). See the decision note
+  under each tool's own section there. See the decision note
   under the [identity-state table](#per-tool-identity-state). Wave 4 is no longer blocked.
 - **Repo-wide vendor-repo ownership** — several directories add apt repositories
   independently, with no shared convention for keyring paths or `sources.list.d` filenames.
