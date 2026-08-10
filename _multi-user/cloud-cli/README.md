@@ -906,3 +906,10 @@ hand:
 ```bash
 grep -l linuxbrew /home/*/.bashrc
 ```
+
+On `localhost` this was done on 2026-08-11 and went further than the four formulae above: every
+formula and tap was removed, then `/home/linuxbrew` and `~/.cache/Homebrew` deleted outright and
+the `brew shellenv` block dropped from `~/.bashrc`. The steps here still apply to any other host
+provisioned before `core/homebrew.yml` was retired. If you go as far as deleting the prefix,
+list its `bin` and `lib` first — that run found a hand-built binary and an orphaned
+`node_modules` under `/home/linuxbrew/.linuxbrew` that belonged to no formula.

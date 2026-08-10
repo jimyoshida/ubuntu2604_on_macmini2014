@@ -121,8 +121,10 @@ and KDash — have no playbook here and never did.
 Deleting the playbook does **not** touch a `/home/linuxbrew` tree that already exists on a host,
 which is deliberate: uninstalling the leftover formulae stays a per-host cleanup, and the `PATH`
 precedence follow-up in [MIGRATION2.md](MIGRATION2.md#known-follow-ups) still applies to any
-account whose `~/.bashrc` runs `brew shellenv`. The playbook is recoverable from git history
-(`git log --diff-filter=D -- core/homebrew.yml`).
+account whose `~/.bashrc` runs `brew shellenv`. That cleanup was carried out by hand on
+`localhost` on 2026-08-11 — see the follow-up entry — so the tree is gone there; the follow-up
+stands for every other host provisioned before the retirement. The playbook is recoverable from
+git history (`git log --diff-filter=D -- core/homebrew.yml`).
 
 ## Retired: `core/golang.yml` and `core/rust.yml`
 
@@ -147,8 +149,12 @@ shared `/usr/local/go` with `PATH` and `GOPATH` in the invoker's `.bashrc` — a
 As with the other retirements, deleting a playbook uninstalls nothing. A host already
 provisioned keeps its `/usr/local/go`, its `~/.cargo` and the `ANSIBLE MANAGED BLOCK: golang`
 and `ANSIBLE MANAGED BLOCK: rust` blocks in `~/.bashrc`; removing those is a per-host cleanup
-this repo no longer performs. Both playbooks are recoverable from git history
-(`git log --diff-filter=D -- core/golang.yml core/rust.yml`).
+this repo no longer performs. Done by hand on `localhost` on 2026-08-11: both toolchains, the
+`~/go` `GOPATH` and `~/.rustup` removed, and both `~/.bashrc` blocks dropped. One detail worth
+knowing before doing it elsewhere — `rustup self uninstall` also removes the
+`. "$HOME/.cargo/env"` line it wrote into `~/.profile`, which is unguarded and would otherwise
+error on every login shell once `~/.cargo` is gone. Both playbooks are recoverable from git
+history (`git log --diff-filter=D -- core/golang.yml core/rust.yml`).
 
 ## Multi-user support status
 

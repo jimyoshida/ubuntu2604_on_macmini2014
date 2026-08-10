@@ -704,11 +704,12 @@ Two consequences of `vault` being one package for both client and server, observ
 `env -i ... bash -lc 'command -v <tool>'` as uid 65534 and asserts the system-wide path. `env -i`
 is the point: PATH then comes purely from `/etc/profile` and, through it, `/etc/bash.bashrc`,
 which is where a system-wide `brew shellenv` would land. All four pass on `localhost` — but
-that is weaker evidence than it looks, because this host's `brew shellenv` line is in the
+that is weaker evidence than it looks, because this host's `brew shellenv` line was in the
 user's own `~/.bashrc` (line 131), which no system-wide check can see. `jira` is the case that
-proves the limit: `/home/linuxbrew/.linuxbrew/bin/jira` still exists here and still wins for
-that one account's interactive shells. **Per-user `~/.bashrc` remains a manual check**, and
-the playbooks say so in their summaries.
+proves the limit: at the time of the wave-3 run `/home/linuxbrew/.linuxbrew/bin/jira` still
+existed here and still won for that one account's interactive shells. **Per-user `~/.bashrc`
+remains a manual check**, and the playbooks say so in their summaries. On `localhost` that
+check was made and cleared on 2026-08-11 — see the follow-up entry below.
 
 **A5's fingerprint-versus-bytes rule decided `vault-cli` immediately.** HashiCorp's packaging
 key `798AEC654E5C15428C8E42EEAA16FCBCA621E701` expires **2028-01-09**, so it is fetched each
@@ -862,13 +863,22 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   Wave 3 turned the system-wide half into a playbook task (`command -v` under
   `env -i ... bash -lc` as uid 65534, in all four de-brew playbooks). What remains is the
   per-user half, which no playbook can see: a `brew shellenv` line in an individual account's
-  `~/.bashrc` still shadows the system-wide binary for that account's interactive shells, and
-  `/home/linuxbrew/.linuxbrew/bin/jira` is a live instance of exactly that on this workstation.
+  `~/.bashrc` still shadows the system-wide binary for that account's interactive shells.
   Uninstalling the four brew formulae is a per-host cleanup this migration documents but does
   not perform. **Bounded, not closed, on 2026-08-10:** `core/homebrew.yml` was deleted, so no
   host newly acquires a `/home/linuxbrew` because of this repo. Hosts that already have one are
   unaffected — deleting an installer uninstalls nothing — so the per-user check stands for
-  every account provisioned before that date.
+  every account provisioned before that date. **Done on `localhost` 2026-08-11:** that host was
+  the live instance of the per-user case (`/home/linuxbrew/.linuxbrew/bin/jira` winning for one
+  account), and its cleanup was carried out by hand — all 38 formulae and both taps removed,
+  `/home/linuxbrew` and `~/.cache/Homebrew` deleted, the `brew shellenv` block dropped from
+  `~/.bashrc` — after which the `_multi-user/tools/` playbooks were run against it to reinstate
+  the tools those formulae had been providing. `jira` now resolves to `/usr/local/bin/jira`
+  there. Two things that cleanup turned up and that are worth expecting on any other host: a
+  hand-built binary living in `.linuxbrew/bin` that belonged to no formula and would have gone
+  with a bare `rm -rf`, and an orphaned `lib/node_modules/npm` left by a formula that was no
+  longer installed. Check the prefix for non-formula content before deleting it. The item stays
+  open for every other host provisioned before 2026-08-10.
 - ~~**`cloud-cli/env-tmpl.sh` successor**~~ — **closed 2026-08-10.** There is none: the file
   is deleted and its content is now documentation, in
   [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables)

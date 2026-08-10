@@ -231,14 +231,14 @@ For each playbook:
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `bats.yml` | brew + tap | git tags + `install.sh`; libs to `/usr/lib/bats` | core 1.14.0, support 0.3.0, assert 2.2.4 | Verified (workstations) |
+| `bats.yml` | brew + tap | git tags + `install.sh`; libs to `/usr/lib/bats` | core 1.14.0, support 0.3.0, assert 2.2.4 | Verified (workstations, localhost) |
 | `gomplate.yml` | release binary | release binary + checksum + arch from facts | 5.2.0 (was 4.3.0) | Verified (workstations) |
-| `shellcheck.yml` | brew | apt `shellcheck` | 0.11.0-2 (dpkg version, Ubuntu 26.04) | Verified (workstations) |
-| `trivy.yml` | brew | Aqua vendor apt repo | 0.73.0 | Verified (workstations) |
-| `hadolint.yml` | brew | release binary | 2.15.1 | Verified (workstations) |
-| `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02) |
-| `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; llhttp dropped (apt eza needs no manual libllhttp symlink); yq split out to `yq.yml` | see README | Verified (workstations) |
-| `modern-cli-tools.yml` (`yq`) | brew | release binary via `yq.yml` (apt `yq` is the unrelated Python wrapper) | 4.53.3 | Verified (workstations) |
+| `shellcheck.yml` | brew | apt `shellcheck` | 0.11.0-2 (dpkg version, Ubuntu 26.04) | Verified (workstations, localhost) |
+| `trivy.yml` | brew | Aqua vendor apt repo | 0.73.0 | Verified (workstations, localhost) |
+| `hadolint.yml` | brew | release binary | 2.15.1 | Verified (workstations, localhost) |
+| `grype-syft.yml` | brew | upstream `install.sh -b /usr/local/bin` | grype 0.116.1, syft 1.50.0 | Verified (ws01, ws02, localhost) |
+| `modern-cli-tools.yml` | brew (16 tools) | apt for 14 tools; llhttp dropped (apt eza needs no manual libllhttp symlink); yq split out to `yq.yml` | see README | Verified (workstations, localhost) |
+| `modern-cli-tools.yml` (`yq`) | brew | release binary via `yq.yml` (apt `yq` is the unrelated Python wrapper) | 4.53.3 | Verified (workstations, localhost) |
 | `junit2html.yml` | pipx → `~/.local/bin` | pipx as root → `/usr/local/bin` | 31.1.4 | Verified (ws01, ws02) |
 | `markdownlint.yml` | `npm install -g` | unchanged mechanism; pinned version, version-aware guard, npm prefix from facts not assumed | 0.49.1 | Verified (ws01, ws02) |
 | `kube-score.yml` | release binary | unchanged mechanism; add checksum, arch, version-aware guard | 1.20.0 | Verified (ws01, ws02) |
@@ -251,6 +251,12 @@ a multi-user treatment is a question for wherever they live now, not this docume
 All ten remaining `tool/*.yml` playbooks are migrated and verified against `ws01`/`ws02`
 (eleven target playbooks, since `yq` is split out of `modern-cli-tools.yml` into its own
 `yq.yml`).
+
+One tool present in a real `/home/linuxbrew` prefix is deliberately **not** in this table:
+`shellspec`. It had no `tool/*.yml` playbook and so was never in scope — it was installed by
+hand with `brew`, which is exactly the class of install this migration cannot see. It was
+dropped rather than migrated on 2026-08-11. The general point survives the specific case:
+this table covers what the repo installed, not everything a given prefix happens to contain.
 
 ## Known follow-ups
 
@@ -272,7 +278,9 @@ These are required for a complete migration but are not part of any single tool 
 - **`PATH` precedence on hosts that already have Homebrew.** If `/home/linuxbrew` is left in
   place after migrating, `brew shellenv` prepends its `bin` to `PATH`, so users keep
   silently getting the stale brew copies instead of `/usr/local/bin`. Decide per host
-  whether to remove the brew tree or to ensure `/usr/local/bin` wins.
+  whether to remove the brew tree or to ensure `/usr/local/bin` wins. On `localhost` this was
+  settled the first way on 2026-08-11: the tree was removed. See the follow-up entry in
+  [MIGRATION2.md](MIGRATION2.md#known-follow-ups) for what that run turned up.
 
 ## Verification status
 
