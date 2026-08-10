@@ -23,17 +23,17 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 
 ## Playbooks (old)
 
-What is left of the original single-user tree. Two directories have graduated out of it and
-no longer exist: `tool/` (see [MIGRATION.md](MIGRATION.md)) and `cloud-cli/` (see
-[MIGRATION2.md](MIGRATION2.md)); their successors are in the next table. These four have not
-been looked at yet.
+What is left of the original single-user tree. Three directories no longer exist: `tool/`
+(see [MIGRATION.md](MIGRATION.md)) and `cloud-cli/` (see [MIGRATION2.md](MIGRATION2.md))
+graduated into the multi-user tree in the next table, and `services/` was deleted outright as
+out of scope — see [Retired: `services/`](#retired-services). These three have not been looked
+at yet.
 
 | Directory | Description |
 |-----------|-------------|
 | [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
 | [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, Krew) |
 | [gui-tools/](gui-tools/README.md) | GUI tools (VS Code) |
-| [services/](services/README.md) | Self-hosted services (n8n, Jellyfin, Samba, FreshRSS) |
 
 ## Playbooks (multi-user)
 
@@ -68,28 +68,44 @@ ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice,bob
 |-----------|-------------|
 | [_personal/ai-agent/](_personal/ai-agent/README.md) | AI agent tools (Claude Code, NanoClaw, vertex-ai-proxy) |
 
+## Retired: `services/`
+
+This repo provisions a **workstation**, not an application server, so the directory that
+deployed long-running self-hosted servers is gone (2026-08-10). Nothing replaced it — these
+playbooks were deleted rather than migrated — except `samba.yml`, which moved into `core/`.
+
+| Playbook | Fate |
+|----------|------|
+| `services/vault.yml` | Deleted first, with the local Vault server it had deployed. The client half is [`_multi-user/cloud-cli/vault-cli.yml`](_multi-user/cloud-cli/README.md#vault-cliyml) |
+| `services/n8n.yml`, `services/jellyfin.yml`, `services/freshrss.yml` | Deleted — a workflow engine, a media server and a feed reader are services to point a workstation at, not to run on it |
+| `services/samba.yml` | **Kept**, moved to [`core/samba.yml`](core/README.md#sambayml). Sharing your own home directory over SMB is a workstation function; its two variables moved into [`core/env-tmpl.sh`](core/env-tmpl.sh) |
+
+Everything above is recoverable from git history (`git log --diff-filter=D -- services/`),
+including the retired `services/README.md` — which is where the account of what the Vault
+server was and how it was dismantled now lives.
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 49 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 46 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-24) | 24 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-5) | 5 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
-| [Mixed](#mixed--shared-install-personal-tail-11) | 11 | Shared install plus a tail that benefits only the invoker |
+| [Effectively shared](#effectively-shared-4) | 4 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Mixed](#mixed--shared-install-personal-tail-9) | 9 | Shared install plus a tail that benefits only the invoker |
 | [Personal only](#personal-only-9) | 9 | The whole install lands in one `$HOME` or one account |
 
 Nearly half the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
 counted, and the total drops back when the originals are retired. That has now happened
 twice, and both migrations are now finished: `tool/` after MIGRATION.md, and all thirteen of
-`cloud-cli/` after MIGRATION2.md. Neither directory still exists. One playbook went the other
-way and was deleted rather than migrated: `services/vault.yml`, which deployed a Vault
-*server* that nothing here used.
+`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Four playbooks went the other
+way and were deleted rather than migrated — all of `services/` except `samba.yml`, which moved
+to `core/`; see [Retired: `services/`](#retired-services).
 
-The 22 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 19 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
@@ -107,19 +123,19 @@ The `_multi-user/cloud-cli/` ones add a rule the `tools/` ones did not need: eve
 identity, so the playbook installs the client and stops. None of them runs `aws configure`,
 `gcloud auth login` or `jira init`, and none writes a secret anywhere.
 
-### Effectively shared (5)
+### Effectively shared (4)
 
 This category used to be mostly `cloud-cli/`; those seven playbooks were migrated and their
-originals deleted, so what is left is the tail.
+originals deleted, and `services/jellyfin.yml` left with the rest of `services/`, so what is
+left is the tail.
 
 | Playbook | Why it is already safe |
 |----------|------------------------|
 | `core/nodejs.yml`, `core/disable-rsyslog.yml` | apt / systemd only |
 | `container/devcontainers.yml` | `npm install -g` as root |
 | `gui-tools/vscode.yml` | apt (`vscode_user` is declared but never used) |
-| `services/jellyfin.yml` | apt plus a system service |
 
-### Mixed — shared install, personal tail (11)
+### Mixed — shared install, personal tail (9)
 
 | Playbook | Shared part | Personal part |
 |----------|-------------|---------------|
@@ -127,9 +143,7 @@ originals deleted, so what is left is the tail.
 | `container/{docker,podman}.yml` | Daemon and packages | Only `$USER` is added to the `docker` group; `~/.bashrc` |
 | `core/golang.yml` | `/usr/local/go` | `PATH` and `GOPATH` in the invoker's `.bashrc` |
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
-| `services/n8n.yml` | systemd unit | `User={{ target_user }}`; `/var/lib/n8n` owned by the invoker |
-| `services/freshrss.yml` | Container and network | Data directory under `/home/{{ target_user }}` |
-| `services/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
+| `core/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
 ### Personal only (9)
 

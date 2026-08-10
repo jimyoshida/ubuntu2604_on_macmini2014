@@ -828,8 +828,9 @@ host that also runs a Vault server:
   there by something else on the host, and turning off a server this playbook did not start
   is not a CLI installer's business. Task 19 reports the state instead of changing it.
 
-This repo ships no Vault server playbook: [`services/vault.yml`](../../services/README.md)
-was deleted rather than migrated, along with the local server it had deployed.
+This repo ships no Vault server playbook: `services/vault.yml` was deleted rather than
+migrated, along with the local server it had deployed. The rest of `services/` followed it —
+see [Retired: `services/`](../../README.md#retired-services).
 
 A "client-only" install still lays down server scaffolding, because the package does:
 a `vault` system user, a self-signed cert under `/opt/vault/tls`, `/opt/vault/data`, a

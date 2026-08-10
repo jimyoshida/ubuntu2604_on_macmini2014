@@ -106,6 +106,45 @@ xcalc &
 
 **Note:** Snap-based apps (e.g. Firefox) are slow to launch inside the Xvfb session due to snap confinement overhead. Prefer native `.deb` packages for apps you intend to run over VNC.
 
+## samba.yml
+
+Samba file sharing setup (home directory share)
+
+```bash
+SAMBA_PASSWORD=<password> ansible-playbook core/samba.yml
+```
+
+Moved here from the retired `services/` directory: sharing your own home directory over SMB
+is a workstation function, not a hosted service. See [Retired: `services/`](../README.md#retired-services).
+
+**Environment variables** (see [`env-tmpl.sh`](env-tmpl.sh)):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SAMBA_PASSWORD` | Yes | Samba password for the current user |
+| `SAMBA_INTERFACES` | No | Network interfaces to bind (e.g. `lo eth0`). If unset, Samba listens on all interfaces |
+
+This playbook:
+- Installs Samba
+- Sets the Samba password for the current user
+- Configures a `[homes]` share (not browseable, read-write, `valid users = %S` so only the owner can open it)
+- Optionally restricts Samba to specific network interfaces via `SAMBA_INTERFACES`
+- Enables and starts `smbd` and `nmbd`
+
+**Connecting from macOS:**
+
+In Finder, press `⌘K` and enter:
+```
+smb://<host-ip>
+```
+
+**Managing the service:**
+```bash
+systemctl status smbd nmbd    # Check status
+systemctl restart smbd nmbd   # Restart
+journalctl -u smbd -f         # View logs
+```
+
 ## homebrew.yml
 
 Install Homebrew package manager
