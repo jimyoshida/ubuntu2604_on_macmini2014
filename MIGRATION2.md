@@ -865,7 +865,10 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   `~/.bashrc` still shadows the system-wide binary for that account's interactive shells, and
   `/home/linuxbrew/.linuxbrew/bin/jira` is a live instance of exactly that on this workstation.
   Uninstalling the four brew formulae is a per-host cleanup this migration documents but does
-  not perform.
+  not perform. **Bounded, not closed, on 2026-08-10:** `core/homebrew.yml` was deleted, so no
+  host newly acquires a `/home/linuxbrew` because of this repo. Hosts that already have one are
+  unaffected — deleting an installer uninstalls nothing — so the per-user check stands for
+  every account provisioned before that date.
 - ~~**`cloud-cli/env-tmpl.sh` successor**~~ — **closed 2026-08-10.** There is none: the file
   is deleted and its content is now documentation, in
   [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables)

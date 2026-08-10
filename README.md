@@ -84,28 +84,49 @@ Everything above is recoverable from git history (`git log --diff-filter=D -- se
 including the retired `services/README.md` — which is where the account of what the Vault
 server was and how it was dismantled now lives.
 
+## Retired: `core/homebrew.yml`
+
+Homebrew is single-account by construction — `/home/linuxbrew/.linuxbrew` is owned by whoever
+installed it, and upstream refuses `sudo brew` — so on a shared workstation it could never be
+anything but a personal install. It was the last structural cause of that shape here, and it
+ran out of dependents: [MIGRATION.md](MIGRATION.md) moved seven `tool/` playbooks off `brew`,
+and wave 3 of [MIGRATION2.md](MIGRATION2.md) moved the remaining four
+(`cloud-cli/{gcx,influx,jira,vault}-cli.yml`) to root-owned paths. Nothing in the repo installs
+through `brew` any more, so the installer went too (2026-08-10).
+
+Nothing replaces it. The two tools its section suggested installing by hand afterwards — K9s
+and KDash — have no playbook here and never did.
+
+Deleting the playbook does **not** touch a `/home/linuxbrew` tree that already exists on a host,
+which is deliberate: uninstalling the leftover formulae stays a per-host cleanup, and the `PATH`
+precedence follow-up in [MIGRATION2.md](MIGRATION2.md#known-follow-ups) still applies to any
+account whose `~/.bashrc` runs `brew shellenv`. The playbook is recoverable from git history
+(`git log --diff-filter=D -- core/homebrew.yml`).
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 46 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 45 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-24) | 24 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
 | [Effectively shared](#effectively-shared-4) | 4 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-9) | 9 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-9) | 9 | The whole install lands in one `$HOME` or one account |
+| [Personal only](#personal-only-8) | 8 | The whole install lands in one `$HOME` or one account |
 
 Nearly half the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
 counted, and the total drops back when the originals are retired. That has now happened
 twice, and both migrations are now finished: `tool/` after MIGRATION.md, and all thirteen of
-`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Four playbooks went the other
-way and were deleted rather than migrated — all of `services/` except `samba.yml`, which moved
-to `core/`; see [Retired: `services/`](#retired-services).
+`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Five playbooks went the other
+way and were deleted rather than migrated: all of `services/` except `samba.yml`, which moved
+to `core/` (see [Retired: `services/`](#retired-services)), and `core/homebrew.yml`, which was
+deleted once the migrations left it with no dependents (see
+[Retired: `core/homebrew.yml`](#retired-corehomebrewyml)).
 
-The 19 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 18 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
@@ -145,14 +166,17 @@ left is the tail.
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
 | `core/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
-### Personal only (9)
+### Personal only (8)
 
 Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
-meant to end up. The rest are still mixed in with the shared trees.
+meant to end up. The rest are still mixed in with the shared trees. A fourth left the category
+by being deleted: `core/homebrew.yml` was the root cause of four other entries that used to sit
+here — `cloud-cli/{gcx,influx,jira,vault}-cli.yml`, all `brew install` as
+`lookup('env', 'USER')` — and once wave 3 of MIGRATION2.md moved those to root-owned paths it
+was [retired](#retired-corehomebrewyml) rather than fixed.
 
 | Playbook | Cause |
 |----------|-------|
-| `core/homebrew.yml` | Owned by one account. It used to be the root cause of four more entries here — `cloud-cli/{gcx,influx,jira,vault}-cli.yml`, all `brew install` as `lookup('env', 'USER')` — which wave 3 of MIGRATION2.md moved to root-owned paths |
 | `_personal/ai-agent/claude-code.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
 | `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
 | `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
@@ -162,7 +186,7 @@ meant to end up. The rest are still mixed in with the shared trees.
 | `core/x11vnc.yml` | `/home/$USER/.vnc`, user systemd unit, `~/.bashrc` |
 | `core/agent-base.yml` | `~/.xprofile`, `~/.xsessionrc`, three `~/.bashrc` blocks |
 
-Two of these are per-identity **by nature** rather than by defect: `core/ssh-key-setup.yml` and
-`core/homebrew.yml`. The fix for that shape is the one MIGRATION.md already names — an explicit
-user list instead of `$USER` — not a move to `/usr/local`.
+One of these is per-identity **by nature** rather than by defect: `core/ssh-key-setup.yml`,
+which installs a key for a person. The fix for that shape is the one MIGRATION.md already
+names — an explicit user list instead of `$USER` — not a move to `/usr/local`.
 

@@ -145,17 +145,6 @@ systemctl restart smbd nmbd   # Restart
 journalctl -u smbd -f         # View logs
 ```
 
-## homebrew.yml
-
-Install Homebrew package manager
-
-```bash
-ansible-playbook core/homebrew.yml
-```
-
-After installation, use Homebrew to install additional tools:
-- K9s, KDash
-
 ## nodejs.yml
 
 Install Node.js LTS system-wide (via NodeSource)

@@ -94,8 +94,9 @@ Installs [grype](https://github.com/anchore/grype) (vulnerability scanner) and
 `/usr/local/bin/grype` and `/usr/local/bin/syft`, root-owned, mode `0755`. There is no
 per-user state and nothing to add to a shell profile.
 
-The source playbook installed both via Homebrew, which only the account that ran
-`core/homebrew.yml` can use. This migration instead uses each project's own `install.sh`:
+The source playbook installed both via Homebrew, which only the account that ran the
+since-retired `core/homebrew.yml` could use. This migration instead uses each project's own
+`install.sh`:
 
 - **Pinned to the release tag, not `main`.** The script is fetched from
   `raw.githubusercontent.com/anchore/<repo>/v<version>/install.sh`, so its content is fixed
@@ -127,8 +128,9 @@ Installs [ShellCheck](https://github.com/koalaman/shellcheck) from the Ubuntu ap
 package, `/usr/bin/shellcheck`, root-owned. There is no per-user state and nothing to
 add to a shell profile.
 
-The source playbook installed it via Homebrew, which only the account that ran
-`core/homebrew.yml` can use. The apt package is current enough to use directly instead:
+The source playbook installed it via Homebrew, which only the account that ran the
+since-retired `core/homebrew.yml` could use. The apt package is current enough to use directly
+instead:
 
 - **Pinned by exact dpkg version**, not just the semantic version. `shellcheck_version`
   is compared against `dpkg-query -W -f='${Version}' shellcheck`, which includes the
