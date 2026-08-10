@@ -3,8 +3,9 @@
 Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-cli/` to
 `_multi-user/cloud-cli/`.
 
-**Status: in progress.** 8 of 13 source playbooks migrated and verified. Wave 2 is complete. See
-[Migration status](#migration-status).
+**Status: in progress.** 12 of 13 source playbooks migrated and verified. Waves 2 and 3 are
+complete; only `jenkins-cli.yml` (#12) remains, and it is still blocked on wave 1's
+`env-tmpl.sh` decision. See [Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
 `_multi-user/tools/` and is complete. Everything there still applies: the
@@ -186,10 +187,10 @@ migrated playbook touches anything in the "Per-user state" column, it is wrong.
 | `glab` | `~/.config/glab-cli/config.yml` | — | `GITLAB_TOKEN` |
 | `tofu` | `~/.terraform.d/` | — | provider credentials (per provider) |
 | `promtool` / `amtool` | `~/.config/amtool/config.yml` (optional) | — | — |
-| `jira` | `~/.config/.jira/.config.yml` | `JIRA_URL`, `JIRA_LOGIN` | `JIRA_API_TOKEN` |
-| `gcx` | `~/.config/gcx/` | `GRAFANA_SERVER` | `GRAFANA_TOKEN` |
-| `influx` | `~/.influxdbv2/configs` | `INFLUX_HOST`, `INFLUX_ORG` | `INFLUX_TOKEN` |
-| `vault` | `~/.vault-token` | `VAULT_ADDR` | `VAULT_TOKEN` |
+| `jira` | `~/.config/.jira/.config.yml` | — (**not** `JIRA_URL`/`JIRA_LOGIN` — see below) | `JIRA_API_TOKEN` (also reads `JIRA_AUTH_TYPE`, `JIRA_CONFIG_FILE`) |
+| `gcx` | `~/.config/gcx/`, `~/.local/state/gcx/`, `./.gcx.yaml` | `GRAFANA_SERVER` ✓verified | `GRAFANA_TOKEN` |
+| `influx` | `~/.influxdbv2/configs` | `INFLUX_HOST`, `INFLUX_ORG` ✓verified | `INFLUX_TOKEN` |
+| `vault` | `~/.vault-token` | `VAULT_ADDR` ✓verified | `VAULT_TOKEN` |
 | `jenkins-cli` | none | `JENKINS_URL` | `JENKINS_USER_ID`, `JENKINS_API_TOKEN` |
 | `az devops` | `~/.azure/azuredevops/config` defaults | `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION`, `AZURE_DEVOPS_EXT__DEFAULTS_PROJECT` (double underscore — see below) | `AZURE_DEVOPS_EXT_PAT` |
 
@@ -219,6 +220,31 @@ the tool ignores is invisible, because the variable is set, `/etc/environment` l
 and every user still gets an error. `azure-devops-cli.yml` task 20a is the pattern: run the
 tool as an unprivileged uid with the variable set and assert that the "not configured" error
 is *not* what comes back.
+
+**Wave 3 checked its four rows against the binaries, and found one more wrong.** Method: run
+the tool with the variable set and with a plausible near-miss name as a negative control, and
+compare the failure.
+
+- `GRAFANA_SERVER` — **read.** With it set, `gcx config check` gets past
+  `Invalid configuration: server is required` and fails on credentials instead; with
+  `GRAFANA_ENDPOINT` set instead it still reports `server is required`.
+- `INFLUX_HOST`, `INFLUX_ORG` — **read.** `influx ping` requests the host named in
+  `INFLUX_HOST` (default `http://localhost:8086` without it), and `influx bucket list` sends
+  `?org=<INFLUX_ORG>`.
+- `VAULT_ADDR` — **read.** `vault status` queries the address given (default
+  `https://127.0.0.1:8200`).
+- `JIRA_URL`, `JIRA_LOGIN` — **not read, like `AZURE_DEVOPS_ORG` before them.** With both set,
+  `jira issue list` still exits 1 with "The tool needs a Jira API token to function". The
+  binary's `JIRA_*` strings are `JIRA_API_TOKEN`, `JIRA_AUTH_TYPE`, `JIRA_BROWSER`,
+  `JIRA_CONFIG_FILE`, `JIRA_EDITOR` — no server or login variable at all; jira-cli takes both
+  from `~/.config/.jira/.config.yml`, written by `jira init`. They were the source playbook's
+  own inputs, used only to interpolate an instruction into a `debug` message.
+
+That is two of the seven names in this table wrong, from two different source playbooks, which
+makes the pattern rather than the exception the thing to plan for. The four verified ones are
+still not written to `/etc/environment` by any playbook: being a name a tool reads is
+necessary, not sufficient — there also has to be a shared endpoint worth naming, and for
+Grafana/InfluxDB/Vault this repo has none.
 
 ## Per-tool migration plan
 
@@ -264,7 +290,8 @@ actual filename at pin time, both spellings), and the `.sha256` file's entry is
 must allow it. This is the same class of trap as the `bin/` prefix MIGRATION.md's step 5
 warns about.
 
-**`vault-cli.yml` (#11) — collides with `services/vault.yml`.** Both would install the same
+**`vault-cli.yml` (#11) — collides with `services/vault.yml`. Resolved as (a); two of the
+premises below turned out to be wrong — see [wave 3](#wave-3-jira-cli-gcx-cli-influx-cli-vault-cli).** Both would install the same
 `vault` apt package from the same HashiCorp repository; `services/vault.yml` already adds that
 repo (keyring at `/etc/apt/keyrings/hashicorp-archive-keyring.asc`). Decide one of:
 
@@ -310,8 +337,10 @@ Four waves, each ending in a commit and a status-table update:
    house style for the wave that follows, and settled the shared A5 vendor-repo block that
    wave 1 left open — including the two key-pinning forms and the four `--check` defects
    recorded under [Verification status](#verification-status).
-3. **De-brew — #8–#11.** The reach work. Each is an independent tool with an independent
-   version pin.
+3. **De-brew — #8–#11. Done.** The reach work: four tools moved out of one account's
+   `/home/linuxbrew` into root-owned system paths. Each was an independent tool with an
+   independent version pin, and the wave needed no shared decision that wave 2 had not
+   already settled.
 4. **The configured ones — #12–#13.** Both depend on wave 1's decisions and on wave 2 (#13
    needs `azure-cli.yml` finished; #12 needs the shared-config mechanism).
 
@@ -346,10 +375,10 @@ additions:
 | `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 579.0.0-0 | Verified (localhost) |
 | `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | 1.112.0 | Verified (localhost) |
 | `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Verified (localhost) |
-| `jira-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
-| `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | TBD | Planned |
-| `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/bin` | TBD | Planned |
-| `vault-cli.yml` | brew + tap | HashiCorp apt repo (see note) | TBD | Planned |
+| `jira-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | 1.7.0 | Verified (localhost) |
+| `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | 1.0.0 | Verified (localhost) |
+| `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/lib` + symlink | 2.8.0 | Verified (localhost) |
+| `vault-cli.yml` | brew + tap | HashiCorp apt repo, A5 cleanup | 2.0.4-1 | Verified (localhost) |
 | `jenkins-cli.yml` | system-wide + `$JENKINS_URL` | unchanged shape; URL from a play var | n/a | Planned |
 | `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | az 2.89.0-1~noble, ext 1.0.6 | Verified (localhost) |
 
@@ -536,6 +565,115 @@ signature" warning does not change the exit status) and 1 on a tampered file, so
 is a sound gate. Where a vendor publishes a key only as documentation prose, pin it in the
 playbook and assert the fingerprint after import.
 
+### Wave 3 (`jira-cli`, `gcx-cli`, `influx-cli`, `vault-cli`)
+
+All four verified against `localhost`, `failed=0`, with the same caveats as everything else
+here: ansible-core 2.20 only, and a local connection exercises neither the 2.16 control node
+nor the SSH path. Re-runs are idempotent — `ok=14 changed=2` for `jira-cli`, `gcx-cli` and
+`influx-cli`, `ok=17 changed=3` for `vault-cli` — every `changed` being the scratch `HOME`
+created and removed (plus, for `vault-cli`, the policy file written inside it). `--check` was
+exercised first on all four and wrote nothing. Post-run checks independent of the playbooks:
+`jira 1.7.0`, `gcx 1.0.0`, `influx` symlinked to `2.8.0`, `vault 2.0.4-1`; all four binaries
+root-owned and world-readable; completion files present in `/etc/bash_completion.d`;
+`apt-get update` warns about nothing; `/var/tmp` holds no leftovers.
+
+**Not every tool can report its own version, and that changes the install layout.**
+`influx-cli`'s published binaries are built without the version stamp: `influx version` prints
+`Influx CLI dev (git: <sha>)` for every release, including the one that matches the published
+`.sha256` exactly. There is nothing in the binary's output to compare a pin against, so
+`influx-cli.yml` versions the *filesystem* instead — `/usr/local/lib/influx-cli/<version>/influx`
+with `/usr/local/bin/influx` symlinked to it — and the guard reads the symlink target with
+`stat` (`follow: false`). That also makes the active version visible from `ls -l`, and makes a
+stray non-symlink binary at the destination (a leftover from another install method) something
+the playbook replaces rather than trusts. Check `<tool> --version` against a *known* version
+before designing a guard around it; this is the first tool in either migration where the
+output is a constant.
+
+**The unprivileged smoke test needs a working directory, not just a `HOME`.** `gcx` merges a
+repository-level `.gcx.yaml` from the *current directory* into its config layering, and the
+current directory during a play is wherever ansible happens to run from — a path uid 65534
+generally cannot traverse. The first real run of `gcx-cli.yml` failed on
+`lstat /home/.../\_multi-user/cloud-cli/.gcx.yaml: permission denied`: a correct install
+failing its own verification on the cwd. All four playbooks now `chdir` their smoke tests into
+the scratch `HOME`, which costs nothing and removes the whole class. That brings back wave 2's
+`chdir` defect — the action validates `chdir` before check mode skips the task — so the scratch
+`HOME` create and remove carry `check_mode: false`, exactly as `opentofu.yml` does.
+
+**HashiCorp does publish `resolute`, contrary to what the [note above](#notes-on-the-four-that-need-a-decision)
+recorded.** `apt.releases.hashicorp.com/dists/resolute/InRelease` is a real signed Artifactory
+index, generated in the same run as `noble` and carrying the same 184 `vault` versions up to
+`2.0.4-1`; `plucky` likewise. The A5 codename map is therefore *not* required here — but
+`vault-cli.yml` keeps it and maps to `noble` anyway, because `services/vault.yml` configures
+this same repository with `noble`, and two entries for one URI under different suites are two
+repositories to apt: both get downloaded, and they can resolve to different candidates.
+Matching the suite is what A5's "do not fight" rule means when the other playbook is still
+live. Worth restating as a rule: **check the vendor's `dists/` yourself; a 404 recorded during
+planning may be a suite the vendor has since added.**
+
+**The HashiCorp `.deb` does not enable `vault.service` — so `vault-cli.yml` does not disable
+it.** The plan called for the `prometheus-cli.yml` treatment (stop and disable) if the package
+enabled its daemon. It does not: `postinst` only runs `daemon-reload`. What it *does* do is
+worth knowing for a "client-only" install — `preinst` creates a `vault` system user, and
+`postinst` generates a self-signed cert under `/opt/vault/tls`, creates `/opt/vault/data`,
+ships `vault.service`, and applies `setcap cap_ipc_lock=+ep` to the binary. That scaffolding is
+inert until something enables the unit, and on a host where the unit *is* enabled,
+`services/vault.yml` enabled it deliberately; disabling it there would be this playbook
+breaking another one's server. Task 19 reports the unit state instead of changing it.
+
+Two consequences of `vault` being one package for both client and server, observed on
+`localhost`, which already ran `services/vault.yml`:
+
+- Upgrading the pin upgrades the server's binary too, but **the running process keeps executing
+  the old code**: after the run `dpkg-query` reported `2.0.4-1` while the (sealed) server still
+  reported `Version 2.0.0` on its status endpoint. The new binary takes effect at the next
+  `vault.service` restart, which for file storage means unsealing again.
+- `/etc/vault.d/vault.hcl` is a dpkg conffile and `services/vault.yml` rewrites it. The upgrade
+  kept the modified file, because ansible's `apt` module passes `force-confold`.
+
+**The Homebrew PATH follow-up is now a task, not a note.** Each wave-3 playbook runs
+`env -i ... bash -lc 'command -v <tool>'` as uid 65534 and asserts the system-wide path. `env -i`
+is the point: PATH then comes purely from `/etc/profile` and, through it, `/etc/bash.bashrc`,
+which is where a system-wide `brew shellenv` would land. All four pass on `localhost` — but
+that is weaker evidence than it looks, because this host's `brew shellenv` line is in the
+user's own `~/.bashrc` (line 131), which no system-wide check can see. `jira` is the case that
+proves the limit: `/home/linuxbrew/.linuxbrew/bin/jira` still exists here and still wins for
+that one account's interactive shells. **Per-user `~/.bashrc` remains a manual check**, and
+the playbooks say so in their summaries.
+
+**A5's fingerprint-versus-bytes rule decided `vault-cli` immediately.** HashiCorp's packaging
+key `798AEC654E5C15428C8E42EEAA16FCBCA621E701` expires **2028-01-09**, so it is fetched each
+run and only its fingerprint is asserted — the `github-cli` form, not the `azure-cli` one. It
+is byte-identical to the copy `services/vault.yml` already installed at
+`/etc/apt/keyrings/hashicorp-archive-keyring.asc`; the new `.sources` uses the module's own
+`/etc/apt/keyrings/hashicorp.asc`, and the superseded `.list` is removed, so `apt-get update`
+reads the repository once. Re-running `services/vault.yml` will recreate its `.list` and the
+duplicate-target warning with it — the fix is to migrate that playbook, not to fight it.
+
+Smaller things, recorded because the next playbook will meet them:
+
+- **`influx-cli`'s `.sha256` is one file per asset**, not a shared `checksums.txt`, and its
+  entry is `<hash>  /root/project/packages/<file>` — InfluxData's build path, baked in. The
+  match pattern allows an optional directory prefix; anchoring on the bare filename finds
+  nothing. The asset is still named `influxdb2-client-*` despite the v2.8.0 rename
+  announcement: `influxdb2-cli-2.8.0-linux-amd64.tar.gz` is a 404.
+- **Asset arch strings differ per project even within one wave.** `jira-cli` publishes
+  `linux_x86_64`/`linux_arm64`, `gcx` and `influx-cli` publish `amd64`/`arm64`. Each playbook
+  carries its own map; copying one into another 404s on every host.
+- **Tarball layouts differ too**: `jira` nests its binary at `jira_<v>_linux_<arch>/bin/jira`,
+  `gcx` puts it at the archive root beside a README, `influx` uses a `./`-prefixed flat layout.
+  All three unpack into the staging directory and install the one file explicitly, rather than
+  extracting into `/usr/local/bin`.
+- **Completions are generated, not shipped.** `jira`, `gcx` and `influx` each emit a script
+  from a subcommand; all three are written to `/etc/bash_completion.d/<tool>`, which needs no
+  `/etc/profile.d` bootstrap. `vault` is different again — it completes through the binary, so
+  the file holds the single line `complete -C /usr/bin/vault vault` that
+  `vault -autocomplete-install` would otherwise have appended to one account's `~/.bashrc`.
+  `bash-completion` is now a prerequisite in all four: without its loader,
+  `/etc/bash_completion.d` is inert.
+- **`gcx` does not recreate its scratch `HOME` after removal**, unlike `az`. Its telemetry
+  (`GCX_TELEMETRY`) writes `~/.local/state/gcx/device-id` synchronously, so the directory stays
+  gone. Verified rather than assumed, which is the point of the `az` finding.
+
 ## Upstream survey (2026-08-06)
 
 Checked while writing this plan, to confirm each target mechanism exists. **Every version here
@@ -560,14 +698,18 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
 
 - **`/etc/profile.d` bootstrap** — already solved by `_multi-user/tools/modern-cli-tools.yml`
   (which patches `/etc/bash.bashrc`), but it becomes a hard dependency again for any tool here
-  that ships shell completions (`jira`, `gh`, `glab`, `tofu`). Order those after it, or
-  install completions to `/etc/bash_completion.d` instead, which needs no bootstrap. `az` is
-  off this list: its apt package ships `/etc/bash_completion.d/azure-cli` itself.
-- **`PATH` precedence on hosts that already have Homebrew** — carried over from MIGRATION.md
-  and now more acute: four of these tools currently live in `/home/linuxbrew/.linuxbrew/bin`,
-  and if `brew shellenv` still wins, users keep silently running the brew copy of `vault` or
-  `influx` after migration. Verify with `command -v` inside the unprivileged smoke test, not
-  just that the binary works.
+  that ships shell completions (`gh`, `glab`, `tofu`). Settled for wave 3 by taking the second
+  route: `jira`, `gcx`, `influx` and `vault` install completions to `/etc/bash_completion.d`,
+  which needs no bootstrap — only the `bash-completion` package, now a prerequisite in each.
+  `az` is off this list: its apt package ships `/etc/bash_completion.d/azure-cli` itself.
+- **`PATH` precedence on hosts that already have Homebrew** — carried over from MIGRATION.md.
+  Wave 3 turned the system-wide half into a playbook task (`command -v` under
+  `env -i ... bash -lc` as uid 65534, in all four de-brew playbooks). What remains is the
+  per-user half, which no playbook can see: a `brew shellenv` line in an individual account's
+  `~/.bashrc` still shadows the system-wide binary for that account's interactive shells, and
+  `/home/linuxbrew/.linuxbrew/bin/jira` is a live instance of exactly that on this workstation.
+  Uninstalling the four brew formulae is a per-host cleanup this migration documents but does
+  not perform.
 - **`cloud-cli/env-tmpl.sh` successor** — see [A1](#policy-amendments) and the note under the
   identity-state table. Blocks wave 4.
 - **Repo-wide vendor-repo ownership** — `services/vault.yml` is one instance of a broader

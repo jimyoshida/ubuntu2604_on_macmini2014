@@ -1,0 +1,393 @@
+---
+# Install the HashiCorp Vault CLI system-wide on a multi-user workstation.
+#
+#   /usr/bin/vault                               from the vendor apt package
+#   /etc/bash_completion.d/vault                 shell completion registration
+#   /etc/apt/sources.list.d/hashicorp.sources    repository definition
+#   /etc/apt/keyrings/hashicorp.asc              repository signing key
+#
+# De-brew work: the source playbook (cloud-cli/vault-cli.yml) ran
+# `brew tap hashicorp/tap` and `brew install` as lookup('env', 'USER'), so the
+# binary landed under /home/linuxbrew owned by whoever ran the play. HashiCorp
+# publishes an apt repository, so decision-order point 2 applies and this
+# becomes an ordinary vendor-repo playbook.
+#
+# CLIENT ONLY -- but read this before running it on a Vault *server*:
+#
+#   * `vault` is one package. There is no CLI-only package to install, so this
+#     playbook installs the same package services/vault.yml does, and on a host
+#     running both, bumping vault_cli_version upgrades the server's binary too.
+#     The running process keeps executing the old code until vault.service is
+#     restarted, and the file-storage server needs unsealing after that.
+#   * The package's postinst is NOT a server install by itself: it does not
+#     enable or start vault.service. It does create a `vault` system user,
+#     generate a self-signed cert under /opt/vault/tls, create /opt/vault/data,
+#     ship a vault.service unit, and setcap cap_ipc_lock=+ep on the binary.
+#     That scaffolding is inert until something enables the unit.
+#   * This playbook therefore does NOT stop or disable vault.service, unlike
+#     prometheus-cli.yml, which must because its apt package really does enable
+#     the Alertmanager daemon. Task 15 only reports the unit's state. If it is
+#     enabled here, services/vault.yml enabled it deliberately.
+#   * /etc/vault.d/vault.hcl is a dpkg conffile, and services/vault.yml
+#     rewrites it. An apt upgrade keeps the modified file (ansible's apt module
+#     passes force-confold), so a server's configuration survives.
+#
+# The identity stays per-user: `vault login` writes ~/.vault-token, and
+# VAULT_TOKEN is a secret belonging in each user's own environment. Nothing
+# here touches either, and the VAULT_ADDR env lookup the source playbook read
+# is gone per A2/A3 -- VAULT_ADDR is a name the CLI genuinely reads, but there
+# is no site-wide Vault for this playbook to name, and services/vault.yml's
+# habit of appending it to one account's ~/.bashrc is exactly the single-user
+# breakage this migration removes.
+#
+# Usage:
+#   ansible-playbook cloud-cli/vault-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/vault-cli.yml -e host=ws01 -e vault_cli_version=2.0.4-1
+
+- name: Install the HashiCorp Vault CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt package version. `vault version` prints the upstream version without
+    # the packaging revision, so the two forms are derived from one pin.
+    vault_cli_version: "2.0.4-1"
+    vault_cli_binary_version: "{{ vault_cli_version | regex_replace('-[0-9]+$', '') }}"
+    vault_cli_repo_uri: "https://apt.releases.hashicorp.com"
+    # HashiCorp's Artifactory publishes a suite per Ubuntu codename, and -- in
+    # correction of MIGRATION2.md, which recorded that it did not -- resolute
+    # IS published: /dists/resolute/InRelease is a real, signed index carrying
+    # the same 184 vault versions as noble, generated in the same run.
+    #
+    # noble is used anyway, and the map is kept rather than reading
+    # ansible_facts['distribution_release'] directly, because services/vault.yml
+    # configures this same repository with noble. Two entries for one URI under
+    # different suites are two repositories to apt: both get downloaded, and
+    # they can resolve to different candidates. Matching the suite keeps a host
+    # that runs both playbooks describing one repository (A5).
+    vault_cli_suite_map:
+      resolute: noble
+      plucky: noble
+    vault_cli_suite: >-
+      {{ vault_cli_suite_map.get(ansible_facts['distribution_release'],
+                                 ansible_facts['distribution_release']) }}
+    # ansible_facts['architecture'] -> apt architecture name.
+    vault_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    vault_cli_arch: "{{ vault_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    vault_cli_key_url: "https://apt.releases.hashicorp.com/gpg"
+    # A5's rule: pin the fingerprint always; pin the key bytes too, only when
+    # the key has no expiry. This one EXPIRES 2028-01-09, so it is fetched each
+    # run (deb822_repository compares by checksum, so that stays idempotent)
+    # and only its identity is asserted. Embedding today's bytes would turn the
+    # eventual rotation into a signature failure on every host.
+    vault_cli_key_fingerprint: "798AEC654E5C15428C8E42EEAA16FCBCA621E701"
+    # The apt source services/vault.yml writes for this same repository, via
+    # apt_repository (which derives the filename from the URI).
+    vault_cli_legacy_source: /etc/apt/sources.list.d/apt_releases_hashicorp_com.list
+    vault_cli_bin: /usr/bin/vault
+    vault_cli_completion: /etc/bash_completion.d/vault
+    vault_cli_smoke_home: /var/tmp/vault-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    vault_cli_verify_uid: 65534    # nobody
+    vault_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 6;
+      # bash-completion provides the loader that reads /etc/bash_completion.d.
+      # The source playbook's curl and lsb-release are gone: the module does
+      # the fetching and the codename comes from facts.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No HashiCorp apt architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to vault_cli_arch_map.
+      when: vault_cli_arch | length == 0
+
+    - name: 3. Remove the single-user playbook's apt source for this repository
+      # services/vault.yml writes apt_releases_hashicorp_com.list for the same
+      # repository. Left beside the .sources file below, apt reads the
+      # repository twice and warns that the target is configured multiple
+      # times. Its keyring (/etc/apt/keyrings/hashicorp-archive-keyring.asc) is
+      # left alone: it holds the same key and an unused keyring is inert.
+      #
+      # services/vault.yml is out of scope for this migration and still writes
+      # that file when it runs, so on a host that runs both, run this playbook
+      # second -- or migrate services/vault.yml. See the README.
+      ansible.builtin.file:
+        path: "{{ vault_cli_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the HashiCorp apt repository
+      # deb822_repository rather than get_url + apt_repository. Given a URL it
+      # downloads the key and compares it by checksum, so services/vault.yml's
+      # `force: yes` download -- which reported `changed` on every run -- becomes
+      # a no-op when nothing moved.
+      ansible.builtin.deb822_repository:
+        name: hashicorp
+        types:
+          - deb
+        uris:
+          - "{{ vault_cli_repo_uri }}"
+        suites:
+          - "{{ vault_cli_suite }}"
+        components:
+          - main
+        architectures:
+          - "{{ vault_cli_arch }}"
+        signed_by: "{{ vault_cli_key_url }}"
+        state: present
+        mode: '0644'
+      register: vault_cli_repo
+
+    - name: 5. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring. It
+      # tolerates a miss (failed_when: false) because on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ vault_cli_repo.key_filename | default('/etc/apt/keyrings/hashicorp.asc') }}
+      register: vault_cli_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Confirm the keyring holds HashiCorp's packaging key
+      # Guards against the repository being pointed at some other key: apt
+      # would happily trust whatever arrived at that URL. Skipped only in the
+      # one case where there is genuinely nothing to read yet.
+      ansible.builtin.fail:
+        msg: >-
+          The keyring at
+          {{ vault_cli_repo.key_filename | default('/etc/apt/keyrings/hashicorp.asc') }}
+          does not contain HashiCorp's signing key {{ vault_cli_key_fingerprint }}.
+          Refusing to install from a repository signed by an unknown key.
+      when:
+        - vault_cli_key_fingerprint not in (vault_cli_fpr.stdout | default(''))
+        - not (ansible_check_mode and vault_cli_fpr.rc | default(1) != 0)
+
+    - name: 7. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: vault_cli_repo.changed
+
+    - name: 8. Check the currently installed vault package version
+      # check_mode: false because this reads state that already exists. A
+      # skipped command task registers rc 0 and an empty stdout, which task 9
+      # would read as a version merely different from the pin.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' vault
+      register: vault_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether vault needs installing
+      ansible.builtin.set_fact:
+        vault_cli_install_needed: >-
+          {{ vault_cli_installed.rc != 0
+             or vault_cli_installed.stdout != vault_cli_version }}
+        vault_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (vault_cli_installed.rc != 0
+                       or vault_cli_installed.stdout != vault_cli_version)) }}
+
+    - name: 9a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install vault {{ vault_cli_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (vault_cli_can_verify | bool)
+
+    - name: 10. Install vault via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
+      ansible.builtin.apt:
+        name: "vault={{ vault_cli_version }}"
+        state: present
+        allow_downgrade: true
+      # The second clause is about --check on a host that does not yet have this
+      # vendor repository: the repository task reported `changed` without
+      # writing anything, so apt has no candidate for the pinned version and
+      # this task would fail outright rather than simulate. Where the
+      # repository IS already configured, it still runs under --check, so a
+      # dry run keeps showing what apt would do.
+      when:
+        - vault_cli_install_needed | bool
+        - not (ansible_check_mode and vault_cli_repo.changed)
+
+    - name: 11. Verify the installed vault package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' vault
+      register: vault_cli_dpkg
+      changed_when: false
+      failed_when: vault_cli_dpkg.stdout != vault_cli_version
+      when: vault_cli_can_verify | bool
+
+    - name: 12. Install the bash completion registration
+      # vault's own `vault -autocomplete-install` appends to the invoking
+      # account's ~/.bashrc -- per-user, and exactly the shape this migration
+      # removes. The single line it would write is dropped into
+      # /etc/bash_completion.d instead, where the bash-completion loader picks
+      # it up for every account with no /etc/profile.d bootstrap. Unlike the
+      # other playbooks here nothing is generated: vault completes itself
+      # through the binary at completion time.
+      ansible.builtin.copy:
+        content: "complete -C {{ vault_cli_bin }} vault\n"
+        dest: "{{ vault_cli_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: 13. Create a scratch HOME for the unprivileged checks
+      # vault writes ~/.vault-token on login. Nothing here logs in, but the
+      # smoke tests get a writable HOME anyway so that no code path can fall
+      # over on an unwritable one. /var/tmp rather than /tmp, which is a
+      # size-capped tmpfs on these hosts.
+      #
+      # It doubles as the working directory for the smoke tests below (chdir):
+      # uid 65534 cannot necessarily traverse the directory ansible happens to
+      # run from, and task 16 formats a file written into it. check_mode: false
+      # because `command` validates chdir *before* check mode skips the task,
+      # so a directory that exists only in simulation fails the dry run -- the
+      # defect opentofu.yml hit in wave 2.
+      ansible.builtin.file:
+        path: "{{ vault_cli_smoke_home }}"
+        state: directory
+        owner: "{{ vault_cli_verify_uid }}"
+        group: "{{ vault_cli_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: vault_cli_can_verify | bool
+
+    - name: 14. Report the vault version as an unprivileged user
+      # Also proves the setcap cap_ipc_lock=+ep the package applies does not
+      # stop an arbitrary uid from executing the binary.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ vault_cli_verify_uid }} --regid={{ vault_cli_verify_gid }} --clear-groups
+          env HOME={{ vault_cli_smoke_home }} {{ vault_cli_bin }} version
+        chdir: "{{ vault_cli_smoke_home }}"
+      register: vault_cli_smoke_version
+      changed_when: false
+      failed_when: ('Vault v' ~ vault_cli_binary_version) not in vault_cli_smoke_version.stdout
+      when: vault_cli_can_verify | bool
+
+    - name: 15. Write a policy file for the offline formatter check
+      ansible.builtin.copy:
+        content: |
+          path "secret/data/example" {
+          capabilities=["read","list"]
+          }
+        dest: "{{ vault_cli_smoke_home }}/policy.hcl"
+        owner: "{{ vault_cli_verify_uid }}"
+        group: "{{ vault_cli_verify_gid }}"
+        mode: '0600'
+      when: vault_cli_can_verify | bool
+
+    - name: 16. Format a policy file as an unprivileged user
+      # A4 tier 1: real offline work, the `tofu fmt -check` of this playbook.
+      # `vault policy fmt` parses HCL and rewrites the file, so it exercises
+      # the binary properly rather than printing a version string, and it
+      # contacts no server -- which matters because every other vault
+      # subcommand needs an address and a token, i.e. authentication rather
+      # than reachability. VAULT_ADDR is deliberately left unset.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ vault_cli_verify_uid }} --regid={{ vault_cli_verify_gid }} --clear-groups
+          env HOME={{ vault_cli_smoke_home }} {{ vault_cli_bin }} policy fmt
+          {{ vault_cli_smoke_home }}/policy.hcl
+        chdir: "{{ vault_cli_smoke_home }}"
+      register: vault_cli_smoke_fmt
+      changed_when: false
+      failed_when: "'Formatted policy' not in vault_cli_smoke_fmt.stdout"
+      when: vault_cli_can_verify | bool
+
+    - name: 17. Confirm a login shell resolves vault to the system-wide copy
+      # The Homebrew follow-up in MIGRATION2.md: if `brew shellenv` is injected
+      # system-wide it wins on PATH, so users keep silently running a per-user
+      # brew copy after migration. `env -i ... bash -lc` starts from an empty
+      # environment, so PATH comes purely from /etc/profile and (via it)
+      # /etc/bash.bashrc. It cannot see a brew line in an individual user's own
+      # ~/.bashrc -- check those by hand, see the README.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ vault_cli_verify_uid }} --regid={{ vault_cli_verify_gid }} --clear-groups
+          env -i HOME={{ vault_cli_smoke_home }} bash -lc 'command -v vault'
+        chdir: "{{ vault_cli_smoke_home }}"
+      register: vault_cli_smoke_path
+      changed_when: false
+      failed_when: (vault_cli_smoke_path.stdout | trim) != vault_cli_bin
+      when: vault_cli_can_verify | bool
+
+    - name: 18. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ vault_cli_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 19. Report the vault.service unit state
+      # Informational only, and deliberately so. The package does not enable
+      # the unit, so on a client-only host this reads disabled/inactive. If it
+      # reads enabled, services/vault.yml put it there on purpose and this
+      # playbook has no business turning off a running server.
+      ansible.builtin.command: systemctl is-enabled vault.service
+      register: vault_cli_unit
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 20. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Vault CLI {{ vault_cli_version }} ({{ vault_cli_arch }},
+            {{ vault_cli_suite }})
+            {{ vault_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ vault_cli_bin }}"
+          - "  {{ vault_cli_completion }}"
+          - "  /etc/apt/sources.list.d/hashicorp.sources"
+          - "  {{ vault_cli_repo.key_filename | default('/etc/apt/keyrings/hashicorp.asc') }}"
+          - ""
+          - "Repository keyring pinned to HashiCorp's key {{ vault_cli_key_fingerprint }}."
+          - >-
+            {{ vault_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ vault_cli_verify_uid
+                         ~ '), formatting a policy file offline, and resolved on PATH from a login shell.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - >-
+            vault.service is {{ vault_cli_unit.stdout | default('unknown') | trim }}.
+            The package does not enable it; services/vault.yml does. This playbook
+            installs the client and leaves the unit alone.
+          - ""
+          - "This replaces the Homebrew install. If /home/linuxbrew/.linuxbrew/bin/vault"
+          - "still exists, `brew uninstall hashicorp/tap/vault` it, and check each user's"
+          - "~/.bashrc for a `brew shellenv` line that would put the old copy first on PATH."
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  export VAULT_ADDR=https://<your-vault>:8200"
+          - "  vault login                  # writes ~/.vault-token"
+          - "  vault token lookup           # confirm which identity is active"
+          - ""
+          - "VAULT_ADDR is shared, non-secret configuration and the CLI does read it, but"
+          - "this playbook sets it nowhere. VAULT_TOKEN is a SECRET: keep it in your own"
+          - "environment at mode 0600, never in /etc/environment, which is world-readable."

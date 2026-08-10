@@ -1,0 +1,334 @@
+---
+# Install jira-cli system-wide on a multi-user workstation.
+#
+#   /usr/local/bin/jira              the binary, root-owned, mode 0755
+#   /etc/bash_completion.d/jira      shell completions, generated at install time
+#
+# This is the first of the four de-brew playbooks, and unlike wave 2 it is
+# reach work rather than correctness work. The source playbook
+# (cloud-cli/jira-cli.yml) ran `brew tap` and `brew install` as
+# lookup('env', 'USER'), so the binary landed in
+# /home/linuxbrew/.linuxbrew/Cellar owned by whoever ran the play. On a shared
+# box that is one account's install that everyone else inherits by accident of
+# PATH -- and that account can rewrite the binary every other account runs.
+#
+# The upstream release tarball goes to a root-owned system path instead. No
+# Homebrew, no tap, no per-user prefix.
+#
+# The identity stays per-user: `jira init` writes ~/.config/.jira/.config.yml,
+# and JIRA_API_TOKEN is a secret belonging in each user's own environment.
+# Nothing here touches either, and the JIRA_URL / JIRA_LOGIN env lookups the
+# source playbook read are gone (A2/A3) -- they were the *playbook's* inputs,
+# used only to print an instruction, and jira-cli itself does not read them.
+#
+# Usage:
+#   ansible-playbook cloud-cli/jira-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/jira-cli.yml -e host=ws01 -e jira_cli_version=1.7.0
+
+- name: Install jira-cli system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    jira_cli_version: "1.7.0"
+    jira_cli_base_url: "https://github.com/ankitpokhrel/jira-cli/releases/download/v{{ jira_cli_version }}"
+    # ansible_facts['architecture'] -> upstream asset name. Note these are NOT
+    # apt/Go names: this project publishes linux_x86_64 and linux_arm64, so a
+    # map copied from one of the amd64/arm64 playbooks would 404 on every host.
+    jira_cli_arch_map:
+      x86_64: x86_64
+      aarch64: arm64
+    jira_cli_arch: "{{ jira_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    jira_cli_tarball: "jira_{{ jira_cli_version }}_linux_{{ jira_cli_arch }}.tar.gz"
+    # Path of the binary inside the tarball: jira_<v>_linux_<arch>/bin/jira.
+    jira_cli_tarball_bin: "jira_{{ jira_cli_version }}_linux_{{ jira_cli_arch }}/bin/jira"
+    jira_cli_bin: /usr/local/bin/jira
+    jira_cli_completion: /etc/bash_completion.d/jira
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts (see
+    # MIGRATION.md).
+    jira_cli_stage_dir: "/var/tmp/jira-cli-install-{{ jira_cli_version }}"
+    jira_cli_smoke_home: /var/tmp/jira-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    jira_cli_verify_uid: 65534    # nobody
+    jira_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion provides the loader that reads /etc/bash_completion.d,
+      # so the completion file task 15 writes is inert without it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - tar
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No jira-cli release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to jira_cli_arch_map.
+      when: jira_cli_arch | length == 0
+
+    - name: 3. Check the currently installed jira version
+      # check_mode: false because this reads state that already exists. A
+      # skipped command task registers rc 0 and an empty stdout, which task 4
+      # would read as a version merely different from the pin.
+      ansible.builtin.command: "{{ jira_cli_bin }} version"
+      register: jira_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether jira-cli needs installing
+      # The version is compared, not the presence of the binary, so bumping
+      # jira_cli_version actually replaces the install. `jira version` prints
+      # (Version="1.7.0", GitCommit=...), and the closing quote anchors the
+      # match: without it a pin of 1.7.0 would be satisfied by 1.7.0-rc1.
+      ansible.builtin.set_fact:
+        jira_cli_install_needed: >-
+          {{ ('Version="' ~ jira_cli_version ~ '"') not in (jira_cli_installed.stdout | default('')) }}
+        jira_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and ('Version="' ~ jira_cli_version ~ '"') not in (jira_cli_installed.stdout | default(''))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install jira {{ jira_cli_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (jira_cli_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ jira_cli_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: jira_cli_install_needed | bool
+
+    - name: 6. Fetch the release checksums
+      # The hash is resolved from the release's own checksums.txt at run time
+      # rather than hardcoded, so overriding jira_cli_version stays a one-flag
+      # change (policy point 7).
+      #
+      # check_mode: false because uri skips itself under --check and registers
+      # no content, which task 7 reduces to an empty checksum and task 8 then
+      # reports as "checksums.txt has no entry for this asset" -- a dry run
+      # accusing a good version pin of not existing. Fetching a published
+      # checksums file changes nothing, and running it means --check genuinely
+      # validates the pin against upstream.
+      ansible.builtin.uri:
+        url: "{{ jira_cli_base_url }}/checksums.txt"
+        return_content: true
+      register: jira_cli_checksums
+      check_mode: false
+      when: jira_cli_install_needed | bool
+
+    - name: 7. Extract the expected checksum for this architecture
+      # Anchored at both ends against the exact filename, with the dots in the
+      # version escaped. This release's checksums.txt lists seven assets, four
+      # of them linux, differing only by architecture.
+      ansible.builtin.set_fact:
+        jira_cli_sha256: >-
+          {{ (jira_cli_checksums.content | default('')
+              | regex_search('(?m)^([0-9a-f]{64})\s+' ~ (jira_cli_tarball | regex_escape) ~ '$', '\1')
+              | first | default('')) }}
+      when: jira_cli_install_needed | bool
+
+    - name: 8. Fail if the checksums file does not list this asset
+      ansible.builtin.fail:
+        msg: >-
+          checksums.txt for jira-cli {{ jira_cli_version }} has no entry for
+          {{ jira_cli_tarball }}. Check the version pin and the asset naming.
+      when:
+        - jira_cli_install_needed | bool
+        - (jira_cli_sha256 | default('')) | length != 64
+
+    - name: 9. Download the jira-cli tarball and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check.
+      #
+      # Not under --check: get_url is not skipped in check mode, it validates
+      # its destination, and task 5 has not really created the staging
+      # directory -- so a dry run would fail on "Destination ... does not
+      # exist" rather than report the download it would make.
+      ansible.builtin.get_url:
+        url: "{{ jira_cli_base_url }}/{{ jira_cli_tarball }}"
+        dest: "{{ jira_cli_stage_dir }}/{{ jira_cli_tarball }}"
+        checksum: "sha256:{{ jira_cli_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - jira_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Unpack the tarball
+      ansible.builtin.unarchive:
+        src: "{{ jira_cli_stage_dir }}/{{ jira_cli_tarball }}"
+        dest: "{{ jira_cli_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - jira_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Install the jira binary
+      # Explicit mode rather than whatever the tarball carried: the binary must
+      # be executable by every account, not only by the one that unpacked it.
+      ansible.builtin.copy:
+        src: "{{ jira_cli_stage_dir }}/{{ jira_cli_tarball_bin }}"
+        dest: "{{ jira_cli_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - jira_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ jira_cli_stage_dir }}"
+        state: absent
+
+    - name: 13. Verify the installed jira version
+      ansible.builtin.command: "{{ jira_cli_bin }} version"
+      register: jira_cli_version_out
+      changed_when: false
+      failed_when: ('Version="' ~ jira_cli_version ~ '"') not in jira_cli_version_out.stdout
+      when: jira_cli_can_verify | bool
+
+    - name: 14. Generate the bash completion script
+      # jira ships no completion file; it generates one on demand. Generated
+      # here and written to /etc/bash_completion.d rather than to any $HOME:
+      # that directory is read by the bash-completion loader for every account
+      # and needs no /etc/profile.d bootstrap.
+      ansible.builtin.command: "{{ jira_cli_bin }} completion bash"
+      register: jira_cli_completion_out
+      changed_when: false
+      when: jira_cli_can_verify | bool
+
+    - name: 15. Install the bash completion script
+      ansible.builtin.copy:
+        content: "{{ jira_cli_completion_out.stdout }}\n"
+        dest: "{{ jira_cli_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: jira_cli_can_verify | bool
+
+    - name: 16. Create a scratch HOME for the unprivileged checks
+      # jira reads ~/.config/.jira/.config.yml. /var/tmp rather than /tmp,
+      # which is a size-capped tmpfs on these hosts.
+      #
+      # It doubles as the working directory for the smoke tests below (chdir):
+      # uid 65534 cannot necessarily traverse the directory ansible happens to
+      # run from, and several of these tools read a repository-level config
+      # file out of the cwd -- gcx aborts outright on an unreadable one.
+      # check_mode: false because `command` validates chdir *before* check
+      # mode skips the task, so a directory that exists only in simulation
+      # fails the dry run -- the defect opentofu.yml hit in wave 2.
+      ansible.builtin.file:
+        path: "{{ jira_cli_smoke_home }}"
+        state: directory
+        owner: "{{ jira_cli_verify_uid }}"
+        group: "{{ jira_cli_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: jira_cli_can_verify | bool
+
+    - name: 17. Report the jira version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ jira_cli_verify_uid }} --regid={{ jira_cli_verify_gid }} --clear-groups
+          env HOME={{ jira_cli_smoke_home }} {{ jira_cli_bin }} version
+        chdir: "{{ jira_cli_smoke_home }}"
+      register: jira_cli_smoke_version
+      changed_when: false
+      failed_when: ('Version="' ~ jira_cli_version ~ '"') not in jira_cli_smoke_version.stdout
+      when: jira_cli_can_verify | bool
+
+    - name: 18. Generate a completion script as an unprivileged user
+      # A4 tier 1: real offline work rather than a version string. Completion
+      # generation walks jira's whole cobra command tree, so it proves an
+      # arbitrary uid can execute the binary and reach a code path that does
+      # something -- and it needs no credentials, which is the point: this
+      # playbook configures no identity. `jira issue list` would exit 1 with
+      # "the tool needs a Jira API token", which is authentication, not
+      # reachability.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ jira_cli_verify_uid }} --regid={{ jira_cli_verify_gid }} --clear-groups
+          env HOME={{ jira_cli_smoke_home }} {{ jira_cli_bin }} completion bash
+        chdir: "{{ jira_cli_smoke_home }}"
+      register: jira_cli_smoke_completion
+      changed_when: false
+      failed_when: "'__jira_debug' not in jira_cli_smoke_completion.stdout"
+      when: jira_cli_can_verify | bool
+
+    - name: 19. Confirm a login shell resolves jira to the system-wide copy
+      # The Homebrew follow-up in MIGRATION2.md: four of these tools currently
+      # live in /home/linuxbrew/.linuxbrew/bin, and if `brew shellenv` is
+      # injected system-wide it wins on PATH -- so users keep silently running
+      # the per-user brew copy after migration. `env -i ... bash -lc` starts
+      # from an empty environment, so PATH comes purely from /etc/profile and
+      # (via it) /etc/bash.bashrc.
+      #
+      # What this does NOT catch: a brew shellenv line in an individual user's
+      # own ~/.bashrc, which is per-account and invisible from here. Check
+      # those by hand -- see the README.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ jira_cli_verify_uid }} --regid={{ jira_cli_verify_gid }} --clear-groups
+          env -i HOME={{ jira_cli_smoke_home }} bash -lc 'command -v jira'
+        chdir: "{{ jira_cli_smoke_home }}"
+      register: jira_cli_smoke_path
+      changed_when: false
+      failed_when: (jira_cli_smoke_path.stdout | trim) != jira_cli_bin
+      when: jira_cli_can_verify | bool
+
+    - name: 20. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ jira_cli_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 21. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            jira-cli {{ jira_cli_version }} ({{ jira_cli_arch }})
+            {{ jira_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ jira_cli_bin }}"
+          - "  {{ jira_cli_completion }}"
+          - ""
+          - "The tarball is checked against the sha256 published in the release's checksums.txt."
+          - >-
+            {{ jira_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ jira_cli_verify_uid
+                         ~ '), generating a completion script, and resolved on PATH from a login shell.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "This replaces the Homebrew install. If /home/linuxbrew/.linuxbrew/bin/jira"
+          - "still exists, `brew uninstall jira-cli` it, and check each user's ~/.bashrc"
+          - "for a `brew shellenv` line that would put the old copy first on PATH."
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  jira init                    # writes ~/.config/.jira/.config.yml"
+          - "  jira me                      # confirm which account is active"
+          - ""
+          - "JIRA_API_TOKEN is a SECRET: keep it in your own environment at mode 0600,"
+          - "never in /etc/environment, which is shared and world-readable."

@@ -1,0 +1,389 @@
+---
+# Install the InfluxDB v2 CLI system-wide on a multi-user workstation.
+#
+#   /usr/local/lib/influx-cli/<version>/influx   the binary, root-owned
+#   /usr/local/bin/influx                        symlink to the active version
+#   /etc/bash_completion.d/influx                shell completions
+#
+# De-brew work. The source playbook (cloud-cli/influx-cli.yml) ran
+# `brew install influxdb-cli` as lookup('env', 'USER'), so the binary landed
+# under /home/linuxbrew owned by whoever ran the play.
+#
+# Two things make this one different from the other de-brew playbooks:
+#
+# 1. The release does not live on GitHub. influxdata/influx-cli's GitHub
+#    releases carry no assets at all; the binaries are published at
+#    dl.influxdata.com with a .sha256 sibling per asset. The v2.8.0 release
+#    notes announce a rename to influxdb2-cli, but the published asset is
+#    still influxdb2-client-* -- confirmed against the server, where
+#    influxdb2-cli-2.8.0-linux-amd64.tar.gz is a 404. Re-check both spellings
+#    when bumping the pin.
+#
+# 2. `influx version` does not report the version. The published binaries are
+#    built without the version stamp and print "Influx CLI dev (git: <sha>)",
+#    so there is nothing in the binary's own output to compare a pin against.
+#    The install is therefore versioned in the filesystem instead -- a
+#    per-version directory with a symlink into it, the same shape AWS's
+#    installer uses -- and the guard reads the symlink. That also makes the
+#    active version visible from `ls -l /usr/local/bin/influx`.
+#
+# The identity stays per-user: `influx config create` writes
+# ~/.influxdbv2/configs, and INFLUX_TOKEN is a secret belonging in each user's
+# own environment. Nothing here touches either, and the INFLUX_HOST /
+# INFLUX_ORG env lookups the source playbook read are gone per A2/A3 -- both
+# are names the CLI genuinely reads (verified: `influx ping` with INFLUX_HOST
+# set requests that host, `influx bucket list` with INFLUX_ORG set sends
+# org=<value>), but there is no site-wide InfluxDB for this repo to name.
+#
+# Usage:
+#   ansible-playbook cloud-cli/influx-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/influx-cli.yml -e host=ws01 -e influx_cli_version=2.8.0
+
+- name: Install the InfluxDB v2 CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    influx_cli_version: "2.8.0"
+    influx_cli_base_url: "https://dl.influxdata.com/influxdb/releases"
+    # ansible_facts['architecture'] -> upstream asset name.
+    influx_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    influx_cli_arch: "{{ influx_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    influx_cli_tarball: "influxdb2-client-{{ influx_cli_version }}-linux-{{ influx_cli_arch }}.tar.gz"
+    influx_cli_lib_dir: /usr/local/lib/influx-cli
+    influx_cli_versioned_bin: "/usr/local/lib/influx-cli/{{ influx_cli_version }}/influx"
+    influx_cli_bin: /usr/local/bin/influx
+    influx_cli_completion: /etc/bash_completion.d/influx
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts.
+    influx_cli_stage_dir: "/var/tmp/influx-cli-install-{{ influx_cli_version }}"
+    influx_cli_smoke_home: /var/tmp/influx-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    influx_cli_verify_uid: 65534    # nobody
+    influx_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion provides the loader that reads /etc/bash_completion.d,
+      # so the completion file task 17 writes is inert without it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - tar
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No influx CLI release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to influx_cli_arch_map.
+      when: influx_cli_arch | length == 0
+
+    - name: 3. Inspect the current install
+      # check_mode: false because these read state that already exists.
+      # follow: false on the symlink -- what matters is where it points, not
+      # whether the target happens to resolve.
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: influx_cli_stat
+      loop:
+        - "{{ influx_cli_versioned_bin }}"
+        - "{{ influx_cli_bin }}"
+      loop_control:
+        label: "{{ item }}"
+      check_mode: false
+
+    - name: 4. Decide whether the influx CLI needs installing
+      # The pinned version's own directory must exist AND /usr/local/bin/influx
+      # must be the symlink pointing at it. Comparing a version string is not
+      # available here (see the header), so this is the equivalent: bumping
+      # influx_cli_version changes the expected path and therefore reinstalls,
+      # and a stray non-symlink binary at /usr/local/bin/influx -- a leftover
+      # from another install method -- is replaced rather than trusted.
+      ansible.builtin.set_fact:
+        influx_cli_install_needed: >-
+          {{ not (influx_cli_stat.results[0].stat.exists
+                  and influx_cli_stat.results[1].stat.islnk | default(false)
+                  and influx_cli_stat.results[1].stat.lnk_target | default('') == influx_cli_versioned_bin) }}
+        influx_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and not (influx_cli_stat.results[0].stat.exists
+                           and influx_cli_stat.results[1].stat.islnk | default(false)
+                           and influx_cli_stat.results[1].stat.lnk_target | default('') == influx_cli_versioned_bin)) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install influx {{ influx_cli_version }}, so the
+          install check and the unprivileged smoke tests below are skipped
+          rather than failed. Re-run without --check to verify the install.
+      when: not (influx_cli_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ influx_cli_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: influx_cli_install_needed | bool
+
+    - name: 6. Fetch the published checksum for this asset
+      # Each asset has its own <asset>.sha256 rather than one shared checksums
+      # file. check_mode: false for the same reason as the other playbooks: a
+      # skipped uri registers no content, and the guard below would then blame
+      # the version pin. Fetching a checksum file changes nothing on the host,
+      # so --check really does validate the pin against upstream.
+      ansible.builtin.uri:
+        url: "{{ influx_cli_base_url }}/{{ influx_cli_tarball }}.sha256"
+        return_content: true
+      register: influx_cli_checksum_file
+      check_mode: false
+      when: influx_cli_install_needed | bool
+
+    - name: 7. Extract the expected checksum
+      # The entry is "<hash>  /root/project/packages/<file>" -- InfluxData's
+      # build path is baked into the published file -- so the pattern allows an
+      # optional directory prefix rather than anchoring straight after the
+      # whitespace. Same class of trap as the bin/ prefix MIGRATION.md warns
+      # about; anchoring on the bare filename would find nothing.
+      ansible.builtin.set_fact:
+        influx_cli_sha256: >-
+          {{ (influx_cli_checksum_file.content | default('')
+              | regex_search('(?m)^([0-9a-f]{64})\s+(?:\S*/)?' ~ (influx_cli_tarball | regex_escape) ~ '$', '\1')
+              | first | default('')) }}
+      when: influx_cli_install_needed | bool
+
+    - name: 8. Fail if the checksum file does not describe this asset
+      ansible.builtin.fail:
+        msg: >-
+          {{ influx_cli_tarball }}.sha256 has no entry for
+          {{ influx_cli_tarball }}. Check the version pin and the asset naming
+          -- upstream announced a rename from influxdb2-client-* to
+          influxdb2-cli-*, so both spellings are worth trying.
+      when:
+        - influx_cli_install_needed | bool
+        - (influx_cli_sha256 | default('')) | length != 64
+
+    - name: 9. Download the influx CLI tarball and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check.
+      #
+      # Not under --check: get_url is not skipped in check mode and validates
+      # its destination, which task 5 has not really created.
+      ansible.builtin.get_url:
+        url: "{{ influx_cli_base_url }}/{{ influx_cli_tarball }}"
+        dest: "{{ influx_cli_stage_dir }}/{{ influx_cli_tarball }}"
+        checksum: "sha256:{{ influx_cli_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - influx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Unpack the tarball
+      # The archive's members are ./influx, ./LICENSE, ./README.md -- no
+      # top-level directory, so it is unpacked into the staging directory and
+      # only the binary is installed from there.
+      ansible.builtin.unarchive:
+        src: "{{ influx_cli_stage_dir }}/{{ influx_cli_tarball }}"
+        dest: "{{ influx_cli_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - influx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Create the versioned install directory
+      ansible.builtin.file:
+        path: "{{ influx_cli_versioned_bin | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - influx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Install the influx binary into its versioned directory
+      ansible.builtin.copy:
+        src: "{{ influx_cli_stage_dir }}/influx"
+        dest: "{{ influx_cli_versioned_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - influx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 13. Point /usr/local/bin/influx at the pinned version
+      # force: true so an existing plain file (a leftover from a previous
+      # install method) is replaced by the symlink rather than causing a
+      # "refusing to convert" failure.
+      ansible.builtin.file:
+        src: "{{ influx_cli_versioned_bin }}"
+        dest: "{{ influx_cli_bin }}"
+        state: link
+        owner: root
+        group: root
+        force: true
+      when:
+        - influx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 14. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ influx_cli_stage_dir }}"
+        state: absent
+
+    - name: 15. Verify the symlink points at the pinned version
+      # This is the version check. `influx version` cannot serve as one: the
+      # published binaries report "Influx CLI dev" regardless of release.
+      ansible.builtin.stat:
+        path: "{{ influx_cli_bin }}"
+        follow: false
+      register: influx_cli_link
+      failed_when: >-
+        not (influx_cli_link.stat.islnk | default(false))
+        or influx_cli_link.stat.lnk_target | default('') != influx_cli_versioned_bin
+      when: influx_cli_can_verify | bool
+
+    - name: 16. Generate the bash completion script
+      # influx ships no completion file; it generates one on demand. Written to
+      # /etc/bash_completion.d rather than to any $HOME: that directory is read
+      # by the bash-completion loader for every account and needs no
+      # /etc/profile.d bootstrap.
+      ansible.builtin.command: "{{ influx_cli_bin }} completion bash"
+      register: influx_cli_completion_out
+      changed_when: false
+      when: influx_cli_can_verify | bool
+
+    - name: 17. Install the bash completion script
+      ansible.builtin.copy:
+        content: "{{ influx_cli_completion_out.stdout }}\n"
+        dest: "{{ influx_cli_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: influx_cli_can_verify | bool
+
+    - name: 18. Create a scratch HOME for the unprivileged checks
+      # influx reads ~/.influxdbv2/configs. /var/tmp rather than /tmp, which is
+      # a size-capped tmpfs on these hosts.
+      #
+      # It doubles as the working directory for the smoke tests below (chdir):
+      # uid 65534 cannot necessarily traverse the directory ansible happens to
+      # run from. check_mode: false because `command` validates chdir *before*
+      # check mode skips the task, so a directory that exists only in
+      # simulation fails the dry run -- the defect opentofu.yml hit in wave 2.
+      ansible.builtin.file:
+        path: "{{ influx_cli_smoke_home }}"
+        state: directory
+        owner: "{{ influx_cli_verify_uid }}"
+        group: "{{ influx_cli_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: influx_cli_can_verify | bool
+
+    - name: 19. Run the influx CLI as an unprivileged user
+      # Proves an arbitrary uid can execute the binary through the symlink.
+      # The output is asserted only to be the CLI's own version banner, NOT to
+      # contain influx_cli_version: upstream ships these binaries unstamped and
+      # they print "Influx CLI dev (git: <sha>)". Task 15 is what checks the
+      # pin.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ influx_cli_verify_uid }} --regid={{ influx_cli_verify_gid }} --clear-groups
+          env HOME={{ influx_cli_smoke_home }} {{ influx_cli_bin }} version
+        chdir: "{{ influx_cli_smoke_home }}"
+      register: influx_cli_smoke_version
+      changed_when: false
+      failed_when: "'Influx CLI' not in influx_cli_smoke_version.stdout"
+      when: influx_cli_can_verify | bool
+
+    - name: 20. List influx CLI configurations as an unprivileged user
+      # A4 tier 2: `influx config list` walks the configuration discovery path
+      # (~/.influxdbv2/configs) and prints its header with no entries, which is
+      # the zero-configuration behaviour A4 asks to have proven. It needs no
+      # credentials and contacts no server -- this playbook configures no
+      # identity. INFLUX_CONFIGS_PATH is deliberately left unset.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ influx_cli_verify_uid }} --regid={{ influx_cli_verify_gid }} --clear-groups
+          env HOME={{ influx_cli_smoke_home }} {{ influx_cli_bin }} config list
+        chdir: "{{ influx_cli_smoke_home }}"
+      register: influx_cli_smoke_config
+      changed_when: false
+      failed_when: "'Active' not in influx_cli_smoke_config.stdout"
+      when: influx_cli_can_verify | bool
+
+    - name: 21. Confirm a login shell resolves influx to the system-wide copy
+      # The Homebrew follow-up in MIGRATION2.md: if `brew shellenv` is injected
+      # system-wide it wins on PATH, so users keep silently running a per-user
+      # brew copy after migration. `env -i ... bash -lc` starts from an empty
+      # environment, so PATH comes purely from /etc/profile and (via it)
+      # /etc/bash.bashrc. It cannot see a brew line in an individual user's own
+      # ~/.bashrc -- check those by hand, see the README.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ influx_cli_verify_uid }} --regid={{ influx_cli_verify_gid }} --clear-groups
+          env -i HOME={{ influx_cli_smoke_home }} bash -lc 'command -v influx'
+        chdir: "{{ influx_cli_smoke_home }}"
+      register: influx_cli_smoke_path
+      changed_when: false
+      failed_when: (influx_cli_smoke_path.stdout | trim) != influx_cli_bin
+      when: influx_cli_can_verify | bool
+
+    - name: 22. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ influx_cli_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 23. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            InfluxDB v2 CLI {{ influx_cli_version }} ({{ influx_cli_arch }})
+            {{ influx_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ influx_cli_versioned_bin }}"
+          - "  {{ influx_cli_bin }} -> {{ influx_cli_versioned_bin }}"
+          - "  {{ influx_cli_completion }}"
+          - ""
+          - "The tarball is checked against the sha256 published beside it at dl.influxdata.com."
+          - >-
+            {{ influx_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ influx_cli_verify_uid
+                         ~ '), listing its own configurations, and resolved on PATH from a login shell.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "`influx version` reports \"Influx CLI dev\": upstream ships these binaries"
+          - "unstamped. The installed version is the symlink target above, not that string."
+          - "Earlier versions are left in {{ influx_cli_lib_dir }}/ and can be removed by hand."
+          - ""
+          - "This replaces the Homebrew install. If /home/linuxbrew/.linuxbrew/bin/influx"
+          - "still exists, `brew uninstall influxdb-cli` it, and check each user's ~/.bashrc"
+          - "for a `brew shellenv` line that would put the old copy first on PATH."
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  influx config create --config-name default --host-url <url> \\"
+          - "      --org <org> --token <token> --active     # writes ~/.influxdbv2/configs"
+          - "  influx config list                           # confirm which config is active"
+          - ""
+          - "INFLUX_HOST and INFLUX_ORG are shared, non-secret configuration and the CLI"
+          - "does read them, but this playbook sets them nowhere. INFLUX_TOKEN is a SECRET:"
+          - "keep it in your own environment at mode 0600, never in /etc/environment."

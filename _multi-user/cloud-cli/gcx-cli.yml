@@ -1,0 +1,341 @@
+---
+# Install gcx (the Grafana CLI) system-wide on a multi-user workstation.
+#
+#   /usr/local/bin/gcx              the binary, root-owned, mode 0755
+#   /etc/bash_completion.d/gcx      shell completions, generated at install time
+#
+# De-brew work, like jira-cli.yml. The source playbook (cloud-cli/gcx-cli.yml)
+# ran `brew tap grafana/grafana` and `brew install` as lookup('env', 'USER'),
+# so the binary landed under /home/linuxbrew owned by whoever ran the play.
+# The upstream release tarball goes to a root-owned system path instead.
+#
+# The identity stays per-user: `gcx login` writes ~/.config/gcx/config.yaml
+# (and a device id under ~/.local/state/gcx), and GRAFANA_TOKEN is a secret
+# belonging in each user's own environment. Nothing here touches either.
+#
+# The source playbook's GRAFANA_SERVER lookup('env', ...) is gone per A2/A3.
+# Unlike JIRA_URL, GRAFANA_SERVER *is* a name gcx really reads -- verified on
+# the target: with it set, `gcx config check` gets past "server is required"
+# and fails on credentials instead, while the plausible-looking
+# GRAFANA_ENDPOINT does not. It is still not written anywhere by this
+# playbook: there is no shared Grafana instance for this repo to name, and a
+# per-user context created by `gcx login` is the supported path. If a site
+# default is ever wanted, set GRAFANA_SERVER in /etc/environment from a play
+# var per A1/A2 -- and never GRAFANA_TOKEN, which is a secret.
+#
+# Usage:
+#   ansible-playbook cloud-cli/gcx-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/gcx-cli.yml -e host=ws01 -e gcx_cli_version=1.0.0
+
+- name: Install the Grafana CLI (gcx) system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    gcx_cli_version: "1.0.0"
+    gcx_cli_base_url: "https://github.com/grafana/gcx/releases/download/v{{ gcx_cli_version }}"
+    # ansible_facts['architecture'] -> upstream asset name. This project uses
+    # the Go names (amd64/arm64), unlike jira-cli's x86_64.
+    gcx_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    gcx_cli_arch: "{{ gcx_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    gcx_cli_tarball: "gcx_{{ gcx_cli_version }}_linux_{{ gcx_cli_arch }}.tar.gz"
+    # The checksums file is versioned, not a plain checksums.txt.
+    gcx_cli_checksums_file: "gcx_{{ gcx_cli_version }}_checksums.txt"
+    # The binary sits at the root of the tarball, beside CHANGELOG/LICENSE.
+    gcx_cli_bin: /usr/local/bin/gcx
+    gcx_cli_completion: /etc/bash_completion.d/gcx
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts, and
+    # this binary is ~100MiB unpacked (see MIGRATION.md).
+    gcx_cli_stage_dir: "/var/tmp/gcx-cli-install-{{ gcx_cli_version }}"
+    gcx_cli_smoke_home: /var/tmp/gcx-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    gcx_cli_verify_uid: 65534    # nobody
+    gcx_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion provides the loader that reads /etc/bash_completion.d,
+      # so the completion file task 15 writes is inert without it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - tar
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No gcx release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to gcx_cli_arch_map.
+      when: gcx_cli_arch | length == 0
+
+    - name: 3. Check the currently installed gcx version
+      # check_mode: false because this reads state that already exists. A
+      # skipped command task registers rc 0 and an empty stdout, which task 4
+      # would read as a version merely different from the pin.
+      ansible.builtin.command: "{{ gcx_cli_bin }} --version"
+      register: gcx_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether gcx needs installing
+      # The version is compared, not the presence of the binary. `gcx
+      # --version` prints "gcx version 1.0.0 built from <sha> on <date>"; the
+      # trailing space anchors the match, so a pin of 1.0.0 is not satisfied
+      # by an installed 1.0.0-rc1.
+      ansible.builtin.set_fact:
+        gcx_cli_install_needed: >-
+          {{ ('gcx version ' ~ gcx_cli_version ~ ' ') not in (gcx_cli_installed.stdout | default('')) }}
+        gcx_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and ('gcx version ' ~ gcx_cli_version ~ ' ') not in (gcx_cli_installed.stdout | default(''))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install gcx {{ gcx_cli_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (gcx_cli_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ gcx_cli_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: gcx_cli_install_needed | bool
+
+    - name: 6. Fetch the release checksums
+      # Resolved at run time from the release's own checksums file rather than
+      # hardcoded, so overriding gcx_cli_version stays a one-flag change.
+      #
+      # check_mode: false because uri skips itself under --check and registers
+      # no content, which task 7 reduces to an empty checksum and task 8 then
+      # reports as a missing asset -- a dry run accusing a good version pin of
+      # not existing. Fetching a published checksums file changes nothing.
+      ansible.builtin.uri:
+        url: "{{ gcx_cli_base_url }}/{{ gcx_cli_checksums_file }}"
+        return_content: true
+      register: gcx_cli_checksums
+      check_mode: false
+      when: gcx_cli_install_needed | bool
+
+    - name: 7. Extract the expected checksum for this architecture
+      # Anchored at both ends against the exact filename, with the dots in the
+      # version escaped. The file lists six assets differing only by platform
+      # and architecture.
+      ansible.builtin.set_fact:
+        gcx_cli_sha256: >-
+          {{ (gcx_cli_checksums.content | default('')
+              | regex_search('(?m)^([0-9a-f]{64})\s+' ~ (gcx_cli_tarball | regex_escape) ~ '$', '\1')
+              | first | default('')) }}
+      when: gcx_cli_install_needed | bool
+
+    - name: 8. Fail if the checksums file does not list this asset
+      ansible.builtin.fail:
+        msg: >-
+          {{ gcx_cli_checksums_file }} has no entry for {{ gcx_cli_tarball }}.
+          Check the version pin and the asset naming.
+      when:
+        - gcx_cli_install_needed | bool
+        - (gcx_cli_sha256 | default('')) | length != 64
+
+    - name: 9. Download the gcx tarball and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check.
+      #
+      # Not under --check: get_url is not skipped in check mode and validates
+      # its destination, which task 5 has not really created.
+      ansible.builtin.get_url:
+        url: "{{ gcx_cli_base_url }}/{{ gcx_cli_tarball }}"
+        dest: "{{ gcx_cli_stage_dir }}/{{ gcx_cli_tarball }}"
+        checksum: "sha256:{{ gcx_cli_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - gcx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Unpack the tarball
+      ansible.builtin.unarchive:
+        src: "{{ gcx_cli_stage_dir }}/{{ gcx_cli_tarball }}"
+        dest: "{{ gcx_cli_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - gcx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Install the gcx binary
+      # Explicit mode rather than whatever the tarball carried: the binary must
+      # be executable by every account, not only by the one that unpacked it.
+      ansible.builtin.copy:
+        src: "{{ gcx_cli_stage_dir }}/gcx"
+        dest: "{{ gcx_cli_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - gcx_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ gcx_cli_stage_dir }}"
+        state: absent
+
+    - name: 13. Verify the installed gcx version
+      ansible.builtin.command: "{{ gcx_cli_bin }} --version"
+      register: gcx_cli_version_out
+      changed_when: false
+      failed_when: ('gcx version ' ~ gcx_cli_version ~ ' ') not in gcx_cli_version_out.stdout
+      when: gcx_cli_can_verify | bool
+
+    - name: 14. Generate the bash completion script
+      # gcx ships no completion file; it generates one on demand. Written to
+      # /etc/bash_completion.d rather than to any $HOME: that directory is read
+      # by the bash-completion loader for every account and needs no
+      # /etc/profile.d bootstrap.
+      ansible.builtin.command: "{{ gcx_cli_bin }} completion bash"
+      register: gcx_cli_completion_out
+      changed_when: false
+      when: gcx_cli_can_verify | bool
+
+    - name: 15. Install the bash completion script
+      ansible.builtin.copy:
+        content: "{{ gcx_cli_completion_out.stdout }}\n"
+        dest: "{{ gcx_cli_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: gcx_cli_can_verify | bool
+
+    - name: 16. Create a scratch HOME for the unprivileged checks
+      # gcx needs a *writable* HOME, not merely a readable one: every config
+      # subcommand mkdirs ~/.config/gcx and ~/.local/state/gcx and aborts with
+      # "Permission denied: mkdir /nonexistent" otherwise. This is the A4
+      # writable-HOME mechanic, same as az/aws/gcloud.
+      #
+      # It doubles as the working directory for the smoke tests below (chdir),
+      # and for gcx that is not optional: its configuration layering includes a
+      # repository-level .gcx.yaml read from the *current directory*, so with
+      # the cwd left wherever ansible ran from, `gcx config current-context`
+      # dies on "lstat .../.gcx.yaml: permission denied" as uid 65534 -- an
+      # install that works perfectly, failing its own verification on the
+      # working directory. check_mode: false because `command` validates chdir
+      # *before* check mode skips the task, so a directory that exists only in
+      # simulation fails the dry run -- the defect opentofu.yml hit in wave 2.
+      ansible.builtin.file:
+        path: "{{ gcx_cli_smoke_home }}"
+        state: directory
+        owner: "{{ gcx_cli_verify_uid }}"
+        group: "{{ gcx_cli_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: gcx_cli_can_verify | bool
+
+    - name: 17. Report the gcx version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ gcx_cli_verify_uid }} --regid={{ gcx_cli_verify_gid }} --clear-groups
+          env HOME={{ gcx_cli_smoke_home }} {{ gcx_cli_bin }} --version
+        chdir: "{{ gcx_cli_smoke_home }}"
+      register: gcx_cli_smoke_version
+      changed_when: false
+      failed_when: ('gcx version ' ~ gcx_cli_version ~ ' ') not in gcx_cli_smoke_version.stdout
+      when: gcx_cli_can_verify | bool
+
+    - name: 18. Resolve the gcx context as an unprivileged user
+      # A4 tier 2: `gcx config current-context` walks gcx's whole layered
+      # configuration path ($XDG_CONFIG_DIRS/gcx, then ~/.config/gcx, then
+      # ./.gcx.yaml), creates the user layer, and falls back to the built-in
+      # "default" context. That is the zero-configuration behaviour A4 asks to
+      # have proven, and it needs no credentials. GCX_CONFIG is deliberately
+      # left unset so default discovery is what gets tested.
+      #
+      # Not `gcx config check`: without a stack it exits non-zero by design
+      # ("context references no stack"), which is authentication state, not
+      # reachability.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ gcx_cli_verify_uid }} --regid={{ gcx_cli_verify_gid }} --clear-groups
+          env HOME={{ gcx_cli_smoke_home }} {{ gcx_cli_bin }} config current-context
+        chdir: "{{ gcx_cli_smoke_home }}"
+      register: gcx_cli_smoke_config
+      changed_when: false
+      failed_when: (gcx_cli_smoke_config.stdout | trim) | length == 0
+      when: gcx_cli_can_verify | bool
+
+    - name: 19. Confirm a login shell resolves gcx to the system-wide copy
+      # The Homebrew follow-up in MIGRATION2.md: if `brew shellenv` is injected
+      # system-wide it wins on PATH, so users keep silently running a per-user
+      # brew copy after migration. `env -i ... bash -lc` starts from an empty
+      # environment, so PATH comes purely from /etc/profile and (via it)
+      # /etc/bash.bashrc. It cannot see a brew line in an individual user's own
+      # ~/.bashrc -- check those by hand, see the README.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ gcx_cli_verify_uid }} --regid={{ gcx_cli_verify_gid }} --clear-groups
+          env -i HOME={{ gcx_cli_smoke_home }} bash -lc 'command -v gcx'
+        chdir: "{{ gcx_cli_smoke_home }}"
+      register: gcx_cli_smoke_path
+      changed_when: false
+      failed_when: (gcx_cli_smoke_path.stdout | trim) != gcx_cli_bin
+      when: gcx_cli_can_verify | bool
+
+    - name: 20. Remove the scratch HOME
+      # gcx has no background uploader that recreates it: verified on the
+      # target, the directory stays gone. (az does recreate it -- see
+      # MIGRATION2.md -- so this is worth checking per tool, not assuming.)
+      ansible.builtin.file:
+        path: "{{ gcx_cli_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 21. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            gcx {{ gcx_cli_version }} ({{ gcx_cli_arch }})
+            {{ gcx_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ gcx_cli_bin }}"
+          - "  {{ gcx_cli_completion }}"
+          - ""
+          - "The tarball is checked against the sha256 published in the release's checksums file."
+          - >-
+            {{ gcx_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ gcx_cli_verify_uid
+                         ~ '), resolving its own default context ('
+                         ~ (gcx_cli_smoke_config.stdout | default('') | trim)
+                         ~ '), and resolved on PATH from a login shell.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "This replaces the Homebrew install. If /home/linuxbrew/.linuxbrew/bin/gcx"
+          - "still exists, `brew uninstall grafana/grafana/gcx` it, and check each user's"
+          - "~/.bashrc for a `brew shellenv` line that would put the old copy first on PATH."
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  gcx login                    # writes ~/.config/gcx/config.yaml"
+          - "  gcx config check             # confirm the context resolves"
+          - ""
+          - "GRAFANA_SERVER is shared, non-secret configuration and gcx does read it,"
+          - "but this playbook sets it nowhere: there is no site-wide Grafana instance"
+          - "to name. GRAFANA_TOKEN is a SECRET: keep it in your own environment at"
+          - "mode 0600, never in /etc/environment, which is world-readable."
