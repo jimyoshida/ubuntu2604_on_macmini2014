@@ -124,30 +124,58 @@ precedence follow-up in [MIGRATION2.md](MIGRATION2.md#known-follow-ups) still ap
 account whose `~/.bashrc` runs `brew shellenv`. The playbook is recoverable from git history
 (`git log --diff-filter=D -- core/homebrew.yml`).
 
+## Retired: `core/golang.yml` and `core/rust.yml`
+
+Two language toolchains, installed on every workstation this repo provisions, for work that
+does not happen on them. What the AI agents here actually build is Ansible, shell, Node and
+Python; nothing in this repo compiles Go or Rust, and no agent has asked for either. So both
+playbooks went (2026-08-10) — retired for **scope**, not for defect. Neither was broken:
+`golang.yml` pinned its version explicitly and handled upgrades, and `rust.yml` deferred to
+rustup, which is the correct way to install Rust. They were simply a version pin to keep
+current, a `~/.bashrc` block to own and a tarball to fetch on behalf of nobody.
+
+What replaces them, if a runtime is genuinely needed, is [`core/mise.yml`](core/README.md#miseyml)
+— already in `core/`, already the polyglot answer, and per-account on demand
+(`mise use --global go@1.23`) rather than a system-wide install nobody asked for. For Rust
+specifically the upstream one-liner the retired playbook wrapped is still the recommended
+path: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+
+The two were in different categories, so both counts above move: `golang.yml` was *mixed* — a
+shared `/usr/local/go` with `PATH` and `GOPATH` in the invoker's `.bashrc` — and `rust.yml` was
+*personal only*, rustup into `~/.cargo` for one account and no one else.
+
+As with the other retirements, deleting a playbook uninstalls nothing. A host already
+provisioned keeps its `/usr/local/go`, its `~/.cargo` and the `ANSIBLE MANAGED BLOCK: golang`
+and `ANSIBLE MANAGED BLOCK: rust` blocks in `~/.bashrc`; removing those is a per-host cleanup
+this repo no longer performs. Both playbooks are recoverable from git history
+(`git log --diff-filter=D -- core/golang.yml core/rust.yml`).
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 44 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 42 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-24) | 24 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
 | [Effectively shared](#effectively-shared-4) | 4 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
-| [Mixed](#mixed--shared-install-personal-tail-9) | 9 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-7) | 7 | The whole install lands in one `$HOME` or one account |
+| [Mixed](#mixed--shared-install-personal-tail-8) | 8 | Shared install plus a tail that benefits only the invoker |
+| [Personal only](#personal-only-6) | 6 | The whole install lands in one `$HOME` or one account |
 
-Nearly half the repo is now multi-user, and the balance moved in one step rather than
+More than half the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
 counted, and the total drops back when the originals are retired. That has now happened
 twice, and both migrations are now finished: `tool/` after MIGRATION.md, and all thirteen of
-`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Five playbooks went the other
+`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Seven playbooks went the other
 way and were deleted rather than migrated: all of `services/` except `samba.yml`, which moved
-to `core/` (see [Retired: `services/`](#retired-services)), and `core/homebrew.yml`, which was
+to `core/` (see [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
 deleted once the migrations left it with no dependents (see
-[Retired: `core/homebrew.yml`](#retired-corehomebrewyml)).
+[Retired: `core/homebrew.yml`](#retired-corehomebrewyml)); and `core/golang.yml` and
+`core/rust.yml`, which were out of scope for a workstation that runs AI coding agents (see
+[Retired: `core/golang.yml` and `core/rust.yml`](#retired-coregolangyml-and-corerustyml)).
 
-The 17 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 15 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
@@ -177,26 +205,31 @@ left is the tail.
 | `container/devcontainers.yml` | `npm install -g` as root |
 | `gui-tools/vscode.yml` | apt (`vscode_user` is declared but never used) |
 
-### Mixed — shared install, personal tail (9)
+### Mixed — shared install, personal tail (8)
+
+`core/golang.yml` used to be the ninth — `/usr/local/go` shared, `PATH` and `GOPATH` in the
+invoker's `.bashrc` — and was [retired](#retired-coregolangyml-and-corerustyml) rather than
+fixed, since a toolchain nobody here compiles with is not worth un-mixing.
 
 | Playbook | Shared part | Personal part |
 |----------|-------------|---------------|
 | `container/{helm,kubectl,kind,minikube}.yml` | apt or `/usr/local/bin` | Bash completion written to `/home/{{ *_user }}/.bashrc` |
 | `container/{docker,podman}.yml` | Daemon and packages | Only `$USER` is added to the `docker` group; `~/.bashrc` |
-| `core/golang.yml` | `/usr/local/go` | `PATH` and `GOPATH` in the invoker's `.bashrc` |
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
 | `core/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
-### Personal only (7)
+### Personal only (6)
 
 Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
-meant to end up. The other four are still mixed in with the shared trees. Two more left the
-category by ceasing to be playbooks at all: `core/homebrew.yml` was
-[retired](#retired-corehomebrewyml) — it had been the root cause of four other entries here,
-`cloud-cli/{gcx,influx,jira,vault}-cli.yml`, all `brew install` as `lookup('env', 'USER')`,
-until wave 3 of MIGRATION2.md moved those to root-owned paths — and `core/ssh-key-setup.yml`
-became [`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every
-task was a `chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible.
+meant to end up. The other three are still mixed in with the shared trees. Three more left the
+category without being fixed: `core/homebrew.yml` was [retired](#retired-corehomebrewyml) — it
+had been the root cause of four other entries here, `cloud-cli/{gcx,influx,jira,vault}-cli.yml`,
+all `brew install` as `lookup('env', 'USER')`, until wave 3 of MIGRATION2.md moved those to
+root-owned paths — `core/rust.yml` was
+[retired with `core/golang.yml`](#retired-coregolangyml-and-corerustyml) as out of scope, and
+`core/ssh-key-setup.yml` became
+[`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every task was a
+`chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible.
 
 | Playbook | Cause |
 |----------|-------|
@@ -204,11 +237,10 @@ task was a `chmod` inside the invoker's own `~/.ssh` was never getting anything 
 | `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
 | `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
 | `container/krew.yml` | `~/.krew` prefix plus `~/.bashrc` PATH |
-| `core/rust.yml` | rustup into `~/.cargo` |
 | `core/x11vnc.yml` | `/home/$USER/.vnc`, user systemd unit, `~/.bashrc` |
 | `core/agent-base.yml` | `~/.xprofile`, `~/.xsessionrc`, three `~/.bashrc` blocks |
 
-The four still in the shared trees are per-identity by **defect** — each binds its work to
+The three still in the shared trees are per-identity by **defect** — each binds its work to
 whoever happens to run it. The fix for that shape is the one MIGRATION.md already names: an
 explicit user list instead of `$USER`, not a move to `/usr/local`. The three in `_personal/`
 are per-identity **by nature** and need no fix.

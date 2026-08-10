@@ -167,51 +167,10 @@ mise use --global python@3.12  # Install and set Python globally
 mise ls-remote python          # List available Python versions
 ```
 
-## golang.yml
-
-Install Go (Golang) programming language
-
-```bash
-ansible-playbook core/golang.yml
-```
-
-Installs Go from the official Go binary distribution with minimal dependencies. The playbook:
-- Downloads the official Go tarball from go.dev
-- Extracts to `/usr/local/go`
-- Adds Go to PATH and sets up GOPATH in `~/.bashrc`
-- Supports version upgrades by updating the `go_version` variable
-
-After installation, activate in current shell:
-```bash
-source ~/.bashrc
-go version
-```
-
-## rust.yml
-
-Install Rust programming language
-
-```bash
-ansible-playbook core/rust.yml
-```
-
-Installs Rust via rustup (official Rust toolchain installer) with minimal dependencies. The playbook:
-- Downloads and runs the official rustup installer from sh.rustup.rs
-- Installs the stable toolchain to `~/.cargo`
-- Adds Cargo bin directory to PATH in `~/.bashrc`
-- Includes rustc (compiler) and cargo (package manager)
-
-After installation, activate in current shell:
-```bash
-source ~/.bashrc
-rustc --version
-cargo --version
-```
-
-Common post-install steps:
-```bash
-rustup component add clippy rustfmt  # Add linter and formatter
-```
+The Go and Rust toolchains used to be installed here, by `golang.yml` and `rust.yml`. Both were
+retired on 2026-08-10 — see
+[Retired: `core/golang.yml` and `core/rust.yml`](../README.md#retired-coregolangyml-and-corerustyml).
+`mise.yml` above is the general-purpose replacement for a per-account runtime.
 
 ---
 
