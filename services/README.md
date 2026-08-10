@@ -8,7 +8,11 @@ Install HashiCorp Vault OSS
 ansible-playbook services/vault.yml
 ```
 
-Installs Vault from the official HashiCorp APT repository (pinned to `noble` — Ubuntu 26.04 `resolute` is not yet supported upstream). Configures file storage at `/opt/vault/data`, enables the UI, and starts the `vault` systemd service on port `8200`. Adds `VAULT_ADDR=http://127.0.0.1:8200` to `~/.bashrc`.
+Installs Vault from the official HashiCorp APT repository (pinned to `noble`). Configures file storage at `/opt/vault/data`, enables the UI, and starts the `vault` systemd service on port `8200`. Adds `VAULT_ADDR=http://127.0.0.1:8200` to `~/.bashrc`.
+
+> **Not installed on this workstation.** The local Vault server was removed on 2026-08-10: the service is stopped and disabled, and `/opt/vault`, `/etc/vault.d`, the `vault` system user and the `~/.bashrc` block are gone. The `vault` **package** is still installed, because it is also the CLI — see [`_multi-user/cloud-cli/vault-cli.yml`](../_multi-user/cloud-cli/README.md#vault-cliyml), which owns the client half. Running this playbook reinstalls and starts the server, and it will need `vault operator init` again: the previous storage was deleted, not preserved.
+
+> **The `noble` pin is not a workaround for a missing suite.** HashiCorp's Artifactory does publish `resolute` (and `plucky`) — verified: `dists/resolute/InRelease` is a real signed index carrying the same package set. `noble` is used because `_multi-user/cloud-cli/vault-cli.yml` configures the same repository with `noble`, and two entries for one URI under different suites are two repositories to apt. Keep the two playbooks on the same suite.
 
 **After installation:**
 

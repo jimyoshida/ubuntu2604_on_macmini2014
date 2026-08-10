@@ -1,4 +1,22 @@
 ---
+# Installs a Vault SERVER. The CLI half now belongs to
+# _multi-user/cloud-cli/vault-cli.yml, which installs the same package from the
+# same repository. Two things to know before running this playbook:
+#
+#   * It writes /etc/apt/sources.list.d/apt_releases_hashicorp_com.list, which
+#     vault-cli.yml removes in favour of its own hashicorp.sources. Both
+#     describe the same repository with the same key and the same suite, so
+#     either is fine on its own -- but with both present apt reads the
+#     repository twice and warns. Run vault-cli.yml last, or migrate this
+#     playbook.
+#   * It is single-user by design: task 9 appends VAULT_ADDR to the invoking
+#     account's ~/.bashrc. That is the breakage MIGRATION2.md removes; on a
+#     shared workstation use /etc/environment or each user's own profile.
+#
+# This workstation has no local Vault server: it was removed on 2026-08-10.
+# Running this playbook installs and starts one again, and it will need
+# `vault operator init` -- the previous storage was deleted, not preserved.
+
 - name: Install HashiCorp Vault OSS
   hosts: localhost
   connection: local
