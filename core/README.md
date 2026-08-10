@@ -31,6 +31,12 @@ avahi-resolve-host-name hostname.local      # Resolve a .local hostname to IP
 avahi-resolve-address 192.168.x.x          # Reverse-resolve IP to .local name
 ```
 
+This playbook configures the SSH **server**. The client-side half — permissions on your own
+`~/.ssh` and your key in `authorized_keys` — is not a playbook: it needs no privileges and no
+remote connection, so it is [`setup-passwordless-ssh.sh`](../setup-passwordless-ssh.sh) instead
+(see [Passwordless SSH Setup](../README.md#passwordless-ssh-setup)). Run that after this
+playbook to finish SSH setup for remote access.
+
 ## disable-rsyslog.yml
 
 Stop rsyslog from duplicating journal logs to `/var/log/syslog`
@@ -49,24 +55,6 @@ To revert, unmask the socket and re-enable rsyslog:
 sudo systemctl unmask syslog.socket
 sudo systemctl enable --now rsyslog.service
 ```
-
-## ssh-key-setup.yml
-
-SSH public key authentication setup
-
-```bash
-ansible-playbook core/ssh-key-setup.yml
-```
-
-This playbook configures SSH key permissions and authorized_keys after `id_rsa` and `id_rsa.pub` have been uploaded to the machine. It:
-- Sets proper permissions on `.ssh/` directory (700)
-- Sets proper permissions on `id_rsa` private key (600)
-- Sets proper permissions on `id_rsa.pub` public key (644)
-- Creates and configures `authorized_keys` file (600)
-- Appends public key to authorized_keys if not already present
-- Validates key files exist before processing
-
-Run this playbook after `agent-base.yml` to complete SSH setup for remote access.
 
 ## x11vnc.yml
 

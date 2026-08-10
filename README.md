@@ -21,6 +21,27 @@ Configure passwordless sudo first:
 
 This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo prompt compatibility issues with newer Ubuntu versions.
 
+## Passwordless SSH Setup
+
+After uploading `id_rsa` and `id_rsa.pub` to `~/.ssh`, and after running
+[`core/agent-base.yml`](core/README.md#agent-baseyml) to configure the SSH server:
+
+```bash
+./setup-passwordless-ssh.sh
+```
+
+Sets `~/.ssh` to `0700`, the private key to `0600`, the public key to `0644` and `config` and
+`authorized_keys` to `0600`, then appends your public key to `authorized_keys` unless that
+exact line is already there. Missing files are reported and skipped rather than treated as an
+error, so it is safe to run before the keys are in place.
+
+This is a script rather than a playbook for the same reason
+[`setup-passwordless-sudo.sh`](setup-passwordless-sudo.sh) is: it configures **the account
+running it**, needs no privileges and no remote connection, and touches nothing outside that
+account's `$HOME`. It was `core/ssh-key-setup.yml` until 2026-08-10 — a `become: no`,
+`connection: local` playbook whose every task was a `chmod` — and the conversion cost the repo
+nothing except an Ansible dependency for the one step you run before Ansible is useful.
+
 ## Playbooks (old)
 
 What is left of the original single-user tree. Three directories no longer exist: `tool/`
@@ -107,14 +128,14 @@ account whose `~/.bashrc` runs `brew shellenv`. The playbook is recoverable from
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 45 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 44 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-24) | 24 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
 | [Effectively shared](#effectively-shared-4) | 4 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-9) | 9 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-8) | 8 | The whole install lands in one `$HOME` or one account |
+| [Personal only](#personal-only-7) | 7 | The whole install lands in one `$HOME` or one account |
 
 Nearly half the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
@@ -126,7 +147,7 @@ to `core/` (see [Retired: `services/`](#retired-services)), and `core/homebrew.y
 deleted once the migrations left it with no dependents (see
 [Retired: `core/homebrew.yml`](#retired-corehomebrewyml)).
 
-The 18 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 17 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
@@ -166,14 +187,16 @@ left is the tail.
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
 | `core/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
-### Personal only (8)
+### Personal only (7)
 
 Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
-meant to end up. The rest are still mixed in with the shared trees. A fourth left the category
-by being deleted: `core/homebrew.yml` was the root cause of four other entries that used to sit
-here — `cloud-cli/{gcx,influx,jira,vault}-cli.yml`, all `brew install` as
-`lookup('env', 'USER')` — and once wave 3 of MIGRATION2.md moved those to root-owned paths it
-was [retired](#retired-corehomebrewyml) rather than fixed.
+meant to end up. The other four are still mixed in with the shared trees. Two more left the
+category by ceasing to be playbooks at all: `core/homebrew.yml` was
+[retired](#retired-corehomebrewyml) — it had been the root cause of four other entries here,
+`cloud-cli/{gcx,influx,jira,vault}-cli.yml`, all `brew install` as `lookup('env', 'USER')`,
+until wave 3 of MIGRATION2.md moved those to root-owned paths — and `core/ssh-key-setup.yml`
+became [`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every
+task was a `chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible.
 
 | Playbook | Cause |
 |----------|-------|
@@ -182,11 +205,11 @@ was [retired](#retired-corehomebrewyml) rather than fixed.
 | `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
 | `container/krew.yml` | `~/.krew` prefix plus `~/.bashrc` PATH |
 | `core/rust.yml` | rustup into `~/.cargo` |
-| `core/ssh-key-setup.yml` | `become: no`, `~/.ssh` |
 | `core/x11vnc.yml` | `/home/$USER/.vnc`, user systemd unit, `~/.bashrc` |
 | `core/agent-base.yml` | `~/.xprofile`, `~/.xsessionrc`, three `~/.bashrc` blocks |
 
-One of these is per-identity **by nature** rather than by defect: `core/ssh-key-setup.yml`,
-which installs a key for a person. The fix for that shape is the one MIGRATION.md already
-names — an explicit user list instead of `$USER` — not a move to `/usr/local`.
+The four still in the shared trees are per-identity by **defect** — each binds its work to
+whoever happens to run it. The fix for that shape is the one MIGRATION.md already names: an
+explicit user list instead of `$USER`, not a move to `/usr/local`. The three in `_personal/`
+are per-identity **by nature** and need no fix.
 
