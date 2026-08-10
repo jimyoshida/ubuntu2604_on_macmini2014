@@ -5,8 +5,10 @@ Policy and procedure for migrating the cloud/service CLI playbooks from `cloud-c
 
 **Status: in progress.** 12 of 13 source playbooks migrated, verified, and **retired** — the
 originals were deleted on 2026-08-10, as `tool/` was before them. Waves 2 and 3 are complete;
-only `jenkins-cli.yml` (#12) remains, still blocked on wave 1's `env-tmpl.sh` decision, and it
-is now the only playbook left in `cloud-cli/`. See [Migration status](#migration-status).
+only `jenkins-cli.yml` (#12) remains, and it is now the only file left in `cloud-cli/`. It is
+no longer blocked: wave 1's last open decision, the `env-tmpl.sh` split, was settled on
+2026-08-10 by deleting that file and documenting the setup in the READMEs instead. See
+[Migration status](#migration-status).
 
 This document is the sequel to [MIGRATION.md](MIGRATION.md), which covered `tool/` →
 `_multi-user/tools/` and is complete. Everything there still applies: the
@@ -44,7 +46,7 @@ MIGRATION.md's three causes of single-user breakage all recur here, plus two new
    file every account executes. `azure-devops-cli.yml` tasks 8–9 write `AZURE_DEVOPS_ORG` /
    `AZURE_DEVOPS_PROJECT` into the invoking account's `~/.azure/config`. In both cases one
    person's environment silently becomes either everyone's default or exactly one person's.
-5. **NEW — secrets.** `cloud-cli/env-tmpl.sh` is a template for eight tokens
+5. **NEW — secrets.** `cloud-cli/env-tmpl.sh` was a template for eight tokens
    (`JENKINS_API_TOKEN`, `JIRA_API_TOKEN`, `INFLUX_TOKEN`, `VAULT_TOKEN`, `GRAFANA_TOKEN`,
    `AZURE_DEVOPS_EXT_PAT`, …). MIGRATION.md policy point 3 sends environment variables to
    `/etc/environment` — which is world-readable and shared. Applied naively to this directory
@@ -55,7 +57,7 @@ MIGRATION.md's three causes of single-user breakage all recur here, plus two new
 
 | | |
 | --- | --- |
-| Source | `cloud-cli/*.yml` (13 playbooks) + `cloud-cli/env-tmpl.sh` |
+| Source | `cloud-cli/*.yml` (13 playbooks) + `cloud-cli/env-tmpl.sh` (both retired — see below) |
 | Target | `_multi-user/cloud-cli/*.yml` |
 | Applies to | New multi-user workstation builds |
 | Control node | Ubuntu 24.04 (ansible-core **2.16**) **or** Ubuntu 26.04 (ansible-core 2.20) |
@@ -95,8 +97,8 @@ underscore on `_multi-user/` still means "staging", same as before.
 - `{core,container,ai-agent,services,gui-tools,media}/` — still a separate question.
 - ~~`cloud-cli/*` itself stays in place until the new build is proven, same as `tool/` did.~~
   **Retired 2026-08-10.** The twelve migrated originals were deleted once their successors
-  were verified, the same way `tool/` was. Only `cloud-cli/jenkins-cli.yml` and
-  `cloud-cli/env-tmpl.sh` remain, both waiting on wave 4. Note what "proven" actually covers
+  were verified, the same way `tool/` was. `cloud-cli/env-tmpl.sh` went with them, leaving
+  `cloud-cli/jenkins-cli.yml` as the only file in the directory. Note what "proven" covers
   before relying on the deletion: `localhost` only, ansible-core 2.20 only, and no
   SSH/`remote_user` path — `ws01`/`ws02` have never been provisioned by either generation.
   The originals are recoverable from git history (`git log --diff-filter=D -- cloud-cli/`).
@@ -207,6 +209,23 @@ pieces: the shared, non-secret half applied by the playbooks per A1, and a per-u
 `~/.config/cloud-cli/env.sh` template (mode `0600`, sourced by the user, gitignored) for the
 rest. Decide this before migrating `jenkins-cli.yml`, the first playbook that needs it.
 
+> **Decided 2026-08-10: there is no successor file. `env-tmpl.sh` is deleted, and the setup
+> it described is documented in the READMEs instead.** The shared half needed nothing — no
+> playbook here sets an environment variable, because none of the six candidate names has a
+> site-wide value this repo can supply (see the verification note below: three of them are
+> not even read by their tools). That leaves only the per-user half, and shipping a *tracked*
+> template for it buys nothing a README paragraph does not, while creating a file that looks
+> like the place to write tokens — which is a file someone eventually commits with tokens in
+> it. The `umask 077` / `~/.config/cloud-cli/env.sh` / `chmod 600` recipe A1 wanted is now in
+> [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables)
+> as instructions, together with the table of which names each tool actually reads;
+> `jenkins-cli.yml`'s three variables are in
+> [`cloud-cli/README.md`](cloud-cli/README.md#per-user-setup).
+>
+> This closes the last of wave 1's three decisions and **unblocks #12**, which no longer has
+> a file to depend on: its `jenkins_url` becomes a play var per A2, and its two credential
+> variables stay in each user's own environment, documented rather than templated.
+
 **The `az devops` row was wrong, and wrong in the way that matters.** `AZURE_DEVOPS_ORG` and
 `AZURE_DEVOPS_PROJECT` were carried into this table from the source playbook, where they were
 inputs to the *playbook* — read with `lookup('env', ...)` and fed to
@@ -229,7 +248,8 @@ and every user still gets an error. `azure-devops-cli.yml` task 20a is the patte
 tool as an unprivileged uid with the variable set and assert that the "not configured" error
 is *not* what comes back.
 
-**Wave 3 checked its four rows against the binaries, and found one more wrong.** Method: run
+**Wave 3 checked its four rows against the binaries, and found one more wrong — then
+retiring `env-tmpl.sh` turned up a third.** Method: run
 the tool with the variable set and with a plausible near-miss name as a negative control, and
 compare the failure.
 
@@ -248,11 +268,23 @@ compare the failure.
   from `~/.config/.jira/.config.yml`, written by `jira init`. They were the source playbook's
   own inputs, used only to interpolate an instruction into a `debug` message.
 
-That is two of the seven names in this table wrong, from two different source playbooks, which
-makes the pattern rather than the exception the thing to plan for. The four verified ones are
+- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` — **not read by `gcloud`.** Found while
+  retiring `env-tmpl.sh`, which carried both. With `GOOGLE_CLOUD_PROJECT` set,
+  `gcloud config get project` still prints `(unset)`; with `CLOUDSDK_CORE_PROJECT` it prints
+  the value. This one is worse than the other two because the name is not invented — Google's
+  *client libraries* really do read `GOOGLE_CLOUD_PROJECT` for Application Default
+  Credentials, so it is a correct variable for the wrong consumer, and it looks right in
+  every direction until you ask the CLI what project it is on. `gcloud-cli.yml` had already
+  dropped both per A2/A3 without knowing this; it was right for the weaker reason that a
+  project is per-identity.
+
+That is three of the eight names checked here wrong, from three different source playbooks,
+which makes the pattern rather than the exception the thing to plan for. The verified ones are
 still not written to `/etc/environment` by any playbook: being a name a tool reads is
 necessary, not sufficient — there also has to be a shared endpoint worth naming, and for
-Grafana/InfluxDB/Vault this repo has none.
+Grafana/InfluxDB/Vault this repo has none. The whole table now lives in
+[`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables) as
+user-facing documentation, which is what replaced `env-tmpl.sh`.
 
 ## Per-tool migration plan
 
@@ -349,10 +381,15 @@ present in the `az` version the Microsoft repo currently ships. Plan:
 
 Four waves, each ending in a commit and a status-table update:
 
-1. **Decisions first (no playbooks).** Settle the `env-tmpl.sh` split (A1), the
-   `vault-cli`/`services/vault.yml` overlap, and the shared A5 vendor-repo block. These three
-   are referenced by nearly every playbook; deciding them mid-migration means rewriting
-   earlier ones.
+1. **Decisions first (no playbooks). Done — all three, though two of them late.** Settle the
+   `env-tmpl.sh` split (A1), the `vault-cli`/`services/vault.yml` overlap, and the shared A5
+   vendor-repo block. These three are referenced by nearly every playbook; deciding them
+   mid-migration means rewriting earlier ones. In the event, only A5 was settled up front:
+   wave 2 finished it (the two key-pinning forms), wave 3 dissolved the `vault-cli` overlap
+   by deleting `services/vault.yml`, and `env-tmpl.sh` was settled last of all — by deleting
+   it too, in favour of documentation. Both late decisions cost nothing to the playbooks
+   already written, because both resolved *towards doing less*; a decision that had added a
+   shipped file or a shared write would have meant revisiting all twelve.
 2. **Vendor-repo and apt playbooks — #1–#7. Done.** Already system-wide, so this was
    correctness work: A5 cleanup, pins, version-aware guards, smoke tests. It established the
    house style for the wave that follows, and settled the shared A5 vendor-repo block that
@@ -460,7 +497,9 @@ no `.sources` file, no package change, no scratch directories left behind.
 its only real dependency. It does not in fact need wave 1's `env-tmpl.sh` decision: its shared
 half is two non-secret variables written straight to `/etc/environment` per A1/A2, and its
 secret (`AZURE_DEVOPS_EXT_PAT`) is simply not touched — there is nothing for a per-user
-template to hold. `jenkins-cli.yml` (#12) still blocks on that decision.
+template to hold. `jenkins-cli.yml` (#12) blocked on that decision until it was settled on
+2026-08-10 — by deleting `env-tmpl.sh` outright, which turned out to be the same answer this
+playbook had already arrived at in practice.
 
 Five findings from these two, in rough order of how much they will affect the remaining
 playbooks:
@@ -751,8 +790,11 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   `/home/linuxbrew/.linuxbrew/bin/jira` is a live instance of exactly that on this workstation.
   Uninstalling the four brew formulae is a per-host cleanup this migration documents but does
   not perform.
-- **`cloud-cli/env-tmpl.sh` successor** — see [A1](#policy-amendments) and the note under the
-  identity-state table. Blocks wave 4.
+- ~~**`cloud-cli/env-tmpl.sh` successor**~~ — **closed 2026-08-10.** There is none: the file
+  is deleted and its content is now documentation, in
+  [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables)
+  and [`cloud-cli/README.md`](cloud-cli/README.md#per-user-setup). See the decision note
+  under the [identity-state table](#per-tool-identity-state). Wave 4 is no longer blocked.
 - **Repo-wide vendor-repo ownership** — several directories add apt repositories
   independently, with no shared convention for keyring paths or `sources.list.d` filenames.
   A5 makes the migrated playbooks internally consistent; making them consistent with

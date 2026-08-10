@@ -25,8 +25,7 @@ The originals are in git history if one is ever needed: `git log --diff-filter=D
 The one playbook not yet migrated. It is still single-user in the way MIGRATION2.md
 describes: it renders the **invoking shell's** `$JENKINS_URL` into
 `/usr/local/bin/jenkins-cli`, a file every account executes, so one person's environment
-silently becomes everyone's default. Migrating it is blocked on the `env-tmpl.sh` decision
-below.
+silently becomes everyone's default.
 
 Install Jenkins CLI (`jenkins-cli.jar`) from a running Jenkins instance, with a wrapper
 script at `/usr/local/bin/jenkins-cli`.
@@ -51,30 +50,45 @@ proxy_set_header Connection "upgrade";
 
 Without these, the CLI handshake fails with HTTP 400.
 
-## env-tmpl.sh
+### Per-user setup
 
-A template of the environment variables the playbooks here used to read. It is kept because
-`jenkins-cli.yml` still reads its shell environment, and because
-[MIGRATION2.md's A1](../MIGRATION2.md#policy-amendments) plans to split it in two — the
-shared, non-secret half applied by the playbooks, and a per-user
-`~/.config/cloud-cli/env.sh` at mode `0600` for the tokens. That split is what
-`jenkins-cli.yml` is waiting on.
+The wrapper reads three variables **at run time**, from each user's own environment:
 
-**None of the migrated playbooks reads this file, or any environment variable.** They take
-endpoint configuration from `vars:` overridable with `-e`, and they set no secret anywhere:
-`/etc/environment` is world-readable, which on a shared workstation is exactly the problem.
-Each account configures its own identity — the commands are printed by each playbook's
-closing summary.
+| Variable | Kind | What it does |
+| --- | --- | --- |
+| `JENKINS_URL` | shared, non-secret | Overrides the URL baked into the wrapper at install time. |
+| `JENKINS_USER_ID` | per-identity | Jenkins username. Passed as `-auth <user>:<token>`. |
+| `JENKINS_API_TOKEN` | **secret** | API token, generated in Jenkins under *Configure → API Token*. |
 
-Two entries in the template name variables **no tool actually reads** — they were the old
-playbooks' own inputs, used only to interpolate an instruction into a message. Verified
-against the binaries:
+Put the two credential variables in a file only you can read, and source it from your own
+shell. There is no template file in this repo to copy — deliberately: a tracked file that
+looks like a place to write tokens is a file someone eventually commits with tokens in it.
 
-| In the template | Reality |
-| --- | --- |
-| `JIRA_URL`, `JIRA_LOGIN` | jira-cli reads neither. Both come from `~/.config/.jira/.config.yml`, written by `jira init`. |
-| `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT` | The extension reads `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION` / `AZURE_DEVOPS_EXT__DEFAULTS_PROJECT` (note the double underscore). |
+```bash
+umask 077
+mkdir -p ~/.config/cloud-cli
+cat > ~/.config/cloud-cli/env.sh <<'SH'
+export JENKINS_USER_ID=your-jenkins-user
+export JENKINS_API_TOKEN=your-api-token
+SH
+chmod 600 ~/.config/cloud-cli/env.sh
+```
 
-The rest are real: `JENKINS_URL`, `GRAFANA_SERVER`, `INFLUX_HOST`, `INFLUX_ORG` and
-`VAULT_ADDR` are all read by their tools, and every `*_TOKEN` / `*_PAT` is a secret that
-belongs in `$HOME` at mode `0600` and nowhere else.
+Then, in your own `~/.bashrc`:
+
+```bash
+[ -r ~/.config/cloud-cli/env.sh ] && . ~/.config/cloud-cli/env.sh
+```
+
+Check it works:
+
+```bash
+jenkins who-am-i        # or: jenkins-cli who-am-i
+```
+
+**Never put `JENKINS_API_TOKEN` in `/etc/environment`.** It is world-readable, so on a
+shared workstation that hands your Jenkins identity to every account on the box. The same
+goes for any other `*_TOKEN` or `*_PAT`. `JENKINS_URL` is not a secret and may be a
+site-wide default in `/etc/environment` if every account really should point at the same
+Jenkins — but this playbook does not put it there; it bakes it into the wrapper instead,
+which is the defect that blocks its migration.

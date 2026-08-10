@@ -32,6 +32,76 @@ directory carries an identity:
    path — with discovery variables left unset so that default discovery is what gets
    tested.
 
+## Environment variables
+
+**No playbook here sets a single environment variable, and none reads one.** Endpoint
+configuration comes from `vars:` overridable with `-e`; identity comes from each account's
+own `$HOME`. This section is the documentation that replaces `cloud-cli/env-tmpl.sh`, the
+shared template the old playbooks read from — deleted rather than migrated, because a
+tracked file that looks like the place to write tokens is a file someone eventually commits
+with tokens in it.
+
+### Where each kind belongs
+
+| Kind | Example | Goes in |
+| --- | --- | --- |
+| Shared, non-secret endpoint | `VAULT_ADDR`, `INFLUX_HOST` | `/etc/environment`, *only* if every account really should point at the same server. Nothing here writes it for you. |
+| Per-identity, non-secret | `AWS_PROFILE`, `CLOUDSDK_CORE_PROJECT` | your own shell, or the tool's own config (`gcloud config set project`) |
+| **Secret** | every `*_TOKEN`, `*_PAT`, `*_SECRET_ACCESS_KEY` | your own `$HOME` at mode `0600` — **never** `/etc/environment`, which is world-readable |
+
+For the secrets, keep a file only you can read and source it from your own `~/.bashrc`:
+
+```bash
+umask 077
+mkdir -p ~/.config/cloud-cli
+cat > ~/.config/cloud-cli/env.sh <<'SH'
+export GH_TOKEN=...
+export JIRA_API_TOKEN=...
+SH
+chmod 600 ~/.config/cloud-cli/env.sh
+
+# in ~/.bashrc:
+[ -r ~/.config/cloud-cli/env.sh ] && . ~/.config/cloud-cli/env.sh
+```
+
+Most tools here need no environment variable at all — `aws configure`, `az login`,
+`gcloud auth login`, `gh auth login`, `glab auth login`, `jira init` and
+`influx config create` all write per-user config, which is the supported path. Reach for an
+environment variable when you want the non-interactive one (CI, a script), not as the
+default way to configure a workstation account.
+
+### Which names the tools actually read
+
+Checked against the binaries on the target, because **a name that appeared in the old
+template is not evidence the tool reads it** — three of them turned out to be the old
+playbooks' own inputs, used only to interpolate an instruction into a message.
+
+| Variable | Tool | Kind | Status |
+| --- | --- | --- | --- |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `aws` | secret | read — `aws configure list` names the missing half |
+| `AWS_PROFILE`, `AWS_DEFAULT_REGION` | `aws` | per-identity | read |
+| `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION`, `AZURE_DEVOPS_EXT__DEFAULTS_PROJECT` | `az devops` | shared | read (double underscore — knack's prefix plus the section separator) |
+| `AZURE_DEVOPS_EXT_PAT` | `az devops` | secret | read |
+| `CLOUDSDK_CORE_PROJECT` | `gcloud` | per-identity | read |
+| `GH_TOKEN` / `GITHUB_TOKEN` | `gh` | secret | read, in that precedence |
+| `GITLAB_TOKEN` | `glab` | secret | read — `glab auth status` says so explicitly |
+| `GRAFANA_SERVER` | `gcx` | shared | read |
+| `GRAFANA_TOKEN` | `gcx` | secret | read |
+| `INFLUX_HOST`, `INFLUX_ORG` | `influx` | shared | read |
+| `INFLUX_TOKEN` | `influx` | secret | read |
+| `JIRA_API_TOKEN` | `jira` | secret | read |
+| `VAULT_ADDR` | `vault` | shared | read |
+| `VAULT_TOKEN` | `vault` | secret | read |
+| ~~`JIRA_URL`, `JIRA_LOGIN`~~ | `jira` | — | **not read.** Both live in `~/.config/.jira/.config.yml`, written by `jira init`. |
+| ~~`AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT`~~ | `az devops` | — | **not read.** Nor is `AZURE_DEFAULTS_ORGANIZATION`. Use the `EXT__DEFAULTS` names above. |
+| ~~`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`~~ | `gcloud` | — | **not read by the CLI.** With `GOOGLE_CLOUD_PROJECT` set, `gcloud config get project` still prints `(unset)`; `CLOUDSDK_CORE_PROJECT` works. Google's *client libraries* read `GOOGLE_CLOUD_PROJECT`, which is where the confusion comes from. |
+
+`JENKINS_URL`, `JENKINS_USER_ID` and `JENKINS_API_TOKEN` are not in this table because
+`jenkins-cli.yml` has not been migrated yet — see
+[`cloud-cli/README.md`](../../cloud-cli/README.md#per-user-setup).
+
+---
+
 Each section below has a **"What changed versus `cloud-cli/<tool>.yml`"** paragraph. Those
 source playbooks no longer exist: they were retired on 2026-08-10 once their successors here
 were verified, leaving only `cloud-cli/jenkins-cli.yml`, which is not migrated yet. Read the

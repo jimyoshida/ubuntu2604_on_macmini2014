@@ -110,10 +110,11 @@ This playbook:
 The service listens on **port 8001** and takes its Gemini region from the required
 `google_cloud_location` var, written into the unit as an `Environment=` line.
 
-This is deliberately *not* read from `cloud-cli/env-tmpl.sh` or any other shell profile. A systemd user
-unit does not source the account's shell, so the `${GOOGLE_CLOUD_LOCATION}` the pre-migration
-playbook interpolated into `ExecStart` expanded to an empty string at service start regardless
-of what was exported. Pass it on the command line instead:
+This is deliberately *not* read from a shell profile. A systemd user unit does not source the
+account's shell, so the `${GOOGLE_CLOUD_LOCATION}` the pre-migration playbook interpolated
+into `ExecStart` expanded to an empty string at service start regardless of what was exported
+— including from `cloud-cli/env-tmpl.sh`, the shared template that used to carry that
+variable and has since been deleted. Pass it on the command line instead:
 
 ```bash
 -e google_cloud_location=asia-northeast1
