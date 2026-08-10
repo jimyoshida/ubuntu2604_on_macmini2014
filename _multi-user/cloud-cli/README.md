@@ -756,7 +756,7 @@ it. The task needs `chdir` — see the note in the playbook: an unprivileged pro
 inherits a working directory it cannot read, and tofu re-expresses any path it is given
 relative to that directory before failing on it.
 
-## prometheus-cli.yml
+## promtool.yml
 
 Installs `promtool` and `amtool` from the Ubuntu archive.
 
@@ -782,7 +782,7 @@ target's sources carry. Check `apt-cache policy` on the target before bumping �
 Version overrides:
 
 ```bash
-ansible-playbook cloud-cli/prometheus-cli.yml -e host=ws01 \
+ansible-playbook cloud-cli/promtool.yml -e host=ws01 \
   -e promtool_version=2.53.5+ds1-3 -e alertmanager_version=0.28.1+ds-3
 ```
 
@@ -822,7 +822,7 @@ host that also runs a Vault server:
   at the next `vault.service` restart, which for file storage means unsealing again.
 - `/etc/vault.d/vault.hcl` is a dpkg conffile. An upgrade keeps a locally modified copy
   (ansible's `apt` module passes `force-confold`), so a server's configuration survives.
-- **The unit is left alone.** Unlike `prometheus-cli.yml`, which must disable the
+- **The unit is left alone.** Unlike `promtool.yml`, which must disable the
   Alertmanager daemon its package enables, HashiCorp's `postinst` does not enable or start
   `vault.service` — it only runs `daemon-reload`. Anything other than `disabled` was put
   there by something else on the host, and turning off a server this playbook did not start

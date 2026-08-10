@@ -18,8 +18,8 @@
 # ~/.config/amtool/config.yml, which this playbook does not create for anyone.
 #
 # Usage:
-#   ansible-playbook cloud-cli/prometheus-cli.yml -e host=<inventory host or group>
-#   ansible-playbook cloud-cli/prometheus-cli.yml -e host=ws01 -e promtool_version=2.53.5+ds1-3
+#   ansible-playbook cloud-cli/promtool.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/promtool.yml -e host=ws01 -e promtool_version=2.53.5+ds1-3
 
 - name: Install promtool and amtool system-wide
   hosts: "{{ host }}"
@@ -37,10 +37,10 @@
     # before bumping -- the shellcheck.yml finding in MIGRATION.md.
     promtool_version: "2.53.5+ds1-3"
     alertmanager_version: "0.28.1+ds-3"
-    prometheus_cli_smoke_dir: /var/tmp/prometheus-cli-smoke
+    promtool_smoke_dir: /var/tmp/promtool-smoke
     # uid/gid used to prove the install is usable by an arbitrary user
-    prometheus_cli_verify_uid: 65534    # nobody
-    prometheus_cli_verify_gid: 65534    # nogroup
+    promtool_verify_uid: 65534    # nobody
+    promtool_verify_gid: 65534    # nogroup
 
   tasks:
     - name: 1. Check the currently installed promtool and alertmanager versions
@@ -52,20 +52,20 @@
       # true here by accident rather than by measurement.
       ansible.builtin.command:
         cmd: dpkg-query -W -f='${Package} ${Version}\n' promtool prometheus-alertmanager
-      register: prometheus_cli_installed
+      register: promtool_installed
       changed_when: false
       check_mode: false
       failed_when: false
 
     - name: 2. Decide whether either package needs installing
       ansible.builtin.set_fact:
-        prometheus_cli_install_needed: >-
-          {{ ('promtool ' ~ promtool_version) not in prometheus_cli_installed.stdout
-             or ('prometheus-alertmanager ' ~ alertmanager_version) not in prometheus_cli_installed.stdout }}
-        prometheus_cli_can_verify: >-
+        promtool_install_needed: >-
+          {{ ('promtool ' ~ promtool_version) not in promtool_installed.stdout
+             or ('prometheus-alertmanager ' ~ alertmanager_version) not in promtool_installed.stdout }}
+        promtool_can_verify: >-
           {{ not (ansible_check_mode
-                  and (('promtool ' ~ promtool_version) not in prometheus_cli_installed.stdout
-                       or ('prometheus-alertmanager ' ~ alertmanager_version) not in prometheus_cli_installed.stdout)) }}
+                  and (('promtool ' ~ promtool_version) not in promtool_installed.stdout
+                       or ('prometheus-alertmanager ' ~ alertmanager_version) not in promtool_installed.stdout)) }}
 
     - name: 2a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -74,7 +74,7 @@
           prometheus-alertmanager {{ alertmanager_version }}, so the daemon
           disable, the version check and both config-check smoke tests below
           are skipped rather than failed. Re-run without --check to verify.
-      when: not (prometheus_cli_can_verify | bool)
+      when: not (promtool_can_verify | bool)
 
     - name: 3. Install promtool and prometheus-alertmanager via apt
       # allow_downgrade so that moving a pin backwards actually applies:
@@ -88,7 +88,7 @@
         update_cache: true
         cache_valid_time: 3600
         allow_downgrade: true
-      when: prometheus_cli_install_needed | bool
+      when: promtool_install_needed | bool
 
     - name: 4. Stop and disable the Alertmanager daemon
       # This playbook installs a client. The package ships a service unit and
@@ -99,36 +99,36 @@
         name: prometheus-alertmanager
         enabled: false
         state: stopped
-      when: prometheus_cli_can_verify | bool
+      when: promtool_can_verify | bool
 
     - name: 5. Verify the installed package versions
       ansible.builtin.command:
         cmd: dpkg-query -W -f='${Package} ${Version}\n' promtool prometheus-alertmanager
-      register: prometheus_cli_dpkg
+      register: promtool_dpkg
       changed_when: false
       failed_when: >-
-        ('promtool ' ~ promtool_version) not in prometheus_cli_dpkg.stdout
-        or ('prometheus-alertmanager ' ~ alertmanager_version) not in prometheus_cli_dpkg.stdout
-      when: prometheus_cli_can_verify | bool
+        ('promtool ' ~ promtool_version) not in promtool_dpkg.stdout
+        or ('prometheus-alertmanager ' ~ alertmanager_version) not in promtool_dpkg.stdout
+      when: promtool_can_verify | bool
 
     - name: 6. Create the scratch directory for the unprivileged checks
       # Disk-backed rather than /tmp, which is a size-capped tmpfs on these
       # hosts (see MIGRATION.md). World-readable, since the configs written
       # into it are read back by uid 65534.
       ansible.builtin.file:
-        path: "{{ prometheus_cli_smoke_dir }}"
+        path: "{{ promtool_smoke_dir }}"
         state: directory
         owner: root
         group: root
         mode: '0755'
-      when: prometheus_cli_can_verify | bool
+      when: promtool_can_verify | bool
 
     - name: 7. Write the configs the unprivileged checks validate
       # Deliberately minimal but genuinely valid: each exercises the real
       # parser and semantic validation, which is A4's strongest form of
       # verification -- offline real work rather than a version string.
       ansible.builtin.copy:
-        dest: "{{ prometheus_cli_smoke_dir }}/{{ item.name }}"
+        dest: "{{ promtool_smoke_dir }}/{{ item.name }}"
         owner: root
         group: root
         mode: '0644'
@@ -150,17 +150,17 @@
               - name: default
       loop_control:
         label: "{{ item.name }}"
-      when: prometheus_cli_can_verify | bool
+      when: promtool_can_verify | bool
 
     - name: 8. Check a Prometheus config as an unprivileged user
       ansible.builtin.command:
         cmd: >-
-          setpriv --reuid={{ prometheus_cli_verify_uid }} --regid={{ prometheus_cli_verify_gid }} --clear-groups
-          promtool check config {{ prometheus_cli_smoke_dir }}/prometheus.yml
-      register: prometheus_cli_promtool_smoke
+          setpriv --reuid={{ promtool_verify_uid }} --regid={{ promtool_verify_gid }} --clear-groups
+          promtool check config {{ promtool_smoke_dir }}/prometheus.yml
+      register: promtool_smoke_promtool
       changed_when: false
-      failed_when: "'SUCCESS' not in prometheus_cli_promtool_smoke.stdout"
-      when: prometheus_cli_can_verify | bool
+      failed_when: "'SUCCESS' not in promtool_smoke_promtool.stdout"
+      when: promtool_can_verify | bool
 
     - name: 9. Check an Alertmanager config as an unprivileged user
       # amtool reads an optional ~/.config/amtool/config.yml. HOME is left
@@ -169,16 +169,16 @@
       # path under test, and amtool tolerates it.
       ansible.builtin.command:
         cmd: >-
-          setpriv --reuid={{ prometheus_cli_verify_uid }} --regid={{ prometheus_cli_verify_gid }} --clear-groups
-          amtool check-config {{ prometheus_cli_smoke_dir }}/alertmanager.yml
-      register: prometheus_cli_amtool_smoke
+          setpriv --reuid={{ promtool_verify_uid }} --regid={{ promtool_verify_gid }} --clear-groups
+          amtool check-config {{ promtool_smoke_dir }}/alertmanager.yml
+      register: promtool_smoke_amtool
       changed_when: false
-      failed_when: "'SUCCESS' not in prometheus_cli_amtool_smoke.stdout"
-      when: prometheus_cli_can_verify | bool
+      failed_when: "'SUCCESS' not in promtool_smoke_amtool.stdout"
+      when: promtool_can_verify | bool
 
     - name: 10. Remove the scratch directory
       ansible.builtin.file:
-        path: "{{ prometheus_cli_smoke_dir }}"
+        path: "{{ promtool_smoke_dir }}"
         state: absent
 
     - name: 11. Display installation summary
@@ -186,16 +186,16 @@
         msg:
           - >-
             promtool {{ promtool_version }} and amtool {{ alertmanager_version }}
-            {{ prometheus_cli_can_verify | bool
+            {{ promtool_can_verify | bool
                | ternary('are installed system-wide.', 'would be installed system-wide.') }}
           - ""
           - "  /usr/bin/promtool"
           - "  /usr/bin/amtool"
           - ""
           - >-
-            {{ prometheus_cli_can_verify | bool
+            {{ promtool_can_verify | bool
                | ternary('Both validated a real config file when run by an unprivileged user (uid '
-                         ~ prometheus_cli_verify_uid ~ '); the Alertmanager daemon is stopped and disabled.',
+                         ~ promtool_verify_uid ~ '); the Alertmanager daemon is stopped and disabled.',
                          'Not verified: this was a --check run against a host without these versions.') }}
           - ""
           - "This installs CLI tools only -- no Prometheus or Alertmanager server runs here."

@@ -26,7 +26,7 @@
 #     ship a vault.service unit, and setcap cap_ipc_lock=+ep on the binary.
 #     That scaffolding is inert until something enables the unit.
 #   * This playbook therefore does NOT stop or disable vault.service, unlike
-#     prometheus-cli.yml, which must because its apt package really does enable
+#     promtool.yml, which must because its apt package really does enable
 #     the Alertmanager daemon. Task 19 only reports the unit's state: something
 #     other than this package enabled it, and turning off a server this
 #     playbook did not start is not its business.
