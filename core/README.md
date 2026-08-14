@@ -15,7 +15,6 @@ This playbook configures:
 - systemd-resolved for DNS
 - System sleep/suspend/lid handling disabled
 - Screen blanking and GNOME lock disabled
-- macfanctld fan control (Mac hardware)
 - Keychain for SSH key management
 - Git branch display in bash prompt
 - `s` alias for `systemctl --user`

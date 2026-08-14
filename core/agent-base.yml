@@ -59,8 +59,6 @@
           - make
           - dos2unix
           - aha
-          - macfanctld
-          - lm-sensors
         state: present
         update_cache: yes
 
@@ -84,13 +82,7 @@
         line: 'ClientAliveCountMax 720'
       notify: restart ssh
 
-    - name: 8. Enable and start macfanctld service
-      systemd:
-        name: macfanctld
-        enabled: yes
-        state: started
-
-    - name: 9. Configure systemd logind to ignore idle and lid actions
+    - name: 8. Configure systemd logind to ignore idle and lid actions
       lineinfile:
         path: /etc/systemd/logind.conf
         regexp: "^#?{{ item.key }}="
@@ -102,7 +94,7 @@
         - { key: "HandleLidSwitchExternalPower", value: "ignore" }
         - { key: "HandleLidSwitchDocked", value: "ignore" }
 
-    - name: 10. Configure Avahi daemon (allow-interfaces)
+    - name: 9. Configure Avahi daemon (allow-interfaces)
       lineinfile:
         path: /etc/avahi/avahi-daemon.conf
         regexp: '^#?allow-interfaces='
@@ -110,19 +102,19 @@
       when: avahi_interfaces != ""
       notify: restart avahi
 
-    - name: 11. Enable and start Avahi service
+    - name: 10. Enable and start Avahi service
       systemd:
         name: avahi-daemon
         enabled: yes
         state: started
 
-    - name: 12. Enable and start systemd-resolved service
+    - name: 11. Enable and start systemd-resolved service
       systemd:
         name: systemd-resolved
         enabled: yes
         state: started
 
-    - name: 13. Disable screen blanking/sleep (X11 settings)
+    - name: 12. Disable screen blanking/sleep (X11 settings)
       become: no
       copy:
         dest: "{{ item }}"
@@ -135,7 +127,7 @@
         - ~/.xprofile
         - ~/.xsessionrc
 
-    - name: 14. Disable GNOME screen lock and power management
+    - name: 13. Disable GNOME screen lock and power management
       become: no
       shell: |
         gsettings set org.gnome.desktop.screensaver lock-enabled false
@@ -144,7 +136,7 @@
         gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
       ignore_errors: yes
 
-    - name: 15. Add keychain initialization to .bashrc
+    - name: 14. Add keychain initialization to .bashrc
       become: no
       blockinfile:
         path: ~/.bashrc
@@ -154,7 +146,7 @@
           keychain $HOME/.ssh/id_rsa
           source $HOME/.keychain/`hostname`-sh
 
-    - name: 16. Add systemctl alias to .bashrc
+    - name: 15. Add systemctl alias to .bashrc
       become: no
       blockinfile:
         path: ~/.bashrc
@@ -163,7 +155,7 @@
         block: |
           alias s='systemctl --user'
 
-    - name: 17. Add git prompt function to .bashrc
+    - name: 16. Add git prompt function to .bashrc
       become: no
       blockinfile:
         path: ~/.bashrc
@@ -176,19 +168,19 @@
           }
           PS1="\[\e]0;\u@\h: \w\a\]${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[33m\] \$(parse_git_branch)\[\033[00m\]$ "
 
-    - name: 18. Disable IPv6 on the specified NetworkManager connection
+    - name: 17. Disable IPv6 on the specified NetworkManager connection
       shell: |
         nmcli connection modify "{{ nm_connection }}" ipv6.method disabled
         nmcli connection up "{{ nm_connection }}"
       changed_when: false
 
-    - name: 19. Create journald configuration directory
+    - name: 18. Create journald configuration directory
       file:
         path: /etc/systemd/journald.conf.d
         state: directory
         mode: '0755'
 
-    - name: 20. Configure journald for low disk I/O
+    - name: 19. Configure journald for low disk I/O
       copy:
         dest: /etc/systemd/journald.conf.d/low-io.conf
         content: |
@@ -217,7 +209,7 @@
         mode: '0644'
       notify: restart journald
 
-    - name: 21. Vacuum journal to configured size
+    - name: 20. Vacuum journal to configured size
       command: journalctl --vacuum-size=500M
       changed_when: false
 
