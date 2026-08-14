@@ -6,6 +6,7 @@
 #   /etc/apt/preferences.d/kubectl               THE PIN THAT MAKES IT STICK
 #   /etc/bash_completion.d/kubectl               generated from the binary
 #   /etc/profile.d/kubectl.sh                    the `k` alias
+#   /usr/bin/kubectx, /usr/bin/kubens             from the Ubuntu archive
 #
 # This playbook exists to win an argument with apt, and the preferences file is
 # how it wins. Two repositories publish a package called `kubectl`:
@@ -31,6 +32,21 @@
 # Per-user state: ~/.kube/config, created by each account for itself. This
 # playbook does not create, share, or pre-populate it (B2) -- it installs a
 # client and configures no cluster.
+#
+# kubectx and kubens are the partial exception to container/krew.yml's
+# retirement (README.md#retired-containerkrewyml). That note names `ctx` and
+# `ns` as things "a plain binary in /usr/local/bin" could bring back; this is
+# that, but simpler than it sounds. The Ubuntu archive already carries a
+# `kubectx` package -- a single source, with no vendor collision to pin
+# against -- that installs /usr/bin/kubectx and /usr/bin/kubens directly, plus
+# bash/zsh/fish completions under the paths bash-completion already reads. So
+# unlike kubectl there is no repository to add, no key to fetch, and no
+# completion to generate: apt does the whole job. What does NOT come back is
+# krew itself, or invoking these as `kubectl ctx` / `kubectl ns` -- the
+# package names the binaries kubectx and kubens, not kubectl-ctx / kubectl-ns,
+# so kubectl's plugin mechanism never sees them. Pinned anyway, per this
+# directory's convention, even though nothing forces the version like
+# kubectl_version does.
 #
 # Usage:
 #   ansible-playbook container/kubectl.yml -e host=<inventory host or group>
@@ -70,6 +86,10 @@
     kubectl_pin_priority: 1001
     # The source playbook's apt source, still pointing at the EOL v1.30 stream.
     kubectl_legacy_source: /etc/apt/sources.list.d/kubernetes.list
+    # Ubuntu archive version. One package provides both binaries, so one pin.
+    # Release-specific like podman.yml's pins -- check `apt-cache policy
+    # kubectx` on the target before bumping.
+    kubectx_version: "0.9.5-2build1"
     kubectl_smoke_dir: /var/tmp/kubectl-smoke
     # uid/gid used to prove the install is usable by an arbitrary user
     kubectl_verify_uid: 65534    # nobody
@@ -273,7 +293,49 @@
               complete -o default -F __start_kubectl k
           fi
 
-    - name: 16. Create the scratch directory for the unprivileged checks
+    - name: 16. Check the currently installed kubectx version
+      # kubectx and kubens ship in one package, so one dpkg-query covers both.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' kubectx
+      register: kubectx_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 17. Decide whether kubectx needs installing
+      ansible.builtin.set_fact:
+        kubectx_install_needed: >-
+          {{ kubectx_installed.rc != 0 or kubectx_installed.stdout != kubectx_version }}
+        kubectx_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (kubectx_installed.rc != 0
+                       or kubectx_installed.stdout != kubectx_version)) }}
+
+    - name: 17a. Note that kubectx verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install kubectx {{ kubectx_version }}, so the
+          version check and the unprivileged smoke test below are skipped
+          rather than failed. Re-run without --check.
+      when: not (kubectx_can_verify | bool)
+
+    - name: 18. Install kubectx via apt
+      # allow_downgrade so a deliberate pin rollback actually applies, same
+      # reasoning as task 10 -- without it apt reads the pin as a floor, not
+      # an exact version.
+      ansible.builtin.apt:
+        name: "kubectx={{ kubectx_version }}"
+        state: present
+        allow_downgrade: true
+      when: kubectx_install_needed | bool
+
+    - name: 19. Verify the installed kubectx package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' kubectx
+      register: kubectx_dpkg
+      changed_when: false
+      failed_when: kubectx_dpkg.stdout != kubectx_version
+      when: kubectx_can_verify | bool
+
+    - name: 20. Create the scratch directory for the unprivileged checks
       ansible.builtin.file:
         path: "{{ kubectl_smoke_dir }}"
         state: directory
@@ -282,7 +344,7 @@
         mode: '0700'
       check_mode: false
 
-    - name: 17. Report the client version as an unprivileged user
+    - name: 21. Report the client version as an unprivileged user
       ansible.builtin.command:
         cmd: >-
           setpriv --reuid={{ kubectl_verify_uid }} --regid={{ kubectl_verify_gid }} --clear-groups
@@ -295,7 +357,7 @@
         or 'dispatcher' in kubectl_smoke_version.stdout
       when: kubectl_can_verify | bool
 
-    - name: 18. Build a manifest offline as an unprivileged user
+    - name: 22. Build a manifest offline as an unprivileged user
       # B4 verification, level 1 -- offline real work. --dry-run=client renders
       # the object through kubectl's own scheme and serializer without
       # contacting an API server, so it exercises the real client with no
@@ -313,7 +375,7 @@
         or 'image: nginx:1.29' not in kubectl_smoke_dryrun.stdout
       when: kubectl_can_verify | bool
 
-    - name: 19. Confirm the shared completion is loaded by an unprivileged shell
+    - name: 23. Confirm the shared completion is loaded by an unprivileged shell
       # Proves B3 end to end rather than merely writing a file: a non-login
       # interactive shell for an arbitrary uid must define __start_kubectl,
       # which only happens if bash-completion reads /etc/bash_completion.d.
@@ -328,13 +390,32 @@
       failed_when: "'COMPLETION_OK' not in kubectl_smoke_completion.stdout"
       when: kubectl_can_verify | bool
 
-    - name: 20. Remove the scratch directory
+    - name: 24. Confirm kubectx and kubens run for an unprivileged user
+      # --help rather than --version: the package's --version prints
+      # "v0.0.0+unknown" (the Debian build does not stamp it), and kubens
+      # exits 1 without a kubeconfig while kubectx exits 0 with a warning --
+      # asymmetric enough that --help is the one check that is meaningful and
+      # identical for both binaries, and it needs no kubeconfig either way.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kubectl_verify_uid }} --regid={{ kubectl_verify_gid }} --clear-groups
+          env HOME={{ kubectl_smoke_dir }} {{ item }} --help
+        chdir: "{{ kubectl_smoke_dir }}"
+      register: kubectx_smoke
+      changed_when: false
+      failed_when: "'USAGE:' not in kubectx_smoke.stdout"
+      loop:
+        - kubectx
+        - kubens
+      when: kubectx_can_verify | bool
+
+    - name: 25. Remove the scratch directory
       ansible.builtin.file:
         path: "{{ kubectl_smoke_dir }}"
         state: absent
       check_mode: false
 
-    - name: 21. Display installation summary
+    - name: 26. Display installation summary
       ansible.builtin.debug:
         msg: >-
           {{ ([
@@ -349,6 +430,12 @@
                '  /etc/bash_completion.d/kubectl        shared, generated from the binary',
                '  /etc/profile.d/kubectl.sh             the `k` alias',
                '',
+               'kubectx ' ~ kubectx_version ~ ' '
+               ~ (kubectx_can_verify | bool
+                  | ternary('is installed system-wide.', 'would be installed system-wide.')),
+               '',
+               '  /usr/bin/kubectx, /usr/bin/kubens     completions shipped by the package',
+               '',
              ]
              + (kubectl_can_verify | bool
                 | ternary(['Verified: an unprivileged account (uid ' ~ kubectl_verify_uid
@@ -356,12 +443,18 @@
                            'shared completion in a non-login interactive shell.',
                            '',
                            'apt candidate is now ' ~ kubectl_version ~ ', not the Cloud SDK epoch build.'],
-                          ['Not verified: this was a --check run.']))
+                          ['kubectl: not verified, this was a --check run.']))
+             + (kubectx_can_verify | bool
+                | ternary(['kubectx/kubens: verified, both ran --help as the same unprivileged account.'],
+                          ['kubectx/kubens: not verified, this was a --check run.']))
              + ['',
                 'No cluster is configured. Each account writes its own ~/.kube/config:',
                 '  kubectl config set-cluster / set-credentials / set-context',
                 '  or receive one from whoever runs the cluster.',
                 '',
                 'NOTE: removing /etc/apt/preferences.d/kubectl re-opens the collision with',
-                'packages.cloud.google.com, whose epoch version wins every time.']
+                'packages.cloud.google.com, whose epoch version wins every time.',
+                '',
+                'NOTE: kubectx and kubens are direct commands, not kubectl plugins -- ',
+                '`kubectl ctx` / `kubectl ns` do not work. Run them as `kubectx` / `kubens`.']
           ) | join('\n') }}

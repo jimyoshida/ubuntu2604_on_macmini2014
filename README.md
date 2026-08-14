@@ -188,11 +188,18 @@ one — the Homebrew problem again, with a smaller blast radius. The alternative
 other direction: a per-account krew installed by a playbook means every account's plugin set is
 managed by a run of that playbook.
 
-Nothing replaces it, because nothing needs to. kubectl discovers plugins as `kubectl-*`
+Nothing replaces krew itself, because nothing needs to. kubectl discovers plugins as `kubectl-*`
 executables on `PATH`, with no manager involved, so the three plugins the old README told users
-to install (`ctx`, `ns`, `node-shell`) can be plain binaries in `/usr/local/bin` named
-`kubectl-ctx`, `kubectl-ns` and `kubectl-node_shell` — installable once, usable by everyone. What
-is forfeited is `krew search` and `krew upgrade`. An account that wants krew for itself can run
+to install (`ctx`, `ns`, `node-shell`) could always come back as plain binaries in
+`/usr/local/bin`, installable once and usable by everyone. Two of them have:
+[`_multi-user/container/kubectl.yml`](_multi-user/container/README.md#kubectlyml) now installs
+`kubectx` and `kubens` from the Ubuntu archive's `kubectx` package — a single source with no
+vendor collision to pin against, so no repository or key was needed the way kubectl's own
+install requires. They land as `/usr/bin/kubectx` and `/usr/bin/kubens`, not
+`kubectl-ctx` / `kubectl-ns`, so they run as direct commands rather than through kubectl's
+plugin discovery — `kubectl ctx` still does not work. `node-shell` has no equivalent archive
+package and remains unmigrated. What is forfeited either way is `krew search` and `krew
+upgrade`. An account that wants krew for itself can run
 [krew's own installer](https://krew.sigs.k8s.io/docs/user-guide/setup/install/); the retirement
 does not stand in its way.
 

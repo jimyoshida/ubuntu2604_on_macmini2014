@@ -220,6 +220,7 @@ Installs kubectl from `pkgs.k8s.io`, **and pins apt so it stays installed.**
 | `/etc/apt/preferences.d/kubectl` | the pin that resolves the collision below |
 | `/etc/bash_completion.d/kubectl` | shared completion, generated from the binary |
 | `/etc/profile.d/kubectl.sh` | the `k` alias, with completion wired to it |
+| `/usr/bin/kubectx`, `/usr/bin/kubens` | from the Ubuntu archive's `kubectx` package |
 
 **Two repositories publish a package called `kubectl`, and without the pin the wrong one
 always wins.** `packages.cloud.google.com` — added by `cloud-cli/gcloud-cli.yml`, which does
@@ -248,6 +249,21 @@ a new key silently — that is intended; verify the new fingerprint and update i
 
 ```bash
 ansible-playbook container/kubectl.yml -e host=ws01 -e kubectl_version=1.36.3-1.1
+```
+
+**kubectx and kubens are the partial exception to [krew's retirement](../../README.md#retired-containerkrewyml).**
+That note named `ctx` and `ns` as things a plain binary in `/usr/local/bin` could bring
+back; this playbook does it more simply than that implies. The Ubuntu archive already
+carries a `kubectx` package — one source, no vendor collision, no repository or key to
+add — that installs `/usr/bin/kubectx` and `/usr/bin/kubens` directly, with completions
+under the paths `bash-completion` already reads. Pinned like everything else here
+(`kubectx_version`), even though nothing forces the version the way `kubectl_version`
+does. What does **not** come back is krew itself, or running these as `kubectl ctx` /
+`kubectl ns` — the package names the binaries `kubectx` and `kubens`, not `kubectl-ctx` /
+`kubectl-ns`, so kubectl's plugin discovery never sees them.
+
+```bash
+ansible-playbook container/kubectl.yml -e host=ws01 -e kubectx_version=0.9.5-2build1
 ```
 
 ## helm.yml
