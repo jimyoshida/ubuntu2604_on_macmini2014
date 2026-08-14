@@ -1,7 +1,8 @@
 # Container & Kubernetes Playbooks (multi-user workstations)
 
 Standalone playbooks that install container and Kubernetes tooling on a **shared** Ubuntu
-workstation. They are the multi-user successors to `container/`. See
+workstation. They are the multi-user successors to `container/`, which was retired on
+2026-08-14 once all seven were verified. See
 [MIGRATION3.md](../../MIGRATION3.md) for the policy and the per-tool plan.
 
 Run from `_multi-user/`:
@@ -348,10 +349,13 @@ ansible-playbook container/minikube.yml -e host=ws01 -e minikube_version=1.38.1
 | `kind.yml` | `container/kind.yml` | 0.32.0 (was 0.27.0) | Verified (localhost) |
 | `minikube.yml` | `container/minikube.yml` | 1.38.1 | Verified (localhost) |
 
-All seven are migrated. `container/krew.yml` is
+All seven are migrated, and these are now the only generation: `container/` was deleted on
+2026-08-14 once every successor was verified, so the "Successor to" column names files that
+exist only in git history (`git log --diff-filter=D -- container/`). `container/krew.yml` was
 [retired](../../README.md#retired-containerkrewyml) rather than migrated, so there is no
-`krew.yml` here. `container/` itself stays in place until its successors are verified against
-a real remote host — see [MIGRATION3.md](../../MIGRATION3.md#known-follow-ups).
+`krew.yml` here. What the retirement gate did *not* cover is below, and it is worth reading:
+the successors were verified against a real host, but never against a *remote* one — see
+[MIGRATION3.md](../../MIGRATION3.md#known-follow-ups).
 
 **`kind` and `minikube` are only as multi-user as the `docker` group is.** Both drive Docker,
 so each installs a binary every account can execute and that no account outside `docker_users`
@@ -361,8 +365,3 @@ can use for anything. That is the honest state of those tools, not a defect in t
 runs were made under ansible-core 2.20 with `ansible_connection=local`, so they exercise
 neither the 24.04 control node nor the SSH path. `ws01`/`ws02` have never been provisioned by
 either generation.
-
-"Verified (localhost)" carries the same two caveats as everything else in `_multi-user/`:
-the runs were made under ansible-core 2.20 with `ansible_connection=local`, so they
-exercise neither the 24.04 control node nor the SSH path. `ws01`/`ws02` have never been
-provisioned by either generation.

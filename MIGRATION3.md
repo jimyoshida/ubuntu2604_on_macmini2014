@@ -3,15 +3,18 @@
 Policy and procedure for migrating the container and Kubernetes playbooks from `container/` to
 `_multi-user/container/`.
 
-**Status: all seven playbooks migrated and verified against `localhost`; `container/` not yet
-retired.** All
+**Status: complete.** All seven playbooks are migrated, verified against `localhost`, and
+retired — the originals were deleted on 2026-08-14 and `container/` is gone with them, as
+`tool/` and `cloud-cli/` were before it. All
 three decisions [wave 1](#order-of-work) called for are settled — the kubectl package collision
 as (a), the Helm pin as 4.2.3-1, and the `xhost` question by deleting the line. Wave 2 migrated
 `devcontainers.yml` and `podman.yml`; wave 3 migrated `docker.yml`, `kubectl.yml` and
 `helm.yml`, including the apt preferences pin that resolves the kubectl collision; wave 4
-migrated `kind.yml` and `minikube.yml`. What remains is not a playbook but a gate:
-[retiring `container/`](#known-follow-ups), which this document deliberately does not treat as
-done on `localhost` runs alone. See
+migrated `kind.yml` and `minikube.yml`. **Read
+[what the retirement gate did and did not cover](#known-follow-ups) before relying on the
+deletion**: it is the same `localhost`-only, ansible-core 2.20-only evidence `cloud-cli/` was
+retired on, and the 24.04-control-node-over-SSH run this plan called for was never performed.
+See
 [Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision),
 [Wave 2](#wave-2-devcontainers-podman), [Wave 3](#wave-3-docker-kubectl-helm),
 [Wave 4](#wave-4-kind-minikube) and [Migration status](#migration-status).
@@ -95,7 +98,7 @@ installed — the three guarded ones plus `kubectl.yml`, whose apt stream is EOL
 
 | | |
 | --- | --- |
-| Source | `container/*.yml` (7 playbooks) + `container/README.md` |
+| Source | `container/*.yml` (7 playbooks) + `container/README.md` — the whole directory, now retired |
 | Target | `_multi-user/container/*.yml` |
 | Applies to | New multi-user workstation builds |
 | Control node | Ubuntu 24.04 (ansible-core **2.16**) **or** Ubuntu 26.04 (ansible-core 2.20) |
@@ -124,8 +127,12 @@ leading underscore on `_multi-user/` still means staging.
   VNC setup, which is per-identity in a way no relocation fixes. `gui-tools/` was the other
   survivor until 2026-08-14, when it was [retired](README.md#retired-gui-tools) with its one
   VS Code playbook.
-- `container/*` itself stays in place until its successors are verified, the same way `tool/`
-  and `cloud-cli/` did. Retiring it is the last step, not the first.
+- ~~`container/*` itself stays in place until its successors are verified, the same way `tool/`
+  and `cloud-cli/` did. Retiring it is the last step, not the first.~~ **Retired 2026-08-14.**
+  All seven originals and the directory's README were deleted once every successor was
+  verified, and `container/` no longer exists. What "verified" covers is narrower than the
+  word suggests — see the [follow-up](#known-follow-ups) — and the originals are recoverable
+  from git history (`git log --diff-filter=D -- container/`).
 - Running clusters. Every playbook here installs a client or a runtime; none creates a kind
   cluster, starts a minikube profile, or deploys a chart, and that stays true after migration.
   The same line `cloud-cli/` drew at "installs the client, configures no identity", this
@@ -526,6 +533,15 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 | `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | 1.38.1 | Verified (localhost) |
 | `krew.yml` | `curl \| sh` → `~/.krew` | — | — | [Retired](README.md#retired-containerkrewyml) 2026-08-14, not migrated |
 
+Every row is also **retired**: none of the source playbooks named in the first column still
+exists, each having been deleted on 2026-08-14 once its successor was verified, and
+`container/` was removed with the last of them. The column is kept because it is what each
+migrated playbook is a successor *to*, and every playbook's header comment still refers to it
+by name — as do the tasks that clean up after it, which are the one part of this migration
+that outlives the source: `docker.yml`, `kubectl.yml` and `helm.yml` each remove apt sources
+and keyrings their predecessor wrote, on hosts where the predecessor ran.
+`git log --diff-filter=D -- container/` recovers any of them.
+
 The `Pinned` column stays `TBD` until each playbook is written. This is deliberate and is the
 same call MIGRATION2 made: MIGRATION.md's step 3 requires checking upstream at write time, and
 the [survey below](#upstream-survey-2026-08-11) is stale the day after it was taken.
@@ -537,16 +553,20 @@ both change what the playbook has to do. The column records what a written playb
 pins, re-checked at write time — and the `kubectl` epoch moving twice in three days is the
 reason those are two different questions.
 
-**Effect on the repo's classification when this is done.** The [multi-user support
-status](README.md#multi-user-support-status) table currently counts `container/` as six of the
+**Effect on the repo's classification, now that this is done.** The [multi-user support
+status](README.md#multi-user-support-status) table counted `container/` as six of the
 eight *mixed* rows (`docker`, `podman`, `kubectl`, `helm`, `kind`, `minikube`) and one of the
 three *effectively shared* rows (`devcontainers`) — its seven playbooks, in full. The eighth,
 `krew.yml`, was one of the *personal only* rows until it was retired, which already took that
-category from six to five. Completing this migration empties three quarters of the mixed
-category and leaves it as `core/mise.yml` and `core/samba.yml` alone — which is the point at
-which "the legacy tree" means `core/` and nothing else, now that
-[`gui-tools/` is retired](README.md#retired-gui-tools) too, and the underscore on
-`_multi-user/` starts to look like it has outlived its purpose.
+category from six to five. Retiring the directory moved all seven at once: *multi-user* 24 →
+31, *effectively shared* 3 → 2, *mixed* 8 → 2, leaving that category as `core/mise.yml` and
+`core/samba.yml` alone. The total is unchanged at 40, because seven successors replaced
+exactly seven originals. "The legacy tree" now means `core/` and nothing else, six playbooks
+of the forty, now that [`gui-tools/` is retired](README.md#retired-gui-tools) too — and the
+underscore on `_multi-user/` has outlived the purpose
+[MIGRATION.md gave it](MIGRATION.md#scope), which was to sort a staging tree apart from live
+directories that no longer exist. Renaming it is a [follow-up](#known-follow-ups), not a
+loose end in this migration.
 
 ### Wave 2 (`devcontainers`, `podman`)
 
@@ -790,19 +810,39 @@ which is exactly the staleness this warning is about. The current readings are i
   membership list should be audited rather than merely added to, that is a separate playbook
   and a separate decision.
 - **Repo-wide vendor-repo ownership** — carried from
-  [MIGRATION2](MIGRATION2.md#known-follow-ups), with two more instances now named:
-  `container/docker.yml` writes an auto-named
+  [MIGRATION2](MIGRATION2.md#known-follow-ups), with two more instances named here and both now
+  closed *in this repo*: `container/docker.yml` wrote an auto-named
   `/etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list` (what `apt_repository`
-  generates when no `filename:` is given), and `container/kubectl.yml` writes `kubernetes.list`
-  for a stream that is EOL. B5 adds the package-name dimension to that cleanup.
+  generates when no `filename:` is given), and `container/kubectl.yml` wrote `kubernetes.list`
+  for a stream that is EOL. Both playbooks are gone, and unlike the earlier closures-by-deletion
+  their successors actively clean up after them: `docker.yml`, `kubectl.yml` and `helm.yml` each
+  delete their predecessor's source file (and `helm.yml` two generations of keyring) before
+  writing their own `.sources`. So a host that runs the successors is cleaned; a host that
+  ran only the originals and is never provisioned again keeps them. What stays open is
+  `core/`, the last directory adding repositories under no shared convention. B5 adds the
+  package-name dimension to that cleanup.
 - **Bare `ansible_architecture` is deprecated** — carried from
   [MIGRATION2](MIGRATION2.md#known-follow-ups). All seven playbooks here are to be written with
   `ansible_facts['architecture']` from the start, so the outstanding repo-wide pass still has
   only `_multi-user/cloud-cli/aws-cli.yml` and the `_multi-user/tools/` playbooks to touch.
-- **Retiring `container/`.** The gate is the same one `tool/` and `cloud-cli/` passed: every
-  successor verified against a real host. Note what "verified" has covered so far, because the
-  gate has been weaker than it sounds — `cloud-cli/` was retired on `localhost` runs alone,
-  under ansible-core 2.20, with no SSH path exercised at all. `ws01`/`ws02` have never been
-  provisioned by either generation. This migration is a chance to fix that rather than inherit
-  it: run at least one wave-2 playbook from a 24.04 control node over SSH, which is the check
-  [MIGRATION2's scope note](MIGRATION2.md#scope) called for and no wave ever performed.
+- ~~**Retiring `container/`.**~~ — **done 2026-08-14.** All seven originals and the directory
+  README were deleted, on the gate `tool/` and `cloud-cli/` passed: every successor verified
+  against a real host.
+- **The retirement gate is weaker than the word "verified" suggests, and this migration
+  inherited it rather than fixing it.** Every wave here was verified on `localhost` alone,
+  under ansible-core 2.20 alone, with no SSH path and no `remote_user` exercised — exactly the
+  evidence `cloud-cli/` was retired on. `ws01`/`ws02` have still never been provisioned by
+  either generation. This plan called for fixing it (run at least one wave-2 playbook from a
+  24.04 control node over SSH, the check [MIGRATION2's scope
+  note](MIGRATION2.md#scope) asked for), **and that run was never performed** — not by wave 2,
+  not by any later wave, and not before the deletion. So the item does not close with the
+  directory; it moves forward. It applies to all 31 playbooks in `_multi-user/` now, and the
+  cheapest way to discharge it is still one playbook, one 24.04 control node, one remote host.
+- **Renaming `_multi-user/`.** The underscore meant *staging*, sorting the tree apart from the
+  live single-user directories it would replace. Those directories are gone — `core/` is the
+  whole of the legacy tree and has no `_multi-user/` counterpart — so the prefix now marks a
+  distinction that no longer exists, on 31 of the repo's 40 playbooks. Dropping it is cheaper
+  than it looks — `ansible.cfg`'s `inventory` is relative and does not move — but it rewrites
+  the `cd _multi-user` line in every documented command, in three READMEs and in
+  `ansible.cfg`'s own header comment, and `_personal/` would want the same treatment or a
+  stated reason not to. Worth doing as its own change rather than as the tail of a migration.

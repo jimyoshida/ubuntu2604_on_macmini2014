@@ -10,14 +10,19 @@ ansible-playbook ai-agent/nanoclaw.yml -e host=ws01 -e target_users=alice
 ```
 
 **Prerequisites:**
-- Docker installed on the target host
+- Docker installed on the target host —
+  [`_multi-user/container/docker.yml`](../../_multi-user/container/README.md#dockeryml)
 - **Every account in `target_users`** in the `docker` group — checked per account, not for the
-  connecting user, since `container/docker.yml` adds only whoever ran it:
+  connecting user, since that playbook grants the group only to the accounts named in
+  `docker_users` and grants none by default:
   ```bash
-  usermod -aG docker <account>
+  cd _multi-user
+  ansible-playbook container/docker.yml -e host=ws01 -e docker_users=alice
   ```
-  The playbook fails with a clear message naming the account if Docker is missing or any target
-  account is not in the group.
+  The group is equivalent to passwordless root on the host, which is why it is typed out per
+  account rather than inferred; `usermod -aG docker <account>` does the same thing by hand.
+  `nanoclaw.yml` itself fails with a clear message naming the account if Docker is missing or
+  any target account is not in the group.
 
 This playbook:
 - Installs `build-essential`, `python3`, `curl`, `git` via apt

@@ -44,17 +44,18 @@ nothing except an Ansible dependency for the one step you run before Ansible is 
 
 ## Playbooks (old)
 
-What is left of the original single-user tree. Four directories no longer exist: `tool/`
-(see [MIGRATION.md](MIGRATION.md)) and `cloud-cli/` (see [MIGRATION2.md](MIGRATION2.md))
+What is left of the original single-user tree, which is now `core/` and nothing else. Five
+directories no longer exist: `tool/` (see [MIGRATION.md](MIGRATION.md)), `cloud-cli/` (see
+[MIGRATION2.md](MIGRATION2.md)) and `container/` (see [MIGRATION3.md](MIGRATION3.md))
 graduated into the multi-user tree in the next table, and `services/` and `gui-tools/` were
 deleted outright as out of scope — see [Retired: `services/`](#retired-services) and
-[Retired: `gui-tools/`](#retired-gui-tools). Of the two directories left, `container/` has a
-migration planned in [MIGRATION3.md](MIGRATION3.md); `core/` has not been looked at yet.
+[Retired: `gui-tools/`](#retired-gui-tools). `core/` has not been looked at yet, and is the
+harder problem: `agent-base.yml` and `x11vnc.yml` are desktop-session and VNC setup, which is
+per-identity in a way no relocation fixes.
 
 | Directory | Description |
 |-----------|-------------|
 | [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
-| [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube) |
 
 ## Playbooks (multi-user)
 
@@ -67,6 +68,13 @@ per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every a
 |-----------|-------------|
 | [_multi-user/tools/](_multi-user/tools/README.md) | Developer tools (bats, gomplate, shellcheck, trivy, hadolint, grype-syft, modern-cli-tools, yq, junit2html, markdownlint, kube-score) |
 | [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, tofu, promtool/amtool, vault — the [MIGRATION2.md](MIGRATION2.md) migration is complete) |
+| [_multi-user/container/](_multi-user/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers — the [MIGRATION3.md](MIGRATION3.md) migration is complete) |
+
+One difference to know before running `container/docker.yml`, because it reads as a regression
+and is not one: it grants **no** account access to the Docker socket unless you name them in
+`docker_users`, where its predecessor added whoever ran it automatically. Membership of that
+group is equivalent to passwordless root, so it is typed out per account, per run — see
+[Grants](_multi-user/container/README.md#grants). `podman_linger_users` works the same way.
 
 ## Playbooks (personal)
 
@@ -194,7 +202,9 @@ ran it keeps its `~/.krew` tree, its installed plugins and the
 one such tree with all three plugins. Removing it is a per-host, per-account cleanup this repo
 no longer performs — see
 [MIGRATION3.md's follow-ups](MIGRATION3.md#known-follow-ups). The playbook is recoverable from
-git history (`git log --diff-filter=D -- container/krew.yml`).
+git history (`git log --diff-filter=D -- container/krew.yml`) — as is the rest of `container/`,
+which went the same day once its seven other playbooks had verified successors in
+[`_multi-user/container/`](_multi-user/container/README.md).
 
 ## Retired: `gui-tools/`
 
@@ -234,20 +244,22 @@ history (`git log --diff-filter=D -- gui-tools/`).
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 40 playbooks:
+[MIGRATION2.md](MIGRATION2.md) and [MIGRATION3.md](MIGRATION3.md) amendments. 40 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
-| [Multi-user](#multi-user-24) | 24 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-3) | 3 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
-| [Mixed](#mixed--shared-install-personal-tail-8) | 8 | Shared install plus a tail that benefits only the invoker |
+| [Multi-user](#multi-user-31) | 31 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
+| [Effectively shared](#effectively-shared-2) | 2 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Mixed](#mixed--shared-install-personal-tail-2) | 2 | Shared install plus a tail that benefits only the invoker |
 | [Personal only](#personal-only-5) | 5 | The whole install lands in one `$HOME` or one account |
 
-More than half the repo is now multi-user, and the balance moved in one step rather than
+Three quarters of the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
 counted, and the total drops back when the originals are retired. That has now happened
-twice, and both migrations are now finished: `tool/` after MIGRATION.md, and all thirteen of
-`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Nine playbooks went the other
+three times, and all three migrations are finished: `tool/` after MIGRATION.md, all thirteen
+of `cloud-cli/` after MIGRATION2.md, and all seven of `container/` after MIGRATION3.md. None
+of the three directories still exists. The total is unchanged at 40 across the last of them
+because seven successors replaced exactly seven originals. Nine playbooks went the other
 way and were deleted rather than migrated: all of `services/` except `samba.yml`, which moved
 to `core/` (see [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
 deleted once the migrations left it with no dependents (see
@@ -260,15 +272,17 @@ plugin manager with a shared root can be read by every account and written by no
 editor on a box whose work arrives over SSH, which took its directory with it (see
 [Retired: `gui-tools/`](#retired-gui-tools)).
 
-The 13 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 6 playbooks left in the legacy tree — all of `core/`, which is all the legacy tree is now —
+are `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
 because it belongs to accounts named explicitly rather than to whoever is logged in.
 
-### Multi-user (24)
+### Multi-user (31)
 
-All of `_multi-user/tools/` (11) and all of `_multi-user/cloud-cli/` (13). Each uses
+All of `_multi-user/tools/` (11), all of `_multi-user/cloud-cli/` (13) and all of
+`_multi-user/container/` (7). Each uses
 `hosts: "{{ host }}"`, installs to root-owned system paths, puts shell configuration in
 `/etc/profile.d`, `/etc/bash_completion.d` or `/etc/environment`, pins its version in
 `vars:`, and ends with a `setpriv --reuid=65534` task that proves the tool works for an
@@ -278,28 +292,41 @@ The `_multi-user/cloud-cli/` ones add a rule the `tools/` ones did not need: eve
 identity, so the playbook installs the client and stops. None of them runs `aws configure`,
 `gcloud auth login` or `jira init`, and none writes a secret anywhere.
 
-### Effectively shared (3)
+The `_multi-user/container/` ones add three more, because what they install is a *runtime*
+rather than a client: a privilege grant takes an explicit list and defaults to empty (see the
+note under [Playbooks (multi-user)](#playbooks-multi-user)); no playbook creates or
+pre-populates per-account runtime state — `~/.kube`, `~/.minikube`, `~/.docker` — for any
+account, including the connecting one; and the closing check proves an unprivileged account
+can run the client, not that a cluster exists. One consequence is worth stating rather than
+discovering: `kind` and `minikube` are multi-user exactly as far as the `docker` group
+reaches. Every account can execute the binary, and no account outside `docker_users` can do
+anything with it.
+
+### Effectively shared (2)
 
 This category used to be mostly `cloud-cli/`; those seven playbooks were migrated and their
-originals deleted, `services/jellyfin.yml` left with the rest of `services/`, and
-`gui-tools/vscode.yml` — the fourth row here until 2026-08-14 — left with
-[its directory](#retired-gui-tools). What is left is the tail.
+originals deleted, `services/jellyfin.yml` left with the rest of `services/`,
+`gui-tools/vscode.yml` left with [its directory](#retired-gui-tools), and
+`container/devcontainers.yml` — the third row here until 2026-08-14 — was migrated to
+[`_multi-user/container/devcontainers.yml`](_multi-user/container/README.md#devcontainersyml)
+and deleted with the rest of `container/`. What is left is the tail.
 
 | Playbook | Why it is already safe |
 |----------|------------------------|
 | `core/nodejs.yml`, `core/disable-rsyslog.yml` | apt / systemd only |
-| `container/devcontainers.yml` | `npm install -g` as root |
 
-### Mixed — shared install, personal tail (8)
+### Mixed — shared install, personal tail (2)
 
-`core/golang.yml` used to be the ninth — `/usr/local/go` shared, `PATH` and `GOPATH` in the
-invoker's `.bashrc` — and was [retired](#retired-coregolangyml-and-corerustyml) rather than
-fixed, since a toolchain nobody here compiles with is not worth un-mixing.
+This category was three quarters `container/` until 2026-08-14: `docker`, `podman`, `kubectl`,
+`helm`, `kind` and `minikube` were six of its eight rows, each a shared install with a
+`~/.bashrc` block or a `$USER` group add on the end, and all six left the category by being
+[migrated](MIGRATION3.md) — the completions moved to `/etc/bash_completion.d` and the group
+add became `docker_users`. `core/golang.yml` was a ninth row before that, and left the other
+way: [retired](#retired-coregolangyml-and-corerustyml) rather than fixed, since a toolchain
+nobody here compiles with is not worth un-mixing. What is left is `core/` alone.
 
 | Playbook | Shared part | Personal part |
 |----------|-------------|---------------|
-| `container/{helm,kubectl,kind,minikube}.yml` | apt or `/usr/local/bin` | Bash completion written to `/home/{{ *_user }}/.bashrc` |
-| `container/{docker,podman}.yml` | Daemon and packages | Only `$USER` is added to the `docker` group; `~/.bashrc` |
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
 | `core/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 

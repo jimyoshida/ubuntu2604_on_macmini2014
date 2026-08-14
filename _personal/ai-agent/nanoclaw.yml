@@ -77,12 +77,15 @@
       ansible.builtin.fail:
         msg: >-
           Docker is not installed on {{ inventory_hostname }}.
-          Run: ansible-playbook container/docker.yml
+          Run it from _multi-user/, granting the accounts you need:
+          ansible-playbook container/docker.yml -e host={{ inventory_hostname }}
+          -e docker_users={{ nanoclaw_users | join(',') }}
       when: docker_check.rc != 0
 
-    # Checked per account, not for the connecting user: container/docker.yml adds only
-    # whoever ran it to the docker group, so membership is exactly the kind of thing
-    # that differs between the account Ansible logs in as and the ones being set up.
+    # Checked per account, not for the connecting user: _multi-user/container/docker.yml
+    # grants the docker group only to the accounts named in docker_users and defaults to
+    # granting none, so membership is exactly the kind of thing that differs between the
+    # account Ansible logs in as and the ones being set up.
     # check_mode: false for the same reason as task 1, failing the other way: skipped
     # under --check the task registers an empty stdout, so 1c sees no docker group and
     # fails every account no matter its real membership.
@@ -97,8 +100,11 @@
       ansible.builtin.fail:
         msg: >-
           Account '{{ item.item }}' on {{ inventory_hostname }} is not in the docker
-          group, so it cannot build or run the agent container.
-          Add it with: usermod -aG docker {{ item.item }}
+          group, so it cannot build or run the agent container. Grant it from
+          _multi-user/: ansible-playbook container/docker.yml
+          -e host={{ inventory_hostname }} -e docker_users={{ item.item }}
+          (or directly: usermod -aG docker {{ item.item }}). The group is
+          root-equivalent on this host -- grant it deliberately.
       when: "'docker' not in item.stdout.split()"
       loop: "{{ user_groups.results }}"
       loop_control:
