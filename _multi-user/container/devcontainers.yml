@@ -1,0 +1,216 @@
+---
+# Install the Dev Containers CLI system-wide on a multi-user workstation.
+#
+#   <npm prefix>/bin/devcontainer                        the CLI entry point
+#   <npm prefix>/lib/node_modules/@devcontainers/cli     the package itself
+#
+# The source playbook (container/devcontainers.yml) already installed into a
+# root-owned npm prefix with `become`, so this migration is correctness work
+# rather than reach work -- the same shape as _multi-user/tools/markdownlint.yml,
+# which this playbook follows closely because it is the same mechanism.
+#
+# What changed versus the source playbook:
+#   - Pinned version. The source installed `@devcontainers/cli@latest`, so what
+#     landed depended on the day it ran and nothing recorded which.
+#   - Version-aware idempotency (MIGRATION.md policy point 6). The source
+#     guarded on `which devcontainer`, so it installed the newest version once
+#     and then never moved again: this host sat on 0.87.0 while upstream was on
+#     0.88.0 for exactly that reason. Bumping devcontainers_cli_version now
+#     actually replaces the package.
+#   - npm's global prefix is read at run time rather than assumed. It is not
+#     fixed: an apt-installed nodejs defaults it to /usr/local, a NodeSource one
+#     to /usr (this host). MIGRATION.md's markdownlint finding.
+#   - Verification runs as an arbitrary uid with a scratch HOME instead of as
+#     the connecting account (policy point 9, MIGRATION3.md B4).
+#
+# There is no per-user state and no grant: the CLI keeps nothing under $HOME of
+# its own, and needs no group membership to run. Driving a dev container does
+# need a container runtime, which is container/docker.yml's business and its
+# docker_users grant -- see the README.
+#
+# Usage:
+#   ansible-playbook container/devcontainers.yml -e host=<inventory host or group>
+#   ansible-playbook container/devcontainers.yml -e host=ws01 -e devcontainers_cli_version=0.88.0
+
+- name: Install the Dev Containers CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    devcontainers_cli_version: "0.88.0"
+    # Disk-backed rather than /tmp, which is a size-capped tmpfs on these hosts
+    # (MIGRATION.md's grype-syft finding). The CLI writes into HOME on first run.
+    devcontainers_smoke_home: /var/tmp/devcontainers-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    devcontainers_verify_uid: 65534    # nobody
+    devcontainers_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that Node.js is installed as a system package
+      ansible.builtin.command: dpkg -s nodejs
+      register: devcontainers_nodejs_dpkg
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Fail if Node.js is not installed as a system package
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Node.js is not installed. Provision it (the Ubuntu nodejs
+          package or the NodeSource repository) before running this playbook.
+      when: devcontainers_nodejs_dpkg.rc != 0
+
+    - name: 3. Resolve the active node binary path
+      ansible.builtin.command: which node
+      register: devcontainers_node_path
+      changed_when: false
+      check_mode: false
+
+    - name: 4. Fail if node in PATH is not a system-wide install
+      # Guards against a per-user version manager (nvm, fnm, mise, ...) shadowing
+      # the system node for the connecting account: a global npm install under
+      # become would then land wherever that shim points, which is per-user and
+      # invisible to every other account. mise is live on this host, so this is a
+      # real hazard here rather than a theoretical one.
+      ansible.builtin.fail:
+        msg: >-
+          node resolved to '{{ devcontainers_node_path.stdout }}', which is not
+          under /usr/bin or /usr/local/bin. It looks like it is managed by a
+          per-user version manager rather than a system package.
+      when: devcontainers_node_path.stdout not in ['/usr/bin/node', '/usr/local/bin/node']
+
+    - name: 5. Resolve npm's global install prefix
+      ansible.builtin.command: npm config get prefix
+      register: devcontainers_npm_prefix
+      changed_when: false
+      check_mode: false
+
+    - name: 6. Check the currently installed Dev Containers CLI version
+      ansible.builtin.command: "{{ devcontainers_npm_prefix.stdout }}/bin/devcontainer --version"
+      register: devcontainers_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 7. Decide whether the Dev Containers CLI needs installing
+      # The reported version is compared, not the presence of the binary, so that
+      # bumping the pin actually replaces the package. `--version` prints the
+      # bare version and nothing else, so an exact match is the right test: `in`
+      # would let 0.8.8 satisfy a pin of 0.88.0.
+      ansible.builtin.set_fact:
+        devcontainers_install_needed: >-
+          {{ (devcontainers_installed.stdout | default('') | trim) != devcontainers_cli_version }}
+
+    - name: 8. Install the Dev Containers CLI via npm as root
+      ansible.builtin.command:
+        cmd: "npm install -g @devcontainers/cli@{{ devcontainers_cli_version }}"
+      when: devcontainers_install_needed | bool
+
+    - name: 9. Ensure the installed package is world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds the
+      # execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ devcontainers_npm_prefix.stdout }}/lib/node_modules/@devcontainers/cli"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when: not ansible_check_mode
+
+    - name: 10. Verify the installed Dev Containers CLI version
+      ansible.builtin.command: "{{ devcontainers_npm_prefix.stdout }}/bin/devcontainer --version"
+      register: devcontainers_version_out
+      changed_when: false
+      failed_when: (devcontainers_version_out.stdout | trim) != devcontainers_cli_version
+      when: not ansible_check_mode
+
+    - name: 11. Create a scratch HOME for the unprivileged smoke test
+      # check_mode: false so the directory really exists for the length of the
+      # run: the smoke test below sets chdir, and the command action validates
+      # chdir before check mode skips the task (MIGRATION2's opentofu finding).
+      ansible.builtin.file:
+        path: "{{ devcontainers_smoke_home }}"
+        state: directory
+        owner: "{{ devcontainers_verify_uid }}"
+        group: "{{ devcontainers_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 12. Exercise the CLI as an unprivileged user
+      # B4 verification, level 2 -- a subcommand that inspects the install
+      # itself. Level 1 (offline real work) is not available for this tool, and
+      # that was established here rather than assumed:
+      #
+      #   `devcontainer read-configuration --workspace-folder <dir>` looks like
+      #   pure config parsing, and it is not. It shells out to
+      #   `docker ps -q -a --filter label=devcontainer.local_folder=...` to find
+      #   an existing container for the folder, so it exits 1 for any account
+      #   that cannot reach the Docker socket -- printing only its banner, with
+      #   the real cause visible solely under --log-level trace. It succeeds as
+      #   root and fails as uid 65534 on the same directory and the same file,
+      #   which reads like a permissions bug in the playbook and is not one.
+      #
+      # So there is no subcommand that does real devcontainer work without a
+      # container runtime, and the honest check is that an arbitrary uid can
+      # execute the CLI and get its packaged command table built -- which is
+      # what --help does, and it is more than --version proves.
+      #
+      # HOME is a scratch directory the task owns, since the CLI writes there in
+      # the modes that do work (A4). chdir keeps the cwd somewhere uid 65534 can
+      # traverse -- MIGRATION2's gcx finding, where a correct install failed its
+      # own verification on the working directory.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ devcontainers_verify_uid }} --regid={{ devcontainers_verify_gid }} --clear-groups
+          env HOME="{{ devcontainers_smoke_home }}"
+          {{ devcontainers_npm_prefix.stdout }}/bin/devcontainer --help
+        chdir: "{{ devcontainers_smoke_home }}"
+      register: devcontainers_smoke
+      changed_when: false
+      failed_when: >-
+        'devcontainer up' not in devcontainers_smoke.stdout
+        or 'read-configuration' not in devcontainers_smoke.stdout
+      when: not ansible_check_mode
+
+    - name: 13. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ devcontainers_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 14. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Dev Containers CLI {{ devcontainers_cli_version }}
+            {{ ansible_check_mode
+               | ternary('would be installed system-wide.', 'installed system-wide.') }}
+          - ""
+          - "  {{ devcontainers_npm_prefix.stdout }}/bin/devcontainer"
+          - "  {{ devcontainers_npm_prefix.stdout }}/lib/node_modules/@devcontainers/cli"
+          - ""
+          - >-
+            {{ ansible_check_mode
+               | ternary('Not verified: this was a --check run.',
+                         'Verified: an unprivileged account (uid ' ~ devcontainers_verify_uid
+                         ~ ') can execute the CLI with no configuration of its own.') }}
+          - ""
+          - "The CLI is installed for every account, but it drives a container runtime it does"
+          - "not install, and it needs that runtime earlier than you would expect: even"
+          - "`devcontainer read-configuration` calls `docker ps`, so it fails for an account"
+          - "outside the `docker` group. Membership is granted per account by"
+          - "container/docker.yml, never by default -- so on a host where nobody has been"
+          - "granted it, every devcontainer subcommand except --help and --version will fail."
+          - ""
+          - "Usage:"
+          - "  devcontainer read-configuration --workspace-folder .   # resolve the config"
+          - "  devcontainer build --workspace-folder .                # build the image"
+          - "  devcontainer up --workspace-folder .                   # create and start"
+          - "  devcontainer exec --workspace-folder . <cmd>           # run a command inside"
+          - ""
+          - "Documentation: https://containers.dev"

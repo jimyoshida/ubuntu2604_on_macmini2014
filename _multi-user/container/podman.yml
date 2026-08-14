@@ -1,0 +1,303 @@
+---
+# Install Podman and podman-compose system-wide on a multi-user workstation.
+#
+#   /usr/bin/podman           from the `podman` package
+#   /usr/bin/podman-compose   from the `podman-compose` package
+#   /etc/containers/*         shared configuration, shipped by the package
+#
+# Both are Ubuntu archive packages installed to root-owned paths, so the binary
+# already reached every account before this migration. What the source playbook
+# (container/podman.yml) got wrong was everything around it:
+#
+#   - It ran `loginctl enable-linger` for `lookup('env', 'USER')` -- a per-account
+#     grant, made to whoever happened to run the playbook. Lingering is now an
+#     explicit list that defaults to empty (MIGRATION3.md B1). Empty means this
+#     playbook grants nothing, which is the correct default on a shared box.
+#   - It appended `xhost +local:podman` to that account's ~/.bashrc, loosening X
+#     server access control on every interactive shell, from a playbook whose job
+#     is installing a container runtime. Deleted outright, with no replacement
+#     (MIGRATION3.md B5, decided 2026-08-14).
+#   - Neither package was pinned, and facts were not gathered.
+#
+# This playbook writes nothing under any account's $HOME, including the
+# connecting account's (B2): ~/.local/share/containers and ~/.config/containers
+# are created by podman itself, the first time each account uses it, and that is
+# correct -- they are per-user by design.
+#
+# Rootless Podman needs a subuid/subgid range per account, which `useradd`
+# allocates but `adduser --system`, cloud-init and LDAP often do not. Task 10
+# asserts it for every account being granted lingering, because rootless podman
+# fails for an account without one in a way that looks like a podman bug.
+#
+# Usage:
+#   ansible-playbook container/podman.yml -e host=<inventory host or group>
+#   ansible-playbook container/podman.yml -e host=ws01 -e podman_linger_users=alice,bob
+#   ansible-playbook container/podman.yml -e host=ws01 -e podman_version=5.7.0+ds2-3build1
+
+- name: Install Podman system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Ubuntu archive (resolute/universe) versions. These pins are release-specific
+    # -- apt candidates differ between 24.04 and 26.04 and an install fails
+    # outright when the pin is not what the target's sources carry. Check
+    # `apt-cache policy` on the target before bumping (MIGRATION.md's shellcheck
+    # finding).
+    podman_version: "5.7.0+ds2-3build1"
+    podman_compose_version: "1.5.0-2"
+    # Accounts whose user services survive logout. A grant, not an install, so it
+    # defaults to empty and is never inferred from the connecting account (B1).
+    # Accepts a comma-separated string or a YAML list, matching _personal/'s
+    # target_users -- the same operator types both.
+    podman_linger_users: []
+    # Scratch HOME for the smoke test. Disk-backed rather than /tmp, which is a
+    # size-capped tmpfs on these hosts (MIGRATION.md's grype-syft finding).
+    podman_smoke_home: /var/tmp/podman-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    podman_verify_uid: 65534    # nobody
+    podman_verify_gid: 65534    # nogroup
+
+  pre_tasks:
+    - name: 0. Normalise podman_linger_users into a list
+      ansible.builtin.set_fact:
+        podman_linger_list: >-
+          {{ (podman_linger_users.split(',') if podman_linger_users is string else podman_linger_users)
+             | map('trim') | select | list }}
+
+    - name: 0a. Read the target host's passwd database
+      # $HOME and account existence come from the target's passwd database rather
+      # than from /home/<user>, which is not the same thing on hosts with service
+      # accounts or /var/lib homes.
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: 0b. Require every account named for a lingering grant to exist
+      ansible.builtin.assert:
+        that: item in ansible_facts.getent_passwd
+        fail_msg: "No account '{{ item }}' on {{ inventory_hostname }}."
+      loop: "{{ podman_linger_list }}"
+
+    # Stated out loud because the list can be silently truncated upstream of the
+    # playbook: `ansible-playbook -e podman_linger_users="alice, bob"` splits on
+    # whitespace and binds only "alice,", and a stray trailing comma drops an
+    # account the same way. Read this line before letting the run continue.
+    - name: 0c. Show which accounts this run will grant lingering to
+      ansible.builtin.debug:
+        msg: >-
+          {{ (podman_linger_list | length > 0)
+             | ternary('Granting lingering to ' ~ (podman_linger_list | length) ~ ' account(s) on '
+                       ~ inventory_hostname ~ ': ' ~ (podman_linger_list | join(', ')),
+                       'No podman_linger_users given: this run grants lingering to nobody. '
+                       ~ 'Podman itself still works for every account; only user services that '
+                       ~ 'must survive logout need this.') }}
+
+  tasks:
+    - name: 1. Check the currently installed podman and podman-compose versions
+      # One dpkg-query for both packages. It exits non-zero when either is absent
+      # while still printing the one that is present, hence failed_when: false.
+      # check_mode: false because this reads state that already exists -- a
+      # skipped command task registers rc 0 and an empty stdout, which task 2
+      # would read as "neither is at the pinned version", true here by accident
+      # rather than by measurement (MIGRATION2's promtool pattern).
+      ansible.builtin.command:
+        cmd: dpkg-query -W -f='${Package} ${Version}\n' podman podman-compose
+      register: podman_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide whether either package needs installing
+      ansible.builtin.set_fact:
+        podman_install_needed: >-
+          {{ ('podman ' ~ podman_version) not in podman_installed.stdout
+             or ('podman-compose ' ~ podman_compose_version) not in podman_installed.stdout }}
+        podman_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (('podman ' ~ podman_version) not in podman_installed.stdout
+                       or ('podman-compose ' ~ podman_compose_version) not in podman_installed.stdout)) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install podman {{ podman_version }} /
+          podman-compose {{ podman_compose_version }}, so the version check and
+          the unprivileged smoke test below are skipped rather than failed.
+          Re-run without --check to verify.
+      when: not (podman_can_verify | bool)
+
+    - name: 3. Install podman and podman-compose via apt
+      # allow_downgrade so that moving a pin backwards actually applies: without
+      # it apt refuses, and the pin silently means "this version or anything
+      # newer already present".
+      ansible.builtin.apt:
+        name:
+          - "podman={{ podman_version }}"
+          - "podman-compose={{ podman_compose_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        allow_downgrade: true
+      when: podman_install_needed | bool
+
+    - name: 4. Verify the installed package versions
+      ansible.builtin.command:
+        cmd: dpkg-query -W -f='${Package} ${Version}\n' podman podman-compose
+      register: podman_dpkg
+      changed_when: false
+      failed_when: >-
+        ('podman ' ~ podman_version) not in podman_dpkg.stdout
+        or ('podman-compose ' ~ podman_compose_version) not in podman_dpkg.stdout
+      when: podman_can_verify | bool
+
+    - name: 5. Create a scratch HOME for the unprivileged smoke test
+      # podman reads configuration out of $HOME before doing anything at all --
+      # even `podman --version` stats $HOME/.config first, and setpriv does not
+      # change HOME, so without this the check fails as
+      # `stat /root/.config: permission denied`: a correct install failing its
+      # own verification on the connecting account's HOME. A4's writable-HOME
+      # mechanic, which turns out to apply to podman more aggressively than to
+      # any tool in MIGRATION2.
+      ansible.builtin.file:
+        path: "{{ podman_smoke_home }}"
+        state: directory
+        owner: "{{ podman_verify_uid }}"
+        group: "{{ podman_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 6. Report the podman version as an unprivileged user
+      # B4 verification, level 3 -- `--version` alone, and it is what is available:
+      # nearly every other podman subcommand reaches for a container store, and
+      # rootless podman as uid 65534 cannot get past newuidmap because `nobody`
+      # has no /etc/subuid range (which is the point task 10 asserts for the
+      # accounts that do need one). What this proves is the multi-user question
+      # that can be proved: an arbitrary uid can execute the binary, load its
+      # shared libraries and read the shared configuration, with no configuration
+      # of its own.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ podman_verify_uid }} --regid={{ podman_verify_gid }} --clear-groups
+          env HOME="{{ podman_smoke_home }}"
+          podman --version
+        chdir: "{{ podman_smoke_home }}"
+      register: podman_smoke
+      changed_when: false
+      failed_when: podman_version.split('+')[0] not in podman_smoke.stdout
+      when: podman_can_verify | bool
+
+    - name: 7. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ podman_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 8. Confirm the shared container configuration is world-readable
+      # /etc/containers/registries.conf is what makes an unqualified image name
+      # resolve, and it is shared: an account that cannot read it gets a
+      # confusing resolution failure rather than a permission error.
+      ansible.builtin.stat:
+        path: /etc/containers/registries.conf
+      register: podman_registries_conf
+
+    - name: 8a. Fail if the shared container configuration is not readable by everyone
+      ansible.builtin.assert:
+        that:
+          - podman_registries_conf.stat.exists
+          - podman_registries_conf.stat.roth
+        fail_msg: >-
+          /etc/containers/registries.conf is missing or not world-readable, so
+          unqualified image names will not resolve for other accounts.
+
+    - name: 9. Read the subuid and subgid databases
+      # Rootless podman maps a range of host uids into each user namespace. No
+      # range, no rootless containers -- and the failure names newuidmap rather
+      # than the missing range, so it reads as a podman bug.
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: podman_subid_files
+      loop:
+        - /etc/subuid
+        - /etc/subgid
+
+    - name: 10. Require a subuid and subgid range for every account granted lingering
+      # B4: the useful multi-user check for podman is not a smoke test but this
+      # assertion. Deliberately scoped to the accounts this run grants lingering
+      # to: those are the accounts the operator has named as podman users, and
+      # asserting it for every account on the host would fail on system accounts
+      # that will never run a container.
+      ansible.builtin.assert:
+        that:
+          - (podman_subid_files.results[0].content | b64decode).split('\n')
+            | select('match', '^' ~ (item | regex_escape) ~ ':') | list | length > 0
+          - (podman_subid_files.results[1].content | b64decode).split('\n')
+            | select('match', '^' ~ (item | regex_escape) ~ ':') | list | length > 0
+        fail_msg: >-
+          Account '{{ item }}' has no subuid and/or subgid range, so rootless
+          podman cannot create a user namespace for it. Allocate one:
+            sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 {{ item }}
+      loop: "{{ podman_linger_list }}"
+
+    - name: 11. Check which of those accounts already have lingering enabled
+      # systemd records lingering as a file per account. Reading it rather than
+      # running `loginctl enable-linger` unconditionally is what makes a re-run
+      # report changed=0 -- the source playbook's `changed_when: false` hid the
+      # command's effect instead of avoiding it.
+      ansible.builtin.stat:
+        path: "/var/lib/systemd/linger/{{ item }}"
+      register: podman_linger_state
+      loop: "{{ podman_linger_list }}"
+
+    - name: 12. Enable lingering for the accounts named in podman_linger_users
+      # Additive only (B1): an account absent from the list keeps whatever it
+      # already has. Revoking lingering is a deliberate act, not a side effect of
+      # running with a shorter list.
+      ansible.builtin.command:
+        cmd: "loginctl enable-linger {{ item.item }}"
+      loop: "{{ podman_linger_state.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stat.exists
+
+    - name: 13. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            podman {{ podman_version }} and podman-compose {{ podman_compose_version }}
+            {{ podman_can_verify | bool
+               | ternary('are installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  /usr/bin/podman"
+          - "  /usr/bin/podman-compose"
+          - "  /etc/containers/         shared configuration"
+          - ""
+          - >-
+            {{ podman_can_verify | bool
+               | ternary('Verified runnable by an unprivileged account (uid ' ~ podman_verify_uid ~ ').',
+                         'Not verified: this was a --check run against a host without these versions.') }}
+          - ""
+          - >-
+            {{ (podman_linger_list | length > 0)
+               | ternary('Lingering is enabled for: ' ~ (podman_linger_list | join(', '))
+                         ~ ' -- their user services survive logout.',
+                         'No account was granted lingering. Podman works for every account '
+                         ~ 'regardless; lingering only matters for user services that must '
+                         ~ 'keep running after logout. Grant it deliberately, per account:') }}
+          - >-
+            {{ (podman_linger_list | length > 0) | ternary('',
+               '  ansible-playbook container/podman.yml -e host=' ~ inventory_hostname
+               ~ ' -e podman_linger_users=alice,bob') }}
+          - ""
+          - "Podman is rootless: each account gets its own containers, images and storage under"
+          - "~/.local/share/containers. Nothing is shared between accounts, and no group"
+          - "membership is needed -- unlike Docker, which needs a root-equivalent grant."
+          - ""
+          - "Usage:"
+          - "  podman run --rm -it alpine sh         # run a container as yourself"
+          - "  podman ps -a                          # list your containers"
+          - "  podman-compose up -d                  # bring up a compose project"
+          - "  podman system prune                   # reclaim space in your own store"

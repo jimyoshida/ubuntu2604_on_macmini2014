@@ -3,12 +3,13 @@
 Policy and procedure for migrating the container and Kubernetes playbooks from `container/` to
 `_multi-user/container/`.
 
-**Status: in progress. Wave 1 (decisions) is complete; 0 of 7 source playbooks migrated.** All
+**Status: in progress. Waves 1 and 2 are complete; 2 of 7 source playbooks migrated.** All
 three decisions [wave 1](#order-of-work) called for are settled — the kubectl package collision
-as (a), the Helm pin as 4.2.3-1, and the `xhost` question by deleting the line — so writing can
-start with `devcontainers.yml` and `podman.yml`. See
-[Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision) and
-[Migration status](#migration-status).
+as (a), the Helm pin as 4.2.3-1, and the `xhost` question by deleting the line. Wave 2 migrated
+`devcontainers.yml` and `podman.yml`, both verified against `localhost`. Wave 3 is `docker.yml`,
+`kubectl.yml` and `helm.yml`. See
+[Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision),
+[Wave 2](#wave-2-devcontainers-podman) and [Migration status](#migration-status).
 
 `container/krew.yml` was the eighth. It is not in this plan: it was
 [retired](README.md#retired-containerkrewyml) on 2026-08-14 rather than migrated, because krew
@@ -473,10 +474,11 @@ Four waves, each ending in a commit and a status-table update:
    written in later waves is owed a revisit — but `kubectl.yml` now owes a file that no
    playbook in either previous migration produced, an `/etc/apt/preferences.d/` entry, and
    wave 3 is where that gets designed.
-2. **The two that are almost right — #1, #2.** `devcontainers.yml` and `podman.yml` are apt and
-   npm, no vendor repository, no root-equivalent grant. Pure correctness work: pins,
+2. **The two that are almost right — #1, #2. Done.** `devcontainers.yml` and `podman.yml` are
+   apt and npm, no vendor repository, no root-equivalent grant. Pure correctness work: pins,
    version-aware guards, unprivileged verification. They establish the house style for this
-   directory (in particular the B4 verification shapes) at the lowest risk.
+   directory (in particular the B4 verification shapes) at the lowest risk. Both verified
+   against `localhost` — see [Wave 2](#wave-2-devcontainers-podman).
 3. **Docker and the k8s clients — #3, #4, #5.** `docker.yml` first: #6 and #7's smoke tests are
    written against a host where the daemon exists, and B1's grant default is easier to reason
    about before the tools that depend on it. Then `kubectl.yml` (which needs wave 1's collision
@@ -510,8 +512,8 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `devcontainers.yml` | `npm install -g @latest` | npm global, pinned, prefix from run time | TBD | Not started |
-| `podman.yml` | apt, unpinned | apt, pinned; linger by explicit list | TBD | Not started |
+| `devcontainers.yml` | `npm install -g @latest` | npm global, pinned, prefix from run time | 0.88.0 | Verified (localhost) |
+| `podman.yml` | apt, unpinned | apt, pinned; linger by explicit list | podman 5.7.0+ds2-3build1, podman-compose 1.5.0-2 | Verified (localhost) |
 | `docker.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned; group by explicit list | TBD | Not started |
 | `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | `pkgs.k8s.io` v1.36 + `/etc/apt/preferences.d/kubectl` — decision (a) | TBD | Not started |
 | `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | TBD | Not started |
@@ -540,6 +542,58 @@ category and leaves it as `core/mise.yml` and `core/samba.yml` alone — which i
 which "the legacy tree" means `core/` and nothing else, now that
 [`gui-tools/` is retired](README.md#retired-gui-tools) too, and the underscore on
 `_multi-user/` starts to look like it has outlived its purpose.
+
+### Wave 2 (`devcontainers`, `podman`)
+
+Both verified against `localhost`, `failed=0`, with the same caveats as everything else in
+`_multi-user/`: ansible-core 2.20 only, and a local connection exercises neither the 24.04
+control node nor the SSH path. Re-runs are idempotent — `ok=12 changed=2` for
+`devcontainers.yml` and `ok=14 changed=2` for `podman.yml`, every `changed` being the scratch
+`HOME` created and removed. `--check` was exercised first on both and wrote nothing. Post-run
+checks independent of the playbooks: `devcontainer 0.88.0` root-owned and world-readable under
+`/usr/lib/node_modules/@devcontainers/cli`, `podman 5.7.0` / `podman-compose 1.5.0`, and
+`/var/tmp` holds no leftovers.
+
+The procedure's "run it twice, then bump the pin with `-e`" step was carried out in full on
+`devcontainers.yml`: pinning `0.87.0` moved the install *backwards* and the guard reported the
+change, which is the direct test policy point 6 exists for and precisely what the source
+playbook's `which devcontainer` guard could never do. `podman.yml` cannot be tested that way —
+Ubuntu's archive publishes exactly one candidate for both packages — so the equivalent check was
+a deliberately wrong pin (`-e podman_version=9.9.9-1`), which fails loudly at the install task
+and changes nothing, rather than silently installing whatever apt preferred.
+
+**A tool that looks offline is not offline: `devcontainer read-configuration` calls `docker
+ps`.** This was going to be the playbook's B4 level-1 verification — parsing a real
+`devcontainer.json` is exactly the "offline real work" the policy prefers — and it failed as uid
+65534 while succeeding as root on the same directory and the same file. The cause is not
+permissions: the CLI shells out to
+`docker ps -q -a --filter label=devcontainer.local_folder=...` to find an existing container for
+the workspace folder, so it fails for any account outside the `docker` group. It exits 1 having
+printed only its startup banner; the `docker ps` call is visible **only** under
+`--log-level trace`. Two things follow. First, this playbook's check is B4 level 2
+(`devcontainer --help`), which is what [the plan](#per-tool-migration-plan) suggested anyway —
+there is no subcommand that does real devcontainer work without a runtime. Second, the
+[per-tool table](#per-tool-state-grants-and-shared-config)'s `devcontainer` row understates the
+dependency: it is not merely that `devcontainer up` needs Docker, it is that everything except
+`--help` and `--version` does. On a host where `docker_users` is empty — B1's default — the Dev
+Containers CLI is installed for everyone and usable by no one.
+
+**podman reads `$HOME` before it will even report its version.** `podman --version` as uid 65534
+fails with `stat /root/.config: permission denied`, because `setpriv` does not change `HOME` and
+podman stats `$HOME/.config` before doing anything at all. MIGRATION2's A4 already called for a
+writable scratch `HOME`, but for tools that were doing real work; this is the weakest possible
+subcommand needing one, so the rule to carry into waves 3 and 4 is to give *every* smoke test in
+this directory a scratch `HOME` by default rather than adding one when a check fails. It is the
+same class of finding as MIGRATION2's `gcx` cwd defect — a correct install failing its own
+verification on the connecting account's environment.
+
+**The subuid assertion earns its place, and its ordering matters.** Run with
+`-e podman_linger_users=nobody`, the playbook fails at task 10 with the `usermod --add-subuids`
+remedy and grants nothing, because the assertion sits ahead of the `enable-linger` task. An
+account that cannot run rootless podman does not get lingering enabled for it as a consolation
+prize. Run with an account that has a range and already lingers, the grant tasks report `ok` and
+`skipping` rather than `changed`, which is the idempotency the source playbook's
+`changed_when: false` only pretended to have.
 
 ## Upstream survey (2026-08-11)
 
@@ -585,9 +639,14 @@ which is exactly the staleness this warning is about. The current readings are i
   `lineinfile` entries rather than marked blocks, so there is not even a marker to match on —
   removing them means matching the literal line — and now that no migrated playbook writes an
   `xhost` line, nothing this repo ships will ever revisit them. On `localhost` there is one,
-  `xhost +local:docker` at `~/.bashrc:118`, from `docker.yml`; `podman.yml`'s equivalent is
-  absent, so that playbook has never run here — worth knowing before reading a `podman` smoke
-  test on this host as a regression check. Unlike the completion blocks,
+  `xhost +local:docker` at `~/.bashrc:118`, from `docker.yml`. `podman.yml`'s equivalent is
+  absent, which suggests that playbook never ran to completion here — but only suggests it:
+  `podman 5.7.0` *is* installed, and lingering *is* enabled for the account, neither of which
+  is evidence, because apt could have brought podman in as a dependency and three other
+  playbooks in this repo (`core/x11vnc.yml` and two under `_personal/ai-agent/`) also run
+  `loginctl enable-linger`. Worth knowing before reading a `podman` run on this host as a
+  regression check: its starting state is not a clean one, and it is not knowable which
+  playbook produced it. Unlike the completion blocks,
   which are merely redundant once B3 puts the same completions in `/etc`, these keep doing
   whatever they do on every interactive shell, in every account that ran `docker.yml` or
   `podman.yml`. That makes them the strongest candidate in this list for cleanup by hand, and
