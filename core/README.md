@@ -1,40 +1,26 @@
 # Core System Setup
 
-## agent-base.yml
+## core-tools.yml
 
-General agent base setup (SSH, Avahi)
-
-```bash
-ansible-playbook core/agent-base.yml
-```
-
-This playbook configures:
-- Hostname and network settings
-- SSH server with keep-alive (12h sessions)
-- Avahi daemon for mDNS
-- systemd-resolved for DNS
-- System sleep/suspend/lid handling disabled
-- Screen blanking and GNOME lock disabled
-- Keychain for SSH key management
-- Git branch display in bash prompt
-- `s` alias for `systemctl --user`
-- IPv6 disabled on the specified NetworkManager connection
-- journald low disk I/O configuration (500MB max, 3-day retention, 5-minute sync intervals)
-
-Also installs `avahi-utils`. Useful commands:
+Install common CLI packages (keychain, git, jq, compression tools, etc.)
 
 ```bash
-avahi-browse -a -t                          # Discover all mDNS services on the LAN (one-shot)
-avahi-browse _ssh._tcp -t                   # Find SSH-advertised hosts
-avahi-resolve-host-name hostname.local      # Resolve a .local hostname to IP
-avahi-resolve-address 192.168.x.x          # Reverse-resolve IP to .local name
+ansible-playbook core/core-tools.yml
 ```
 
-This playbook configures the SSH **server**. The client-side half — permissions on your own
-`~/.ssh` and your key in `authorized_keys` — is not a playbook: it needs no privileges and no
-remote connection, so it is [`setup-passwordless-ssh.sh`](../setup-passwordless-ssh.sh) instead
-(see [Passwordless SSH Setup](../README.md#passwordless-ssh-setup)). Run that after this
-playbook to finish SSH setup for remote access.
+Installs one fixed list of packages: `keychain`, `net-tools`, `ncat`, `ca-certificates`, `curl`,
+`gnupg`, `lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `jq`, `zip`, `unzip`,
+`vim`, `figlet`, `cowsay`, `make`, `dos2unix`, `aha`. Nothing else — no shell configuration, no
+service, no per-account state.
+
+Renamed from `core/agent-base.yml` (2026-08-14). That playbook used to also configure SSH,
+Avahi, systemd logind, journald, and the hostname/IPv6 settings that needed `core/env-tmpl.sh`;
+all of it was removed over a series of cuts earlier the same day, none of it being something an
+AI coding agent needs done on every run, until only the package list was left. The cuts changed
+too much of the file for git to detect the rename on its own, so `--follow` won't cross the
+boundary; see git history on both paths instead
+(`git log --all --full-history -- core/agent-base.yml core/core-tools.yml`) for the tasks that
+used to be here.
 
 ## nodejs.yml
 

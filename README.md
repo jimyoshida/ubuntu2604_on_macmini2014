@@ -23,8 +23,8 @@ This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo
 
 ## Passwordless SSH Setup
 
-After uploading `id_rsa` and `id_rsa.pub` to `~/.ssh`, and after running
-[`core/agent-base.yml`](core/README.md#agent-baseyml) to configure the SSH server:
+After uploading `id_rsa` and `id_rsa.pub` to `~/.ssh` (sshd itself is assumed already enabled on
+the host):
 
 ```bash
 ./setup-passwordless-ssh.sh
@@ -49,15 +49,22 @@ directories no longer exist: `tool/` (see [MIGRATION.md](MIGRATION.md)), `cloud-
 [MIGRATION2.md](MIGRATION2.md)) and `container/` (see [MIGRATION3.md](MIGRATION3.md))
 graduated into the multi-user tree in the next table, and `services/` and `gui-tools/` were
 deleted outright as out of scope — see [Retired: `services/`](#retired-services) and
-[Retired: `gui-tools/`](#retired-gui-tools). `core/` has not been looked at yet, and is the
-harder problem: `agent-base.yml` is desktop-session setup, which is per-identity in a way no
-relocation fixes. `x11vnc.yml` was the other desktop-session playbook here; it is gone now,
-along with `disable-rsyslog.yml` — see
-[Retired: `core/disable-rsyslog.yml` and `core/x11vnc.yml`](#retired-coredisable-rsyslogyml-and-corex11vncyml).
+[Retired: `gui-tools/`](#retired-gui-tools). `core/` looked like the harder problem —
+`agent-base.yml` mixed desktop-session setup into hostname, network and package tasks, which
+read as per-identity in a way no relocation could fix — but the desktop half turned out to be
+separable rather than structural. `x11vnc.yml` and `disable-rsyslog.yml` were retired outright
+(see
+[Retired: `core/disable-rsyslog.yml` and `core/x11vnc.yml`](#retired-coredisable-rsyslogyml-and-corex11vncyml)),
+`samba.yml` followed the same way (see [Retired: `core/samba.yml`](#retired-coresambayml)), and
+`agent-base.yml` itself lost its SSH, Avahi, logind, journald, hostname and IPv6 tasks one at a
+time until only package installation was left — renamed `core/core-tools.yml` (2026-08-14; see
+[core/README.md](core/README.md#core-toolsyml)). What remains of `core/` is straightforwardly
+multi-user-compatible, with `mise.yml`'s `mise activate` line the one personal tail still
+standing.
 
 | Directory | Description |
 |-----------|-------------|
-| [core/](core/README.md) | Core system setup (SSH, runtimes) |
+| [core/](core/README.md) | Core system setup (tools, runtimes) |
 
 ## Playbooks (multi-user)
 
@@ -307,9 +314,9 @@ that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy point
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-31) | 31 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-1) | 1 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Effectively shared](#effectively-shared-2) | 2 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-1) | 1 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-4) | 4 | The whole install lands in one `$HOME` or one account |
+| [Personal only](#personal-only-3) | 3 | The whole install lands in one `$HOME` or one account |
 
 Three quarters of the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
@@ -367,7 +374,7 @@ discovering: `kind` and `minikube` are multi-user exactly as far as the `docker`
 reaches. Every account can execute the binary, and no account outside `docker_users` can do
 anything with it.
 
-### Effectively shared (1)
+### Effectively shared (2)
 
 This category used to be mostly `cloud-cli/`; those seven playbooks were migrated and their
 originals deleted, `services/jellyfin.yml` left with the rest of `services/`,
@@ -377,11 +384,15 @@ originals deleted, `services/jellyfin.yml` left with the rest of `services/`,
 and deleted with the rest of `container/`. `core/disable-rsyslog.yml` was the other row here
 until 2026-08-14, when it was
 [retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) rather than migrated — out of
-scope, not unsafe. What is left is the tail.
+scope, not unsafe. `core/agent-base.yml` joined the same day from the opposite direction:
+renamed `core/core-tools.yml` and cut down to its one `apt install` task once SSH, Avahi,
+logind, journald, hostname and IPv6 handling were all peeled off — see
+[core/README.md](core/README.md#core-toolsyml). What is left is the tail.
 
 | Playbook | Why it is already safe |
 |----------|------------------------|
 | `core/nodejs.yml` | apt only |
+| `core/core-tools.yml` | apt only |
 
 ### Mixed — shared install, personal tail (1)
 
@@ -400,10 +411,10 @@ the repo entirely is not worth un-mixing either. What is left is `core/mise.yml`
 |----------|-------------|---------------|
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
 
-### Personal only (4)
+### Personal only (3)
 
-Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
-meant to end up. The other one is still mixed in with the shared trees. Five more left the
+All three of these live in [`_personal/`](#playbooks-personal), which is where this category is
+meant to end up — none are left "mixed in with the shared trees" any more. Six more left the
 category without being fixed: `core/homebrew.yml` was [retired](#retired-corehomebrewyml) — it
 had been the root cause of four other entries here, `cloud-cli/{gcx,influx,jira,vault}-cli.yml`,
 all `brew install` as `lookup('env', 'USER')`, until wave 3 of MIGRATION2.md moved those to
@@ -412,20 +423,23 @@ root-owned paths — `core/rust.yml` was
 `container/krew.yml` was [retired](#retired-containerkrewyml) as per-user by design rather than
 by defect, `core/ssh-key-setup.yml` became
 [`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every task was a
-`chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible, and
-`core/x11vnc.yml` was
-[retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) as out of scope for a box whose
-work arrives over SSH.
+`chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible, `core/x11vnc.yml`
+was [retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) as out of scope for a box whose
+work arrives over SSH, and `core/agent-base.yml` left the category the one way none of the others
+did: neither retired nor given an explicit user list, but stripped of the tasks that made it
+personal in the first place. Renamed `core/core-tools.yml` (2026-08-14), it kept only the `apt
+install` task and lost the `~/.xprofile`, `~/.xsessionrc` and three `~/.bashrc` blocks along with
+it — see [core/README.md](core/README.md#core-toolsyml).
 
 | Playbook | Cause |
 |----------|-------|
 | `_personal/ai-agent/claude-code.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
 | `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
 | `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
-| `core/agent-base.yml` | `~/.xprofile`, `~/.xsessionrc`, three `~/.bashrc` blocks |
 
-The one still in the shared trees is per-identity by **defect** — it binds its work to
-whoever happens to run it. The fix for that shape is the one MIGRATION.md already names: an
-explicit user list instead of `$USER`, not a move to `/usr/local`. The three in `_personal/`
-are per-identity **by nature** and need no fix.
+All three are per-identity **by nature** — an agent's credentials, a user systemd service, a
+checkout in `$HOME` — and need no fix. None are per-identity by **defect** any more:
+`agent-base.yml` was the last one, and it left the shared trees instead of being fixed within
+them, so the fix MIGRATION.md names for that shape — an explicit user list instead of `$USER` —
+currently has nothing left to apply to.
 

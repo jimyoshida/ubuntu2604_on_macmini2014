@@ -1,0 +1,33 @@
+---
+- name: Install Core Tools
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+    - name: 1. Install required system packages
+      become: yes
+      apt:
+        name:
+          - keychain
+          - net-tools
+          - ncat
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - git
+          - git-lfs
+          - git-secret
+          - python3-pip
+          - jq
+          - zip
+          - unzip
+          - vim
+          - figlet
+          - cowsay
+          - make
+          - dos2unix
+          - aha
+        state: present
+        update_cache: yes
