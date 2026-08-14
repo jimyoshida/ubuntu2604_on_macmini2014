@@ -9,7 +9,6 @@
       become: yes
       apt:
         name:
-          - keychain
           - net-tools
           - ncat
           - ca-certificates

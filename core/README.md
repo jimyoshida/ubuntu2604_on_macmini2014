@@ -2,13 +2,13 @@
 
 ## core-tools.yml
 
-Install common CLI packages (keychain, git, jq, compression tools, etc.)
+Install common CLI packages (git, jq, compression tools, etc.)
 
 ```bash
 ansible-playbook core/core-tools.yml
 ```
 
-Installs one fixed list of packages: `keychain`, `net-tools`, `ncat`, `ca-certificates`, `curl`,
+Installs one fixed list of packages: `net-tools`, `ncat`, `ca-certificates`, `curl`,
 `gnupg`, `lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `jq`, `zip`, `unzip`,
 `vim`, `figlet`, `cowsay`, `make`, `dos2unix`, `aha`. Nothing else — no shell configuration, no
 service, no per-account state.
@@ -20,7 +20,9 @@ AI coding agent needs done on every run, until only the package list was left. T
 too much of the file for git to detect the rename on its own, so `--follow` won't cross the
 boundary; see git history on both paths instead
 (`git log --all --full-history -- core/agent-base.yml core/core-tools.yml`) for the tasks that
-used to be here.
+used to be here. On an AWS EC2 target the removed tasks are mostly redundant with what the AMI
+and cloud-init already do; on a physical PC they generally still need doing by hand — see
+[PHYSICAL-HOST-SETUP.md](../PHYSICAL-HOST-SETUP.md) for the manual equivalent of each one.
 
 ## nodejs.yml
 
