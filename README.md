@@ -53,7 +53,7 @@ at yet.
 | Directory | Description |
 |-----------|-------------|
 | [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
-| [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, Krew) |
+| [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube) |
 | [gui-tools/](gui-tools/README.md) | GUI tools (VS Code) |
 
 ## Playbooks (multi-user)
@@ -156,32 +156,75 @@ knowing before doing it elsewhere — `rustup self uninstall` also removes the
 error on every login shell once `~/.cargo` is gone. Both playbooks are recoverable from git
 history (`git log --diff-filter=D -- core/golang.yml core/rust.yml`).
 
+## Retired: `container/krew.yml`
+
+Krew is kubectl's plugin manager, and it is per-user by **design** rather than by defect:
+`KREW_ROOT` defaults to `~/.krew`, and `kubectl krew install` writes into `$KREW_ROOT/store`
+with `$KREW_ROOT/bin` on `PATH`. That is exactly the shape this repo has spent two migrations
+removing, so it was retired (2026-08-14) instead of being carried into `_multi-user/container/`
+— the one playbook of the eight in [MIGRATION3.md](MIGRATION3.md)'s scope that is dropped rather
+than migrated.
+
+A shared root is possible and is documented upstream (`KREW_ROOT=/usr/local/krew`), and it was
+rehearsed here on 2026-08-11 against krew v0.5.0 with a read-only root standing in for a
+root-owned tree. It works exactly as far as reading goes and no further:
+
+| Action against a root the account cannot write | Result |
+|-----------------------------------------------|--------|
+| running an installed plugin (`kubectl ctx`, `kubectl ns`) | works — plain `PATH` discovery, krew is not involved |
+| `kubectl krew list`, `search`, `version` | works — reads `receipts`, the local index, and prints the resolved `BasePath` |
+| `kubectl krew install <plugin>` | **fails** — the index `git fetch` hits `Permission denied` |
+
+So a shared krew gives every account the plugins root chose and gives no account a way to add
+one — the Homebrew problem again, with a smaller blast radius. The alternative is worse in the
+other direction: a per-account krew installed by a playbook means every account's plugin set is
+managed by a run of that playbook.
+
+Nothing replaces it, because nothing needs to. kubectl discovers plugins as `kubectl-*`
+executables on `PATH`, with no manager involved, so the three plugins the old README told users
+to install (`ctx`, `ns`, `node-shell`) can be plain binaries in `/usr/local/bin` named
+`kubectl-ctx`, `kubectl-ns` and `kubectl-node_shell` — installable once, usable by everyone. What
+is forfeited is `krew search` and `krew upgrade`. An account that wants krew for itself can run
+[krew's own installer](https://krew.sigs.k8s.io/docs/user-guide/setup/install/); the retirement
+does not stand in its way.
+
+As with every other retirement here, deleting the playbook uninstalls nothing: an account that
+ran it keeps its `~/.krew` tree, its installed plugins and the
+`ANSIBLE MANAGED BLOCK: krew` in `~/.bashrc`, and krew goes on working there. `localhost` has
+one such tree with all three plugins. Removing it is a per-host, per-account cleanup this repo
+no longer performs — see
+[MIGRATION3.md's follow-ups](MIGRATION3.md#known-follow-ups). The playbook is recoverable from
+git history (`git log --diff-filter=D -- container/krew.yml`).
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 42 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 41 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-24) | 24 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
 | [Effectively shared](#effectively-shared-4) | 4 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-8) | 8 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-6) | 6 | The whole install lands in one `$HOME` or one account |
+| [Personal only](#personal-only-5) | 5 | The whole install lands in one `$HOME` or one account |
 
 More than half the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
 counted, and the total drops back when the originals are retired. That has now happened
 twice, and both migrations are now finished: `tool/` after MIGRATION.md, and all thirteen of
-`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Seven playbooks went the other
+`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Eight playbooks went the other
 way and were deleted rather than migrated: all of `services/` except `samba.yml`, which moved
 to `core/` (see [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
 deleted once the migrations left it with no dependents (see
-[Retired: `core/homebrew.yml`](#retired-corehomebrewyml)); and `core/golang.yml` and
+[Retired: `core/homebrew.yml`](#retired-corehomebrewyml)); `core/golang.yml` and
 `core/rust.yml`, which were out of scope for a workstation that runs AI coding agents (see
-[Retired: `core/golang.yml` and `core/rust.yml`](#retired-coregolangyml-and-corerustyml)).
+[Retired: `core/golang.yml` and `core/rust.yml`](#retired-coregolangyml-and-corerustyml)); and
+`container/krew.yml`, the first casualty of [MIGRATION3.md](MIGRATION3.md), dropped because a
+plugin manager with a shared root can be read by every account and written by none (see
+[Retired: `container/krew.yml`](#retired-containerkrewyml)).
 
-The 15 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 14 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
@@ -224,16 +267,17 @@ fixed, since a toolchain nobody here compiles with is not worth un-mixing.
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
 | `core/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
-### Personal only (6)
+### Personal only (5)
 
 Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
-meant to end up. The other three are still mixed in with the shared trees. Three more left the
+meant to end up. The other two are still mixed in with the shared trees. Four more left the
 category without being fixed: `core/homebrew.yml` was [retired](#retired-corehomebrewyml) — it
 had been the root cause of four other entries here, `cloud-cli/{gcx,influx,jira,vault}-cli.yml`,
 all `brew install` as `lookup('env', 'USER')`, until wave 3 of MIGRATION2.md moved those to
 root-owned paths — `core/rust.yml` was
-[retired with `core/golang.yml`](#retired-coregolangyml-and-corerustyml) as out of scope, and
-`core/ssh-key-setup.yml` became
+[retired with `core/golang.yml`](#retired-coregolangyml-and-corerustyml) as out of scope,
+`container/krew.yml` was [retired](#retired-containerkrewyml) as per-user by design rather than
+by defect, and `core/ssh-key-setup.yml` became
 [`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every task was a
 `chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible.
 
@@ -242,11 +286,10 @@ root-owned paths — `core/rust.yml` was
 | `_personal/ai-agent/claude-code.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
 | `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
 | `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
-| `container/krew.yml` | `~/.krew` prefix plus `~/.bashrc` PATH |
 | `core/x11vnc.yml` | `/home/$USER/.vnc`, user systemd unit, `~/.bashrc` |
 | `core/agent-base.yml` | `~/.xprofile`, `~/.xsessionrc`, three `~/.bashrc` blocks |
 
-The three still in the shared trees are per-identity by **defect** — each binds its work to
+The two still in the shared trees are per-identity by **defect** — each binds its work to
 whoever happens to run it. The fix for that shape is the one MIGRATION.md already names: an
 explicit user list instead of `$USER`, not a move to `/usr/local`. The three in `_personal/`
 are per-identity **by nature** and need no fix.

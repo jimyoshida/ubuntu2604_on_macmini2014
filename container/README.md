@@ -101,15 +101,16 @@ Runs a local Kubernetes cluster using Docker as the driver. Includes bash comple
 
 **Prerequisites:** Docker must be installed and the user added to the `docker` group (run `docker.yml` first).
 
-## krew.yml
+## Retired: krew.yml
 
-Install Krew (kubectl plugin manager)
+`krew.yml` installed Krew, the kubectl plugin manager, into the invoker's `~/.krew` and put
+`$HOME/.krew/bin` on that account's `PATH`. It was retired on 2026-08-14 rather than migrated to
+`_multi-user/` — see [Retired: `container/krew.yml`](../README.md#retired-containerkrewyml) in
+the root README for why, and [MIGRATION3.md](../MIGRATION3.md#scope) for its place in the
+migration plan.
 
-```bash
-ansible-playbook container/krew.yml
-```
-
-After installation, install common plugins:
-```bash
-kubectl krew install ctx ns node-shell
-```
+kubectl finds plugins on `PATH` without any manager, so the three plugins this section used to
+recommend can be installed as plain binaries named `kubectl-ctx`, `kubectl-ns` and
+`kubectl-node_shell` in `/usr/local/bin`. An account that wants krew itself can still run
+[krew's own installer](https://krew.sigs.k8s.io/docs/user-guide/setup/install/); nothing here
+prevents it. Existing `~/.krew` trees are untouched by the retirement and keep working.

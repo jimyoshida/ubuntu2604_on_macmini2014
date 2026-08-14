@@ -3,9 +3,14 @@
 Policy and procedure for migrating the container and Kubernetes playbooks from `container/` to
 `_multi-user/container/`.
 
-**Status: planned.** 0 of 8 source playbooks migrated. No playbook has been written yet; the
-decisions in [Notes on the four that need a decision](#notes-on-the-four-that-need-a-decision)
+**Status: planned.** 0 of 7 source playbooks migrated. No playbook has been written yet; the
+decisions in [Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision)
 come first. See [Migration status](#migration-status).
+
+`container/krew.yml` was the eighth. It is not in this plan: it was
+[retired](README.md#retired-containerkrewyml) on 2026-08-14 rather than migrated, because krew
+is per-user by design and a shared root is the shape this repo spent two migrations removing.
+See [Scope](#scope).
 
 This document is the third in the series. [MIGRATION.md](MIGRATION.md) covered `tool/` →
 `_multi-user/tools/` and [MIGRATION2.md](MIGRATION2.md) covered `cloud-cli/` →
@@ -20,9 +25,11 @@ order](MIGRATION.md#install-mechanism-decision-order), and MIGRATION2's five
 ## Background
 
 `container/` is the last of the three tool-installing directories in the legacy tree, and it is
-the one where the multi-user question is least about *reach*. Six of its eight playbooks already
-put the binary somewhere every account can execute it — apt packages and `/usr/local/bin`. What
-they get wrong is everything around the binary.
+the one where the multi-user question is least about *reach*. Six of its seven playbooks already
+put the binary somewhere every account can execute it — apt packages and `/usr/local/bin` — and
+the seventh (`devcontainers.yml`) installs into a root-owned npm prefix. What they get wrong is
+everything around the binary. The one playbook whose reach was genuinely the problem, `krew.yml`,
+is [retired](README.md#retired-containerkrewyml) rather than migrated.
 
 MIGRATION.md's three causes and MIGRATION2's two recur, and three more are new:
 
@@ -31,12 +38,15 @@ MIGRATION.md's three causes and MIGRATION2's two recur, and three more are new:
 2. **Per-user shell profiles.** The dominant cause here. Four playbooks
    (`kubectl`, `helm`, `kind`, `minikube`) write a `blockinfile` to
    `/home/{{ <tool>_user }}/.bashrc`, and two more (`docker`, `podman`) `lineinfile` an
-   `xhost` call into `~/.bashrc`. Six of eight, more than either previous directory.
-3. **Per-user install prefixes.** `krew.yml` installs into `~/.krew` and prepends
-   `$HOME/.krew/bin` to `PATH`. This is krew's designed shape, not a defect in the playbook —
-   see [#7's note](#notes-on-the-four-that-need-a-decision).
-4. **Install-time `lookup('env', ...)` baked into shared state** (MIGRATION2 cause 4). Seven of
-   eight playbooks open with `<tool>_user: "{{ lookup('env', 'USER') }}"`. Nothing renders it
+   `xhost` call into `~/.bashrc`. Six of seven, more than either previous directory.
+3. **Per-user install prefixes.** No longer applies. `krew.yml` was the only case — installed
+   into `~/.krew`, with `$HOME/.krew/bin` prepended to `PATH` — and that is krew's designed
+   shape rather than a defect in the playbook, which is why it was
+   [retired](README.md#retired-containerkrewyml) instead of migrated. The one prefix still worth
+   care is npm's, which `devcontainers.yml` inherits from the system Node: read it at run time,
+   never assume it (MIGRATION.md's `markdownlint` finding).
+4. **Install-time `lookup('env', ...)` baked into shared state** (MIGRATION2 cause 4). Six of
+   seven playbooks open with `<tool>_user: "{{ lookup('env', 'USER') }}"`. Nothing renders it
    into a *shared* file the way `jenkins-cli.yml` did, but every one of them decides whose home
    directory and whose account gets the work from the invoker's environment.
 5. **Secrets** (MIGRATION2 cause 5). Does not apply. Nothing here has a token; a kubeconfig is
@@ -50,10 +60,10 @@ MIGRATION.md's three causes and MIGRATION2's two recur, and three more are new:
    [B1](#policy-amendments).
 7. **NEW — per-user runtime state the tool creates for itself.** `~/.kube/config`,
    `~/.minikube/` (a whole cluster profile, with certificates and a multi-gigabyte kicbase
-   image), `~/.docker/`, `~/.krew/`. Unlike a credential file, this state appears the first
-   time an account *uses* the tool, and it is correct that it is per-user. The rule that
-   follows is a prohibition, not a task: a migrated playbook must not pre-create it, must not
-   share it, and must not write one account's copy on behalf of another. `minikube.yml` task 6
+   image), `~/.docker/`. Unlike a credential file, this state appears the first time an account
+   *uses* the tool, and it is correct that it is per-user. The rule that follows is a
+   prohibition, not a task: a migrated playbook must not pre-create it, must not share it, and
+   must not write one account's copy on behalf of another. `minikube.yml` task 6
    (`minikube config set driver docker`, `become: no`) breaks this — see
    [B2](#policy-amendments).
 8. **NEW — a security-relevant side effect hidden in a shell profile.** `docker.yml` task 6 and
@@ -69,14 +79,14 @@ on `stat.exists` (policy point 6 — a version bump silently no-ops, which is wh
 runs kind 0.27.0 from a playbook that could have been re-run any time). `kubectl.yml`,
 `helm.yml`, `docker.yml` and `podman.yml` pin nothing at all. `devcontainers.yml` installs
 `@latest` and then guards on `which devcontainer`, so it installs the newest version once and
-never again. `krew.yml` downloads `releases/latest`. Not one of the eight pins a version, and
-five of eight cannot upgrade what they installed.
+never again. Not one of the seven pins a version, and four of seven cannot upgrade what they
+installed — the three guarded ones plus `kubectl.yml`, whose apt stream is EOL.
 
 ## Scope
 
 | | |
 | --- | --- |
-| Source | `container/*.yml` (8 playbooks) + `container/README.md` |
+| Source | `container/*.yml` (7 playbooks) + `container/README.md` |
 | Target | `_multi-user/container/*.yml` |
 | Applies to | New multi-user workstation builds |
 | Control node | Ubuntu 24.04 (ansible-core **2.16**) **or** Ubuntu 26.04 (ansible-core 2.20) |
@@ -92,6 +102,14 @@ leading underscore on `_multi-user/` still means staging.
 
 **Out of scope:**
 
+- **krew.** `container/krew.yml` is [retired](README.md#retired-containerkrewyml) (2026-08-14),
+  not migrated, and there will be no `_multi-user/container/krew.yml`. A plugin manager whose
+  root is writable by exactly one account is the Homebrew shape again: a shared
+  `KREW_ROOT=/usr/local/krew` lets every account *run* the plugins root installed and lets none
+  of them add one. kubectl finds plugins on `PATH` with no manager involved, so the three
+  plugins the README recommended (`ctx`, `ns`, `node-shell`) can be plain binaries in
+  `/usr/local/bin` if they are wanted back — see the retirement note for the full argument and
+  for what the shared-root rehearsal established.
 - `core/` and `gui-tools/` — what remains of the legacy tree after this migration. `core/` is a
   harder problem than any of the three tool directories (`agent-base.yml` and `x11vnc.yml` are
   desktop-session and VNC setup, which is per-identity in a way no relocation fixes), and
@@ -143,9 +161,9 @@ Three corollaries:
 A3 moved per-identity *setup commands* into the README. B2 extends it to per-account *runtime*
 state, which is broader: no task in a migrated playbook may write, pre-create, or chown anything
 under any account's `$HOME`, including the invoker's — not `~/.kube`, not `~/.minikube`, not
-`~/.docker`, not `~/.krew`. `minikube config set driver docker` is the case in hand: it writes
-`~/.minikube/config/config.json` for whoever ran the playbook and nobody else, so the "default
-driver" it sets is a default for exactly one account.
+`~/.docker`. `minikube config set driver docker` is the case in hand: it writes
+`~/.minikube/config/config.json` for whoever ran the playbook and nobody else, so the
+"default driver" it sets is a default for exactly one account.
 
 Where a site-wide default genuinely is wanted, express it as A1 shared config in
 `/etc/profile.d/<tool>.sh` — **and only after confirming the tool reads it**, by MIGRATION2's
@@ -185,7 +203,7 @@ preference order:
 2. **A subcommand that inspects the install itself.** `docker context ls` and
    `docker buildx version` (proves the CLI plugins in `/usr/libexec/docker/cli-plugins` are
    discoverable by a non-root account, which is the actual multi-user question for Docker),
-   `kubectl krew list` against the shared root, `devcontainer --help`.
+   `devcontainer --help`.
 3. **`--version` alone.** `kind`, `minikube`, `podman`. Weakest, and it is what is available:
    nearly every other `kind`/`minikube` subcommand reaches for a container runtime.
 
@@ -220,7 +238,7 @@ ansible -m shell -a 'apt-cache policy <package>; apt-cache madison <package>' <h
 
 Where the collision is real, an unpinned `apt: name=<pkg> state=present` is not merely
 unpinned — it installs from a different vendor than the repository the playbook just configured,
-and reports success. See [#3's note](#notes-on-the-four-that-need-a-decision).
+and reports success. See [#3's note](#notes-on-the-three-that-need-a-decision).
 
 The `xhost` question belongs here too, as the one input this plan has deliberately not resolved:
 **establish what `xhost +local:docker` grants before deciding what replaces it.** The `local`
@@ -246,7 +264,6 @@ wrong.
 | `helm` | `~/.config/helm`, `~/.cache/helm`, repo list | — | `/etc/bash_completion.d/helm` |
 | `kind` | `~/.kube/config` (kind merges its context in) | needs `docker` group to do anything | `/etc/bash_completion.d/kind` |
 | `minikube` | `~/.minikube/` — certs, profiles, kicbase image | needs `docker` group to do anything | `/etc/bash_completion.d/minikube`; `MINIKUBE_DRIVER` **if** verified per B2 |
-| `krew` | `~/.krew` today; see [#8](#notes-on-the-four-that-need-a-decision) | — | `/etc/profile.d/krew.sh` — both `KREW_ROOT` and `PATH`, neither optional |
 | `devcontainer` | none | — | npm global prefix, read at run time |
 
 Two rows worth stating explicitly because they change what "multi-user" can mean:
@@ -275,9 +292,8 @@ order](MIGRATION.md#install-mechanism-decision-order).
 | 5 | `helm.yml` | vendor apt repo, unpinned | (2) unchanged — `packages.buildkite.com` | A5 cleanup, keeping the fingerprint assertion (`github-cli.yml`'s task 5/6 pattern is a direct fit); **pin — which lands Helm 4, see note**; completion to `/etc`; `helm template` smoke test |
 | 6 | `kind.yml` | release binary, `stat.exists` guard | (3) unchanged | checksum from `kind-linux-<arch>.sha256sum`; arch from facts; version-aware guard; 0.27.0 → 0.32.0; completion to `/etc` |
 | 7 | `minikube.yml` | release binary, `stat.exists` guard | (3) unchanged | as #6, plus drop `minikube config set driver docker` per B2 and decide on `MINIKUBE_DRIVER`; 1.35.0 → 1.38.1 |
-| 8 | `krew.yml` | `curl \| sh` into `~/.krew` | (3)/(4) — shared `KREW_ROOT`, see note | the one genuine reach problem here; also the only playbook whose *shape* is in question |
 
-### Notes on the four that need a decision
+### Notes on the three that need a decision
 
 **`kubectl.yml` (#4) — the package collision, and the reason B5 exists.** Verified on
 `localhost` on 2026-08-11:
@@ -343,69 +359,6 @@ host at all. Recommend **4.2.3-1**, stated explicitly in the README and the comm
 for anyone with Helm 3 charts. Helm 4 keeps the same vendor repository and package name, so the
 fallback costs nothing to support.
 
-**`krew.yml` (#8) — a per-user tool by design, not by defect.** krew's `KREW_ROOT` defaults to
-`~/.krew`, and `kubectl krew install` writes into `$KREW_ROOT/store` with `$KREW_ROOT/bin` on
-`PATH`. A root-owned shared root is possible (`KREW_ROOT=/usr/local/krew`) and every account can
-then *run* the installed plugins, but no unprivileged account can add one — which is the same
-shape as the Homebrew problem this repo spent two migrations removing.
-
-Shared installation is supported upstream, not a workaround: krew's own [Advanced
-Configuration](https://krew.sigs.k8s.io/docs/user-guide/advanced-configuration/) page documents
-`KREW_ROOT` for exactly this and uses `/usr/local/krew` as its example. It was rehearsed on
-2026-08-11 against krew v0.5.0 with a scratch root, made read-only to stand in for a root-owned
-tree, and the behaviour is as [B4](#policy-amendments) needs it:
-
-| Action from a non-writable root | Result |
-| --- | --- |
-| `kubectl ctx`, `kubectl ns` (running a plugin) | works — plain `PATH` discovery, no krew involved |
-| `kubectl krew list` | works — reads `$KREW_ROOT/receipts` |
-| `kubectl krew search` | works — reads the local index, does not force a refresh |
-| `kubectl krew version` | works — and prints the resolved `BasePath`, which is what the smoke test should assert |
-| `kubectl krew install <plugin>` | **fails, rc 1** — the index `git fetch` hits `Permission denied` before anything is written |
-| anything, with a scratch `HOME` | **writes nothing to `$HOME`** |
-
-Four mechanics that follow from that rehearsal and belong in the playbook:
-
-- **`$KREW_ROOT/bin` holds absolute symlinks** into `$KREW_ROOT/store/<plugin>/<version>/`. The
-  tree is therefore not relocatable: install with `KREW_ROOT` already set to the final path,
-  never build it under `/var/tmp` and move it.
-- **`KREW_ROOT` must be exported for every account, not just `PATH`.** Plugin *execution* needs
-  only `PATH`, but every `kubectl krew` subcommand resolves its root from `KREW_ROOT` and falls
-  back to `$HOME/.krew`. So `/etc/profile.d/krew.sh` sets both.
-- **Getting that wrong is not merely inert.** With `KREW_ROOT` unset, `kubectl krew list`
-  creates an empty `~/.krew/{bin,index,receipts,store}` skeleton in the caller's home and *then*
-  fails with "krew local plugin index is not initialized". Every account that types
-  `kubectl krew` once would acquire a stray directory — which is also the mechanism behind the
-  `~/.krew` follow-up below.
-- **Size and mode.** A root with the three plugins is ~23 MB, of which ~9 MB is the krew-index
-  git clone. `u=rwX,go=rX` throughout per policy point 4; the index is a git working tree, so
-  check that `git` does not object to a world-readable clone owned by another user
-  (`safe.directory` affects `git` run *by* another user, and krew shells out to `git` only on
-  refresh — a root-only path — but confirm it at write time rather than assume).
-
-Three options:
-
-- (a) **Recommended.** Shared root at `/usr/local/krew`, installed and updated as root, with the
-  plugin set as a play var (`krew_plugins: [ctx, ns, node-shell]` — the three the current README
-  tells users to install by hand) so the curated set is version-controlled rather than folklore.
-  `KREW_ROOT` and `PATH` via `/etc/profile.d/krew.sh`, install tree at `u=rwX,go=rX` per policy
-  point 4, smoke test `kubectl krew list` and `kubectl krew version` as uid 65534 against the
-  shared root. The README documents the escape hatch: an account wanting its own plugin set
-  exports `KREW_ROOT=$HOME/.krew` in its own `~/.bashrc` — which runs after `/etc/profile.d`,
-  so it wins — and runs krew's installer for itself.
-- (b) Move it to `_personal/container/krew.yml` with an explicit `target_users` list, the same
-  treatment `_personal/ai-agent/` gets. Honest about what krew is, but it means every account's
-  plugins are managed by a playbook run, and it puts a *tool* in the tree reserved for
-  identities.
-- (c) Drop krew and install the three plugins as plain binaries in `/usr/local/bin`
-  (`kubectl-ctx`, `kubectl-ns`, `kubectl-node_shell` are exactly what kubectl's plugin
-  discovery looks for — no plugin manager is required to have plugins). Fewest moving parts,
-  and it forfeits `krew search`/`krew upgrade` entirely.
-
-(a) and (c) are both defensible; (a) is recommended because it keeps the tool the README already
-documents. Note that whichever is chosen, the `~/.krew` trees already on provisioned hosts stay
-(this host has one, with all three plugins) — see [Known follow-ups](#known-follow-ups).
-
 **`docker.yml` (#3) — the default that will look like a regression.** Covered by
 [B1](#policy-amendments); it is listed here because it is the single change in this migration
 most likely to be reverted by someone who does not know why it is there. State it three times —
@@ -427,12 +380,13 @@ both.
 
 Four waves, each ending in a commit and a status-table update:
 
-1. **Decisions first (no playbooks).** The kubectl collision (#4), krew's shape (#8), the Helm
-   3→4 pin (#5), and the `xhost` question (B5). MIGRATION2's wave 1 tried this and only managed
-   one of three up front; the reason it cost nothing was that both late decisions resolved
-   *towards doing less*. Two of these four do not have that property — the kubectl choice and
-   the krew choice each add a file (a preferences pin, a shared root) and are referenced by the
-   playbooks that follow — so settle them before writing, not during.
+1. **Decisions first (no playbooks).** The kubectl collision (#4), the Helm 3→4 pin (#5), and
+   the `xhost` question (B5). A fourth decision — krew's shape — was settled ahead of this plan
+   by [retiring it](README.md#retired-containerkrewyml). MIGRATION2's wave 1 tried this and only
+   managed one of three up front; the reason it cost nothing was that both late decisions
+   resolved *towards doing less*. One of these three does not have that property — the kubectl
+   choice adds a file (a preferences pin) that the playbooks after it reference — so settle it
+   before writing, not during.
 2. **The two that are almost right — #1, #2.** `devcontainers.yml` and `podman.yml` are apt and
    npm, no vendor repository, no root-equivalent grant. Pure correctness work: pins,
    version-aware guards, unprivileged verification. They establish the house style for this
@@ -441,10 +395,10 @@ Four waves, each ending in a commit and a status-table update:
    written against a host where the daemon exists, and B1's grant default is easier to reason
    about before the tools that depend on it. Then `kubectl.yml` (which needs wave 1's collision
    decision) and `helm.yml` (which needs the version decision).
-4. **The cluster tools and the plugin manager — #6, #7, #8.** `kind` and `minikube` are
-   independent of each other and both depend on #3 only for their documented prerequisite, not
-   for their install. `krew` goes last: it depends on wave 1's shape decision and on `kubectl`
-   being the one this repo installs.
+4. **The cluster tools — #6, #7.** `kind` and `minikube` are independent of each other and both
+   depend on #3 only for their documented prerequisite, not for their install. They go last
+   because their smoke tests are the weakest in the directory (`--version` alone, per B4), so
+   nothing else should be waiting on them.
 
 ## Procedure
 
@@ -459,9 +413,10 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
   already configured. A5's "does another playbook add this repository" is not the same question
   as "does another repository publish this package", and only the second one would have caught
   `kubectl`.
-- **In step 10 (run it),** run it twice. The second run must report `changed=0`. Five of the
-  eight source playbooks cannot upgrade what they installed and the sixth re-downloads its
-  keyring every run; both defects are invisible in a first run and obvious in a second. Then
+- **In step 10 (run it),** run it twice. The second run must report `changed=0`. Four of the
+  seven source playbooks cannot upgrade what they installed and a fifth (`docker.yml`)
+  re-downloads its keyring every run; both defects are invisible in a first run and obvious in
+  a second. Then
   bump the pin with `-e` and confirm the version actually moves — that is the direct test of
   policy point 6, and it is what the `stat.exists` guards fail.
 
@@ -476,7 +431,7 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 | `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | TBD | Not started |
 | `kind.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
 | `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
-| `krew.yml` | `curl \| sh` → `~/.krew` | decision (a)/(b)/(c) — see note | TBD | Not started |
+| `krew.yml` | `curl \| sh` → `~/.krew` | — | — | [Retired](README.md#retired-containerkrewyml) 2026-08-14, not migrated |
 
 The `Pinned` column stays `TBD` until each playbook is written. This is deliberate and is the
 same call MIGRATION2 made: MIGRATION.md's step 3 requires checking upstream at write time, and
@@ -484,8 +439,10 @@ the [survey below](#upstream-survey-2026-08-11) is stale the day after it was ta
 
 **Effect on the repo's classification when this is done.** The [multi-user support
 status](README.md#multi-user-support-status) table currently counts `container/` as six of the
-eight *mixed* rows (`docker`, `podman`, `kubectl`, `helm`, `kind`, `minikube`), one of the six
-*personal only* rows (`krew`), and one of the four *effectively shared* rows (`devcontainers`).
+eight *mixed* rows (`docker`, `podman`, `kubectl`, `helm`, `kind`, `minikube`) and one of the
+four *effectively shared* rows (`devcontainers`) — its seven playbooks, in full. The eighth,
+`krew.yml`, was one of the *personal only* rows until it was retired, which already took that
+category from six to five.
 Completing this migration empties three quarters of the mixed category and leaves it as
 `core/mise.yml` and `core/samba.yml` alone — which is the point at which "the legacy tree" means
 `core/` plus one VS Code playbook, and the underscore on `_multi-user/` starts to look like it
@@ -501,12 +458,11 @@ fresh `ws01`/`ws02` sees.
 
 | Tool | Finding |
 | --- | --- |
-| `kubectl` | `pkgs.k8s.io/core:/stable:/v1.36` carries `1.36.3-1.1` (`dl.k8s.io/release/stable.txt` → `v1.36.3`). Colliding Google package `1:579.0.0-0`; see [#4's note](#notes-on-the-four-that-need-a-decision). `dl.k8s.io/release/v1.36.3/bin/linux/amd64/kubectl` returns 200 with a `.sha256` sibling, if (b) is ever chosen. |
+| `kubectl` | `pkgs.k8s.io/core:/stable:/v1.36` carries `1.36.3-1.1` (`dl.k8s.io/release/stable.txt` → `v1.36.3`). Colliding Google package `1:579.0.0-0`; see [#4's note](#notes-on-the-three-that-need-a-decision). `dl.k8s.io/release/v1.36.3/bin/linux/amd64/kubectl` returns 200 with a `.sha256` sibling, if (b) is ever chosen. |
 | `helm` | Vendor repo candidate `4.2.3-1`; 3.x line still published, latest `3.21.3-1`. No Ubuntu archive candidate at all (`apt-cache policy helm` is empty on resolute), so the vendor repo stays. |
 | `kind` | `v0.32.0` (installed here: 0.27.0). Assets `kind-linux-{amd64,arm64}` each with a per-asset `.sha256sum` — one file per asset, not a combined `checksums.txt`. |
 | `minikube` | `v1.38.1`. Assets `minikube-linux-<arch>` + `.sha256`, and also `minikube_1.38.1-0_<arch>.deb`. The `.deb` is tempting and rejected: there is no repository behind it, so it is a `dpkg -i` with no upgrade path, and the raw binary keeps `kind.yml` and `minikube.yml` the same shape. |
 | `minikube` env | `cmd/minikube/cmd/root.go` calls `viper.SetEnvPrefix(...)` + `viper.AutomaticEnv()`, and its own comment states "viper maps `$MINIKUBE_ROOTLESS` to `rootless` property automatically" — so `MINIKUBE_DRIVER` → `driver` is very likely real. **Still verify against the installed binary** per B2 before writing it to `/etc/profile.d`; MIGRATION2 was wrong three times out of eight on exactly this kind of inference. |
-| `krew` | `v0.5.0`. Assets `krew-linux_<arch>.tar.gz` each with a `.tar.gz.sha256` sibling. `releases/latest` (what the source playbook uses) resolves to it. A shared root was rehearsed at this version — see the [table in #8's note](#notes-on-the-four-that-need-a-decision) for what does and does not work read-only. |
 | `docker` | `download.docker.com/linux/ubuntu resolute/stable` publishes for this release directly — no codename map needed, unlike Microsoft's and HashiCorp's repos. Installed `5:29.5.0-1~ubuntu.26.04~resolute`, candidate `5:29.7.2-1~ubuntu.26.04~resolute`. Note the pin string embeds the release codename, so it is not portable across Ubuntu versions the way `2.97.0` is. |
 | `podman` | Ubuntu `resolute` carries `5.7.0+ds2-3build1` and `podman-compose 1.5.0-2`; both are current enough that apt stays. Installed here already. |
 | `devcontainers` | npm `@devcontainers/cli` latest `0.88.0`; installed here `0.87.0` — the `which devcontainer` guard is why it never moved. npm global prefix on this host is `/usr` (NodeSource), which is the same split MIGRATION.md's `markdownlint` finding describes: read it at run time, never assume. |
@@ -523,11 +479,13 @@ fresh `ws01`/`ws02` sees.
   decision this plan leaves open. It is the *opposite* of B2 (a playbook writing into an
   account's `$HOME`), which is the argument against; the argument for is that the repo wrote
   them and nothing else will ever take them out. Same class as the Homebrew per-user cleanup
-  that MIGRATION2 documented and did not perform.
-- **`~/.krew` trees on provisioned hosts.** Independent of which krew option is chosen: an
-  existing `~/.krew/bin` on `PATH` shadows a shared root for that account, exactly as
-  `brew shellenv` shadowed `/usr/local/bin`. `localhost` has one with `ctx`, `ns` and
-  `node-shell` installed. Per-host, per-account cleanup.
+  that MIGRATION2 documented and did not perform. The `krew` marker has no successor playbook
+  at all now, so for that one the choice is by hand or not at all.
+- **`~/.krew` trees left by the retired playbook.** Retiring `krew.yml` uninstalls nothing: an
+  account that ran it keeps its `~/.krew` tree, its plugins and the `PATH` entry that finds
+  them, so krew goes on working there and goes on being invisible to every other account.
+  `localhost` has one with `ctx`, `ns` and `node-shell` installed. Per-host, per-account
+  cleanup, the same class as the Homebrew and Go/Rust leftovers.
 - **`docker` group memberships already granted.** B1's empty default does not revoke anything —
   `append: true`, by design. `localhost` has one account in the group today. If a host's
   membership list should be audited rather than merely added to, that is a separate playbook
@@ -539,7 +497,7 @@ fresh `ws01`/`ws02` sees.
   generates when no `filename:` is given), and `container/kubectl.yml` writes `kubernetes.list`
   for a stream that is EOL. B5 adds the package-name dimension to that cleanup.
 - **Bare `ansible_architecture` is deprecated** — carried from
-  [MIGRATION2](MIGRATION2.md#known-follow-ups). All eight playbooks here are to be written with
+  [MIGRATION2](MIGRATION2.md#known-follow-ups). All seven playbooks here are to be written with
   `ansible_facts['architecture']` from the start, so the outstanding repo-wide pass still has
   only `_multi-user/cloud-cli/aws-cli.yml` and the `_multi-user/tools/` playbooks to touch.
 - **Retiring `container/`.** The gate is the same one `tool/` and `cloud-cli/` passed: every
