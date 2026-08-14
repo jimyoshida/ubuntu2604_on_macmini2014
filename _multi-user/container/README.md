@@ -281,6 +281,61 @@ the completion moved out of one account's `~/.bashrc` into `/etc/bash_completion
 verification is real offline work — as uid 65534 it lints and renders a small chart the
 playbook writes, rather than running `helm version` as the connecting account.
 
+## kind.yml
+
+Installs the `kind` release binary.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/kind` | the binary, root-owned, mode 0755 |
+| `/etc/bash_completion.d/kind` | shared completion, generated from the binary |
+
+**What changed versus `container/kind.yml`.** The install guard compares the *reported
+version* instead of asking whether the file exists — which is not a theoretical improvement:
+the old guard left this host on kind 0.27.0 through five upstream releases, because once the
+binary existed the playbook never replaced it. The download is now verified against the
+published `kind-linux-<arch>.sha256sum`, the architecture comes from facts, and the
+completion moved out of one account's `~/.bashrc` into `/etc/bash_completion.d`.
+
+```bash
+ansible-playbook container/kind.yml -e host=ws01 -e kind_version=0.32.0
+```
+
+## minikube.yml
+
+Installs the `minikube` release binary.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/minikube` | the binary, root-owned, mode 0755 |
+| `/etc/bash_completion.d/minikube` | shared completion, generated from the binary |
+
+**What changed versus `container/minikube.yml`.** Same three fixes as `kind.yml` (version-aware
+guard, checksum verification, architecture from facts, completion to `/etc`), plus one
+removal: `minikube config set driver docker` is **gone**. It ran with `become: no` and wrote
+`~/.minikube/config/config.json` for whoever happened to run the playbook, so the "default
+driver" it set was a default for exactly one account.
+
+**No driver default is set system-wide, and that is a decision.** `MINIKUBE_DRIVER` was tested
+and minikube really does read it — but minikube already auto-selects the docker driver when
+Docker is present, so a shared `MINIKUBE_DRIVER=docker` would be a no-op for every account that
+can use Docker, and actively wrong for every account that cannot: it would push them at the one
+driver they have no access to, instead of letting minikube offer podman. Each account sets its
+own, once:
+
+```bash
+minikube config set driver docker    # or podman
+```
+
+**minikube is expensive per account.** Every account that runs `minikube start` gets its own
+`~/.minikube` with its own certificates and its own copy of the kicbase image — gigabytes each,
+with no shared mode. On a workstation with several agent accounts, budget for it. `minikube
+delete` reclaims it.
+
+```bash
+ansible-playbook container/minikube.yml -e host=ws01 -e minikube_version=1.38.1
+```
+
 ## Status
 
 | Playbook | Successor to | Pinned | Status |
@@ -290,16 +345,22 @@ playbook writes, rather than running `helm version` as the connecting account.
 | `docker.yml` | `container/docker.yml` | docker-ce 5:29.7.2-1~ubuntu.26.04~resolute, containerd.io 2.3.3, buildx 0.36.1, compose 5.4.0 | Verified (localhost) |
 | `kubectl.yml` | `container/kubectl.yml` | 1.36.3-1.1 | Verified (localhost) |
 | `helm.yml` | `container/helm.yml` | 4.2.3-1 | Verified (localhost) |
+| `kind.yml` | `container/kind.yml` | 0.32.0 (was 0.27.0) | Verified (localhost) |
+| `minikube.yml` | `container/minikube.yml` | 1.38.1 | Verified (localhost) |
 
-The remaining two (`kind`, `minikube`) are not yet written; see
-[MIGRATION3.md](../../MIGRATION3.md#migration-status). `container/krew.yml` is
-[retired](../../README.md#retired-containerkrewyml) rather than migrated, so there will be
-no `krew.yml` here.
+All seven are migrated. `container/krew.yml` is
+[retired](../../README.md#retired-containerkrewyml) rather than migrated, so there is no
+`krew.yml` here. `container/` itself stays in place until its successors are verified against
+a real remote host — see [MIGRATION3.md](../../MIGRATION3.md#known-follow-ups).
 
-**`kind` and `minikube` will only be as multi-user as the `docker` group is.** Both drive
-Docker, so a perfectly migrated playbook installs a binary every account can execute and that
-no account outside `docker_users` can use for anything. That is the honest state of those
-tools, not a defect in the migration.
+**`kind` and `minikube` are only as multi-user as the `docker` group is.** Both drive Docker,
+so each installs a binary every account can execute and that no account outside `docker_users`
+can use for anything. That is the honest state of those tools, not a defect in the migration.
+
+"Verified (localhost)" carries the same two caveats as everything else in `_multi-user/`: the
+runs were made under ansible-core 2.20 with `ansible_connection=local`, so they exercise
+neither the 24.04 control node nor the SSH path. `ws01`/`ws02` have never been provisioned by
+either generation.
 
 "Verified (localhost)" carries the same two caveats as everything else in `_multi-user/`:
 the runs were made under ansible-core 2.20 with `ansible_connection=local`, so they

@@ -1,0 +1,232 @@
+---
+# Install kind (Kubernetes in Docker) system-wide on a multi-user workstation.
+#
+#   /usr/local/bin/kind            root-owned, mode 0755
+#   /etc/bash_completion.d/kind    shared completion, generated from the binary
+#
+# kind ships as a single static binary, and the source playbook
+# (container/kind.yml) already installed it to this same root-owned path, so
+# the reach problem here is small. The defects were elsewhere:
+#
+#   - `stat.exists` as the install guard, so a version bump silently no-opped.
+#     That is not hypothetical: this host ran 0.27.0 from a playbook that could
+#     have been re-run at any time (MIGRATION.md policy point 6).
+#   - No checksum verification of the downloaded binary.
+#   - The architecture hardcoded as amd64.
+#   - The completion written into one account's ~/.bashrc as
+#     `source <(kind completion bash)`, which re-runs kind on every interactive
+#     shell start and exists for exactly one account (B3).
+#
+# HOW MULTI-USER THIS ACTUALLY IS. kind drives Docker, so it is only as
+# multi-user as the `docker` group is: this playbook installs a binary every
+# account can execute, and no account outside container/docker.yml's
+# docker_users can use it for anything. That is the honest state of the tool
+# rather than a defect in the migration, and the README says so too.
+#
+# Per-user state: kind merges its cluster context into ~/.kube/config when a
+# cluster is created. This playbook creates no cluster and touches no
+# kubeconfig (B2).
+#
+# Usage:
+#   ansible-playbook container/kind.yml -e host=<inventory host or group>
+#   ansible-playbook container/kind.yml -e host=ws01 -e kind_version=0.32.0
+
+- name: Install kind system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    kind_version: "0.32.0"
+    kind_bin: /usr/local/bin/kind
+    kind_release_url: "https://github.com/kubernetes-sigs/kind/releases/download/v{{ kind_version }}"
+    # ansible_facts['architecture'] -> upstream release asset suffix
+    kind_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    kind_arch: "{{ kind_arch_map.get(ansible_facts['architecture'], '') }}"
+    kind_smoke_dir: /var/tmp/kind-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    kind_verify_uid: 65534    # nobody
+    kind_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion is a hard prerequisite for B3's shared completion:
+      # /etc/bash_completion.d is only read because that package's
+      # /etc/profile.d/bash_completion.sh sources it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No kind release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to kind_arch_map.
+      when: kind_arch | length == 0
+
+    - name: 3. Check the currently installed kind version
+      ansible.builtin.command: "{{ kind_bin }} version"
+      register: kind_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether kind needs installing
+      # The reported version is compared, not the presence of the file. This is
+      # the specific defect the source playbook had: `stat.exists` meant the
+      # binary was downloaded once and every later version bump did nothing.
+      ansible.builtin.set_fact:
+        kind_install_needed: >-
+          {{ ('kind v' ~ kind_version ~ ' ') not in (kind_installed.stdout | default('')) }}
+
+    - name: 5. Fetch the published checksum for the linux/{{ kind_arch }} binary
+      # kind publishes one .sha256sum per asset rather than a combined
+      # checksums.txt, so there is nothing to search: the file holds the single
+      # line for this exact asset, in `<hash>  <filename>` form.
+      ansible.builtin.uri:
+        url: "{{ kind_release_url }}/kind-linux-{{ kind_arch }}.sha256sum"
+        return_content: true
+      register: kind_checksum
+      # Fetching a published checksum changes nothing, so let --check do it:
+      # a dry run then genuinely validates the version pin against upstream
+      # without downloading or installing (MIGRATION2's gitlab-cli finding).
+      check_mode: false
+      when: kind_install_needed | bool
+
+    - name: 6. Resolve the SHA-256 for the linux/{{ kind_arch }} binary
+      ansible.builtin.set_fact:
+        kind_sha256: "{{ kind_checksum.content | trim | regex_replace('\\s.*$', '') }}"
+      when: kind_install_needed | bool
+
+    - name: 6a. Fail if the published checksum is not a SHA-256
+      # Guards against a 404 page or a redirect being parsed as a hash, which
+      # would otherwise reach get_url as a checksum that simply never matches.
+      ansible.builtin.assert:
+        that: kind_sha256 is match('^[0-9a-f]{64}$')
+        fail_msg: >-
+          {{ kind_release_url }}/kind-linux-{{ kind_arch }}.sha256sum did not
+          yield a SHA-256 for kind {{ kind_version }}. Check that the version
+          exists upstream.
+      when: kind_install_needed | bool
+
+    - name: 7. Install the kind binary
+      ansible.builtin.get_url:
+        url: "{{ kind_release_url }}/kind-linux-{{ kind_arch }}"
+        dest: "{{ kind_bin }}"
+        checksum: "sha256:{{ kind_sha256 }}"
+        owner: root
+        group: root
+        mode: '0755'
+        force: true
+      when:
+        - kind_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 8. Verify the installed kind version
+      ansible.builtin.command: "{{ kind_bin }} version"
+      register: kind_version_out
+      changed_when: false
+      failed_when: ('kind v' ~ kind_version ~ ' ') not in kind_version_out.stdout
+      when: not ansible_check_mode
+
+    - name: 9. Generate the shared bash completion from the installed binary
+      ansible.builtin.command: "{{ kind_bin }} completion bash"
+      register: kind_completion
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: 10. Install the shared bash completion
+      ansible.builtin.copy:
+        content: "{{ kind_completion.stdout }}\n"
+        dest: /etc/bash_completion.d/kind
+        owner: root
+        group: root
+        mode: '0644'
+      when: not ansible_check_mode
+
+    - name: 11. Create a scratch HOME for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ kind_smoke_dir }}"
+        state: directory
+        owner: "{{ kind_verify_uid }}"
+        group: "{{ kind_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 12. Report the kind version as an unprivileged user
+      # B4 verification, level 3 -- `--version` alone, and it is what is
+      # available: every other kind subcommand reaches for a container runtime,
+      # and uid 65534 is deliberately not in the docker group. This proves an
+      # arbitrary account can execute the binary with no configuration of its
+      # own, which is the part that is about this playbook.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kind_verify_uid }} --regid={{ kind_verify_gid }} --clear-groups
+          env HOME={{ kind_smoke_dir }} {{ kind_bin }} version
+        chdir: "{{ kind_smoke_dir }}"
+      register: kind_smoke
+      changed_when: false
+      failed_when: ('kind v' ~ kind_version ~ ' ') not in kind_smoke.stdout
+      when: not ansible_check_mode
+
+    - name: 13. Confirm the shared completion is loaded by an unprivileged shell
+      # Proves B3 end to end rather than merely writing a file: a non-login
+      # interactive shell for an arbitrary uid must have the completion
+      # registered, which only happens if bash-completion reads
+      # /etc/bash_completion.d.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kind_verify_uid }} --regid={{ kind_verify_gid }} --clear-groups
+          env -i HOME={{ kind_smoke_dir }} TERM=xterm PS1=$
+          bash -ic 'complete -p kind >/dev/null 2>&1 && echo COMPLETION_OK'
+        chdir: "{{ kind_smoke_dir }}"
+      register: kind_smoke_completion
+      changed_when: false
+      failed_when: "'COMPLETION_OK' not in kind_smoke_completion.stdout"
+      when: not ansible_check_mode
+
+    - name: 14. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ kind_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 15. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               'kind ' ~ kind_version ~ ' (' ~ kind_arch ~ ') '
+               ~ (ansible_check_mode
+                  | ternary('would be installed system-wide.', 'installed system-wide.')),
+               '',
+               '  ' ~ kind_bin,
+               '  /etc/bash_completion.d/kind   shared, generated from the binary',
+               '',
+             ]
+             + (ansible_check_mode
+                | ternary(['Not verified: this was a --check run. The version pin WAS validated',
+                           'against the published checksum upstream.'],
+                          ['Verified: an unprivileged account (uid ' ~ kind_verify_uid
+                           ~ ') can execute the binary and gets the shared completion.']))
+             + ['',
+                'kind DRIVES DOCKER, so it is only as multi-user as the docker group is.',
+                'An account outside docker_users can run `kind version` and nothing else.',
+                'Grant access deliberately, per account:',
+                '  ansible-playbook container/docker.yml -e host=' ~ inventory_hostname
+                ~ ' -e docker_users=alice',
+                '',
+                'No cluster is created by this playbook. Each account runs, for itself:',
+                '  kind create cluster --name dev     # merges a context into ~/.kube/config',
+                '  kind get clusters',
+                '  kind delete cluster --name dev']
+          ) | join('\n') }}

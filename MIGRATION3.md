@@ -3,15 +3,18 @@
 Policy and procedure for migrating the container and Kubernetes playbooks from `container/` to
 `_multi-user/container/`.
 
-**Status: in progress. Waves 1, 2 and 3 are complete; 5 of 7 source playbooks migrated.** All
+**Status: all seven playbooks migrated and verified against `localhost`; `container/` not yet
+retired.** All
 three decisions [wave 1](#order-of-work) called for are settled — the kubectl package collision
 as (a), the Helm pin as 4.2.3-1, and the `xhost` question by deleting the line. Wave 2 migrated
 `devcontainers.yml` and `podman.yml`; wave 3 migrated `docker.yml`, `kubectl.yml` and
-`helm.yml`, including the apt preferences pin that resolves the kubectl collision. All five are
-verified against `localhost`. Wave 4 is `kind.yml` and `minikube.yml`. See
+`helm.yml`, including the apt preferences pin that resolves the kubectl collision; wave 4
+migrated `kind.yml` and `minikube.yml`. What remains is not a playbook but a gate:
+[retiring `container/`](#known-follow-ups), which this document deliberately does not treat as
+done on `localhost` runs alone. See
 [Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision),
-[Wave 2](#wave-2-devcontainers-podman), [Wave 3](#wave-3-docker-kubectl-helm) and
-[Migration status](#migration-status).
+[Wave 2](#wave-2-devcontainers-podman), [Wave 3](#wave-3-docker-kubectl-helm),
+[Wave 4](#wave-4-kind-minikube) and [Migration status](#migration-status).
 
 `container/krew.yml` was the eighth. It is not in this plan: it was
 [retired](README.md#retired-containerkrewyml) on 2026-08-14 rather than migrated, because krew
@@ -295,7 +298,7 @@ wrong.
 | `kubectl` | `~/.kube/config` | — | `/etc/bash_completion.d/kubectl`, `/etc/profile.d/kubectl.sh` (the `k` alias) |
 | `helm` | `~/.config/helm`, `~/.cache/helm`, repo list | — | `/etc/bash_completion.d/helm` |
 | `kind` | `~/.kube/config` (kind merges its context in) | needs `docker` group to do anything | `/etc/bash_completion.d/kind` |
-| `minikube` | `~/.minikube/` — certs, profiles, kicbase image | needs `docker` group to do anything | `/etc/bash_completion.d/minikube`; `MINIKUBE_DRIVER` **if** verified per B2 |
+| `minikube` | `~/.minikube/` — certs, profiles, kicbase image | needs `docker` group to do anything | `/etc/bash_completion.d/minikube` only — `MINIKUBE_DRIVER` verified as read, then [rejected](#wave-4-kind-minikube) |
 | `devcontainer` | none | — | npm global prefix, read at run time |
 
 Two rows worth stating explicitly because they change what "multi-user" can mean:
@@ -485,7 +488,7 @@ Four waves, each ending in a commit and a status-table update:
    written against a host where the daemon exists, and B1's grant default is easier to reason
    about before the tools that depend on it. Then `kubectl.yml` (which needs wave 1's collision
    decision) and `helm.yml` (which needs the version decision).
-4. **The cluster tools — #6, #7.** `kind` and `minikube` are independent of each other and both
+4. **The cluster tools — #6, #7. Done.** `kind` and `minikube` are independent of each other and both
    depend on #3 only for their documented prerequisite, not for their install. They go last
    because their smoke tests are the weakest in the directory (`--version` alone, per B4), so
    nothing else should be waiting on them.
@@ -519,8 +522,8 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 | `docker.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned; group by explicit list | docker-ce 5:29.7.2-1~ubuntu.26.04~resolute, containerd.io 2.3.3, buildx 0.36.1, compose 5.4.0 | Verified (localhost) |
 | `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | `pkgs.k8s.io` v1.36 + `/etc/apt/preferences.d/kubectl` — decision (a) | 1.36.3-1.1 | Verified (localhost) |
 | `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | 4.2.3-1 | Verified (localhost) |
-| `kind.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
-| `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
+| `kind.yml` | release binary, `stat.exists` | release binary + checksum + version guard | 0.32.0 (was 0.27.0) | Verified (localhost) |
+| `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | 1.38.1 | Verified (localhost) |
 | `krew.yml` | `curl \| sh` → `~/.krew` | — | — | [Retired](README.md#retired-containerkrewyml) 2026-08-14, not migrated |
 
 The `Pinned` column stays `TBD` until each playbook is written. This is deliberate and is the
@@ -661,6 +664,63 @@ which is B1's additive rule holding in practice rather than in principle.
 the alternatives to a root-equivalent grant, and an alternative that is documented but absent
 from the host is not much of one. Installing the package costs nothing and leaves the per-account
 `dockerd-rootless-setuptool.sh install` to each account, which is where B2 says it belongs.
+
+### Wave 4 (`kind`, `minikube`)
+
+Both verified against `localhost`, `failed=0`, re-running idempotently at `ok=12 changed=2` —
+the two `changed` being the scratch `HOME` created and removed. `--check` was exercised first on
+both and is unusually useful here: the checksum fetch carries `check_mode: false`, so a dry run
+validates the version pin against the published checksum upstream without downloading the
+binary. Post-run: `kind v0.32.0`, `minikube v1.38.1`, both root-owned mode 0755 in
+`/usr/local/bin`, both completions loaded in a non-login interactive shell as uid 65534.
+
+**The `stat.exists` defect was not theoretical.** `kind` moved 0.27.0 → 0.32.0 on the first run
+of the migrated playbook — five releases the source playbook could have installed at any point
+in the last year and never did, because its guard asked whether the file existed rather than
+which version it was.
+
+**Two checksum formats, one asset apiece.** Neither tool publishes a combined `checksums.txt`,
+so there is nothing to search — but the two files are not the same shape: kind's
+`kind-linux-<arch>.sha256sum` is `<hash>  <filename>` and needs the first field, while
+minikube's `minikube-linux-<arch>.sha256` is a **bare hash with no filename at all**. Both
+playbooks assert `^[0-9a-f]{64}$` on the result before it reaches `get_url`, so a 404 page or a
+redirect fails with a message about the version pin rather than as a checksum that merely never
+matches.
+
+**`MINIKUBE_DRIVER` is read — and is still not set.** The [survey](#upstream-survey-2026-08-11)
+called this "very likely real" from the viper source and demanded verification; the negative
+control settles it, and for once the inference was right:
+
+```console
+$ HOME=$scratch MINIKUBE_DRIVER=bogusdriver minikube start --dry-run
+  - MINIKUBE_DRIVER=bogusdriver
+X Exiting due to DRV_UNSUPPORTED_OS: The driver 'bogusdriver' is not supported on linux/amd64
+$ HOME=$scratch MINIKUBE_DRVER=bogusdriver minikube start --dry-run     # near-miss name
+  - MINIKUBE_DRVER=bogusdriver
+* Automatically selected the docker driver. Other choices: podman, ssh, none
+* dry-run validation complete!
+```
+
+Being read is necessary, not sufficient (MIGRATION2's rule), and the second line of that output
+is the reason a shared default was **rejected**: minikube already auto-selects the docker driver
+when Docker is present, so `MINIKUBE_DRIVER=docker` in `/etc/profile.d` would be a no-op on
+every account that can use Docker — and a *wrong* default on every account that cannot, since an
+account outside `docker_users` would be pushed at the one driver it has no access to instead of
+being offered podman. So `minikube.yml` writes no environment variable, and the per-tool table's
+conditional row resolves to "completion only". One incidental finding worth keeping: the
+variable is invisible to `minikube config get driver`, which reads only the config file, so it
+cannot be used to check whether the variable took effect.
+
+**A B2 violation found in this playbook's own first draft, by the check B2 asks for.** Running
+`minikube version` — nothing more — creates `$HOME/.minikube`. The playbook invokes minikube
+three times as root (the version guard, the post-install verification, and generating the
+completion), so every run created `/root/.minikube`. B2 forbids writing under *any* account's
+`$HOME` "including the invoker's", and root is an account; the fix is `MINIKUBE_HOME` pointed at
+a scratch path on those three tasks, removed by the cleanup task. `kind` was checked for the
+same thing and is clean — neither `kind version` nor `kind completion bash` creates state.
+The general rule for the next migration: a tool that keeps per-user state may create it on
+*any* invocation, including one that only prints a version, so the playbook's own calls need
+redirecting as much as the smoke test's do.
 
 ## Upstream survey (2026-08-11)
 

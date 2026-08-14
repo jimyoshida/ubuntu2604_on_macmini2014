@@ -1,0 +1,244 @@
+---
+# Install minikube system-wide on a multi-user workstation.
+#
+#   /usr/local/bin/minikube            root-owned, mode 0755
+#   /etc/bash_completion.d/minikube    shared completion, generated from the binary
+#
+# minikube ships as a single static binary and the source playbook
+# (container/minikube.yml) already installed it to this same root-owned path.
+# What it got wrong:
+#
+#   - `stat.exists` as the install guard, so a version bump silently no-opped
+#     (MIGRATION.md policy point 6). Its sibling container/kind.yml left this
+#     host on kind 0.27.0 for exactly that reason.
+#   - No checksum verification, and the architecture hardcoded as amd64.
+#   - `minikube config set driver docker` with `become: no` (task 6), which
+#     writes ~/.minikube/config/config.json for whoever ran the playbook and
+#     nobody else -- so the "default driver" it set was a default for exactly
+#     one account. Dropped here per MIGRATION3.md B2: no task in this playbook
+#     writes anything under any account's $HOME, including the connecting
+#     account's.
+#   - The completion written into one account's ~/.bashrc (B3).
+#
+# THE DRIVER DEFAULT IS NOT SET SYSTEM-WIDE, and that is a decision, not an
+# omission. See the note on MINIKUBE_DRIVER in the README: the variable is read
+# by minikube, but a shared default for it was rejected because the driver a
+# given account can actually use depends on whether that account is in the
+# docker group.
+#
+# HOW MULTI-USER THIS ACTUALLY IS. minikube drives Docker, so it is only as
+# multi-user as the `docker` group is. It is also expensive per account: every
+# account that runs `minikube start` gets its own ~/.minikube with its own
+# certificates and its own copy of the kicbase image -- gigabytes each, with no
+# shared mode to migrate it into.
+#
+# Usage:
+#   ansible-playbook container/minikube.yml -e host=<inventory host or group>
+#   ansible-playbook container/minikube.yml -e host=ws01 -e minikube_version=1.38.1
+
+- name: Install minikube system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    minikube_version: "1.38.1"
+    minikube_bin: /usr/local/bin/minikube
+    minikube_release_url: "https://github.com/kubernetes/minikube/releases/download/v{{ minikube_version }}"
+    # ansible_facts['architecture'] -> upstream release asset suffix
+    minikube_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    minikube_arch: "{{ minikube_arch_map.get(ansible_facts['architecture'], '') }}"
+    minikube_smoke_dir: /var/tmp/minikube-smoke
+    # Where the playbook's OWN minikube invocations put their state. Running
+    # `minikube version` is enough to create $HOME/.minikube, so without this
+    # every run of this playbook would create /root/.minikube -- a write under
+    # an account's $HOME, which B2 forbids for the connecting account and root
+    # alike. Removed by the cleanup task.
+    minikube_root_state: /var/tmp/minikube-playbook-state
+    # uid/gid used to prove the install is usable by an arbitrary user
+    minikube_verify_uid: 65534    # nobody
+    minikube_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No minikube release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to minikube_arch_map.
+      when: minikube_arch | length == 0
+
+    - name: 3. Check the currently installed minikube version
+      ansible.builtin.command: "{{ minikube_bin }} version --short"
+      register: minikube_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      environment:
+        MINIKUBE_HOME: "{{ minikube_root_state }}"
+
+    - name: 4. Decide whether minikube needs installing
+      ansible.builtin.set_fact:
+        minikube_install_needed: >-
+          {{ ('v' ~ minikube_version) not in (minikube_installed.stdout | default('')) }}
+
+    - name: 5. Fetch the published checksum for the linux/{{ minikube_arch }} binary
+      # minikube publishes one .sha256 per asset, and unlike kind's
+      # .sha256sum it contains the BARE HASH with no filename field -- so this
+      # is trimmed whole rather than split.
+      ansible.builtin.uri:
+        url: "{{ minikube_release_url }}/minikube-linux-{{ minikube_arch }}.sha256"
+        return_content: true
+      register: minikube_checksum
+      # Fetching a published checksum changes nothing, so let --check do it and
+      # genuinely validate the version pin against upstream.
+      check_mode: false
+      when: minikube_install_needed | bool
+
+    - name: 6. Resolve the SHA-256 for the linux/{{ minikube_arch }} binary
+      ansible.builtin.set_fact:
+        minikube_sha256: "{{ minikube_checksum.content | trim }}"
+      when: minikube_install_needed | bool
+
+    - name: 6a. Fail if the published checksum is not a SHA-256
+      ansible.builtin.assert:
+        that: minikube_sha256 is match('^[0-9a-f]{64}$')
+        fail_msg: >-
+          {{ minikube_release_url }}/minikube-linux-{{ minikube_arch }}.sha256
+          did not yield a SHA-256 for minikube {{ minikube_version }}. Check
+          that the version exists upstream.
+      when: minikube_install_needed | bool
+
+    - name: 7. Install the minikube binary
+      # ~130 MB, so this is staged straight to the destination with a checksum
+      # rather than through a scratch directory.
+      ansible.builtin.get_url:
+        url: "{{ minikube_release_url }}/minikube-linux-{{ minikube_arch }}"
+        dest: "{{ minikube_bin }}"
+        checksum: "sha256:{{ minikube_sha256 }}"
+        owner: root
+        group: root
+        mode: '0755'
+        force: true
+      when:
+        - minikube_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 8. Verify the installed minikube version
+      ansible.builtin.command: "{{ minikube_bin }} version --short"
+      register: minikube_version_out
+      changed_when: false
+      failed_when: ('v' ~ minikube_version) not in minikube_version_out.stdout
+      when: not ansible_check_mode
+      environment:
+        MINIKUBE_HOME: "{{ minikube_root_state }}"
+
+    - name: 9. Generate the shared bash completion from the installed binary
+      ansible.builtin.command: "{{ minikube_bin }} completion bash"
+      register: minikube_completion
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+      environment:
+        MINIKUBE_HOME: "{{ minikube_root_state }}"
+
+    - name: 10. Install the shared bash completion
+      ansible.builtin.copy:
+        content: "{{ minikube_completion.stdout }}\n"
+        dest: /etc/bash_completion.d/minikube
+        owner: root
+        group: root
+        mode: '0644'
+      when: not ansible_check_mode
+
+    - name: 11. Create a scratch HOME for the unprivileged checks
+      # minikube writes ~/.minikube on first use. This scratch HOME exists so
+      # the checks below never touch a real account's copy (B2), and it is
+      # removed afterwards.
+      ansible.builtin.file:
+        path: "{{ minikube_smoke_dir }}"
+        state: directory
+        owner: "{{ minikube_verify_uid }}"
+        group: "{{ minikube_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 12. Report the minikube version as an unprivileged user
+      # B4 verification, level 3 -- `version` alone, and it is what is
+      # available: every other minikube subcommand reaches for a container
+      # runtime, and uid 65534 is deliberately not in the docker group.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ minikube_verify_uid }} --regid={{ minikube_verify_gid }} --clear-groups
+          env HOME={{ minikube_smoke_dir }} {{ minikube_bin }} version --short
+        chdir: "{{ minikube_smoke_dir }}"
+      register: minikube_smoke
+      changed_when: false
+      failed_when: ('v' ~ minikube_version) not in minikube_smoke.stdout
+      when: not ansible_check_mode
+
+    - name: 13. Confirm the shared completion is loaded by an unprivileged shell
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ minikube_verify_uid }} --regid={{ minikube_verify_gid }} --clear-groups
+          env -i HOME={{ minikube_smoke_dir }} TERM=xterm PS1=$
+          bash -ic 'complete -p minikube >/dev/null 2>&1 && echo COMPLETION_OK'
+        chdir: "{{ minikube_smoke_dir }}"
+      register: minikube_smoke_completion
+      changed_when: false
+      failed_when: "'COMPLETION_OK' not in minikube_smoke_completion.stdout"
+      when: not ansible_check_mode
+
+    - name: 14. Remove the scratch HOME and the playbook's own minikube state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ minikube_smoke_dir }}"
+        - "{{ minikube_root_state }}"
+      check_mode: false
+
+    - name: 15. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               'minikube ' ~ minikube_version ~ ' (' ~ minikube_arch ~ ') '
+               ~ (ansible_check_mode
+                  | ternary('would be installed system-wide.', 'installed system-wide.')),
+               '',
+               '  ' ~ minikube_bin,
+               '  /etc/bash_completion.d/minikube   shared, generated from the binary',
+               '',
+             ]
+             + (ansible_check_mode
+                | ternary(['Not verified: this was a --check run. The version pin WAS validated',
+                           'against the published checksum upstream.'],
+                          ['Verified: an unprivileged account (uid ' ~ minikube_verify_uid
+                           ~ ') can execute the binary and gets the shared completion.']))
+             + ['',
+                'No default driver is set for anyone. The source playbook ran',
+                '`minikube config set driver docker`, which configured exactly one account.',
+                'Each account sets its own, once:',
+                '  minikube config set driver docker',
+                '',
+                'minikube DRIVES DOCKER, so it is only as multi-user as the docker group is,',
+                'and it is expensive per account: each ~/.minikube holds its own certificates',
+                'and its own copy of the kicbase image (gigabytes), with no shared mode.',
+                '',
+                '  minikube start                 # creates ~/.minikube for YOUR account',
+                '  minikube status',
+                '  minikube delete                # reclaim that space']
+          ) | join('\n') }}
