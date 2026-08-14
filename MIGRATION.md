@@ -246,7 +246,11 @@ For each playbook:
 `vault.yml` and `vscode.yml` dropped out of this table: both moved out of `tool/` (to
 `services/` and `gui-tools/` respectively) before their multi-user migration started, so
 they're no longer in scope for `tool/*.yml` → `_multi-user/tools/*.yml`. Whether they need
-a multi-user treatment is a question for wherever they live now, not this document.
+a multi-user treatment is a question for wherever they live now, not this document. Both
+questions have since been answered by deletion: the Vault *server* went with
+[`services/`](README.md#retired-services) — its client half is
+[`_multi-user/cloud-cli/vault-cli.yml`](_multi-user/cloud-cli/README.md#vault-cliyml) — and
+`vscode.yml` went with [`gui-tools/`](README.md#retired-gui-tools) on 2026-08-14.
 
 All ten remaining `tool/*.yml` playbooks are migrated and verified against `ws01`/`ws02`
 (eleven target playbooks, since `yq` is split out of `modern-cli-tools.yml` into its own

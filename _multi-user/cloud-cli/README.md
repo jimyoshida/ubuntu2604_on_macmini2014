@@ -243,8 +243,11 @@ and warns that the target is configured multiple times. The old keyring
 (`/etc/apt/keyrings/microsoft.gpg`) is deliberately left alone — no other playbook in this
 repo references it, and an unused keyring is inert.
 
-`gui-tools/vscode.yml` also adds a `packages.microsoft.com` repository, but a different one
-(`/repos/code`) under its own filename and keyring, so the two do not collide.
+`gui-tools/vscode.yml` also added a `packages.microsoft.com` repository, but a different one
+(`/repos/code`) under its own filename and keyring, so the two never collided. That playbook was
+[retired](../../README.md#retired-gui-tools) on 2026-08-14; a host that ran it keeps the
+`vscode.list` source and the `/usr/share/keyrings/packages.microsoft.gpg` keyring, which are
+still none of this playbook's business.
 
 ### Per-user setup
 

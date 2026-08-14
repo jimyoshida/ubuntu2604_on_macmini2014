@@ -44,17 +44,17 @@ nothing except an Ansible dependency for the one step you run before Ansible is 
 
 ## Playbooks (old)
 
-What is left of the original single-user tree. Three directories no longer exist: `tool/`
+What is left of the original single-user tree. Four directories no longer exist: `tool/`
 (see [MIGRATION.md](MIGRATION.md)) and `cloud-cli/` (see [MIGRATION2.md](MIGRATION2.md))
-graduated into the multi-user tree in the next table, and `services/` was deleted outright as
-out of scope — see [Retired: `services/`](#retired-services). These three have not been looked
-at yet.
+graduated into the multi-user tree in the next table, and `services/` and `gui-tools/` were
+deleted outright as out of scope — see [Retired: `services/`](#retired-services) and
+[Retired: `gui-tools/`](#retired-gui-tools). Of the two directories left, `container/` has a
+migration planned in [MIGRATION3.md](MIGRATION3.md); `core/` has not been looked at yet.
 
 | Directory | Description |
 |-----------|-------------|
 | [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
 | [container/](container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube) |
-| [gui-tools/](gui-tools/README.md) | GUI tools (VS Code) |
 
 ## Playbooks (multi-user)
 
@@ -196,16 +196,50 @@ no longer performs — see
 [MIGRATION3.md's follow-ups](MIGRATION3.md#known-follow-ups). The playbook is recoverable from
 git history (`git log --diff-filter=D -- container/krew.yml`).
 
+## Retired: `gui-tools/`
+
+The directory held one playbook, `vscode.yml`, and it is gone with the directory (2026-08-14).
+Retired for **scope**, like `services/` and the two language toolchains, not for defect: it was
+an ordinary apt install from `packages.microsoft.com/repos/code`, guarded on `dpkg -l code`, and
+its only blemish was a `vscode_user` variable that was declared and never used.
+
+What it installed was a GUI editor, on a box whose work arrives over SSH. This host is the
+argument: `code` has never been installed here as a package, there is no
+`/etc/apt/sources.list.d/vscode.list` and no `/usr/share/keyrings/packages.microsoft.gpg` — the
+only `code` on it is the Remote-SSH server VS Code unpacked into `~/.vscode-server` by itself,
+for one account, when someone connected from their own machine. That is where the editor
+belongs: on the client. A workstation that runs AI coding agents needs the toolchains the agents
+call, not a desktop application nobody launches locally.
+
+Nothing replaces it. Anyone who does want VS Code on the box installs it the way the playbook
+did — `sudo apt install code` where the repository is already configured, or upstream's
+[Linux install page](https://code.visualstudio.com/docs/setup/linux) where it is not. Neither
+needs Ansible, and neither is worth a playbook to wrap.
+
+The extension list the playbook printed at the end (`ms-python.python`, `redhat.ansible`,
+`hashicorp.terraform` and two for the [retired
+toolchains](#retired-coregolangyml-and-corerustyml)) was advice, not configuration, and it goes
+with the playbook.
+
+As with the other retirements, deleting it uninstalls nothing: a host that ran it keeps the
+`code` package, the `vscode.list` apt source and the Microsoft keyring, and keeps getting VS
+Code updates through `apt upgrade`. Removing those is a per-host cleanup this repo no longer
+performs. Note that the repository is *not* the one
+[`_multi-user/cloud-cli/azure-cli.yml`](_multi-user/cloud-cli/README.md#azure-cliyml) manages
+(`/repos/azure-cli`, under its own keyring and `.sources` file), so retiring this playbook
+neither breaks nor cleans up that one. The playbook and its README are recoverable from git
+history (`git log --diff-filter=D -- gui-tools/`).
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) amendments. 41 playbooks:
+[MIGRATION2.md](MIGRATION2.md) amendments. 40 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-24) | 24 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-4) | 4 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Effectively shared](#effectively-shared-3) | 3 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-8) | 8 | Shared install plus a tail that benefits only the invoker |
 | [Personal only](#personal-only-5) | 5 | The whole install lands in one `$HOME` or one account |
 
@@ -213,18 +247,20 @@ More than half the repo is now multi-user, and the balance moved in one step rat
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
 counted, and the total drops back when the originals are retired. That has now happened
 twice, and both migrations are now finished: `tool/` after MIGRATION.md, and all thirteen of
-`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Eight playbooks went the other
+`cloud-cli/` after MIGRATION2.md. Neither directory still exists. Nine playbooks went the other
 way and were deleted rather than migrated: all of `services/` except `samba.yml`, which moved
 to `core/` (see [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
 deleted once the migrations left it with no dependents (see
 [Retired: `core/homebrew.yml`](#retired-corehomebrewyml)); `core/golang.yml` and
 `core/rust.yml`, which were out of scope for a workstation that runs AI coding agents (see
-[Retired: `core/golang.yml` and `core/rust.yml`](#retired-coregolangyml-and-corerustyml)); and
+[Retired: `core/golang.yml` and `core/rust.yml`](#retired-coregolangyml-and-corerustyml));
 `container/krew.yml`, the first casualty of [MIGRATION3.md](MIGRATION3.md), dropped because a
 plugin manager with a shared root can be read by every account and written by none (see
-[Retired: `container/krew.yml`](#retired-containerkrewyml)).
+[Retired: `container/krew.yml`](#retired-containerkrewyml)); and `gui-tools/vscode.yml`, a GUI
+editor on a box whose work arrives over SSH, which took its directory with it (see
+[Retired: `gui-tools/`](#retired-gui-tools)).
 
-The 14 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
+The 13 playbooks in the legacy tree are all `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
@@ -242,17 +278,17 @@ The `_multi-user/cloud-cli/` ones add a rule the `tools/` ones did not need: eve
 identity, so the playbook installs the client and stops. None of them runs `aws configure`,
 `gcloud auth login` or `jira init`, and none writes a secret anywhere.
 
-### Effectively shared (4)
+### Effectively shared (3)
 
 This category used to be mostly `cloud-cli/`; those seven playbooks were migrated and their
-originals deleted, and `services/jellyfin.yml` left with the rest of `services/`, so what is
-left is the tail.
+originals deleted, `services/jellyfin.yml` left with the rest of `services/`, and
+`gui-tools/vscode.yml` — the fourth row here until 2026-08-14 — left with
+[its directory](#retired-gui-tools). What is left is the tail.
 
 | Playbook | Why it is already safe |
 |----------|------------------------|
 | `core/nodejs.yml`, `core/disable-rsyslog.yml` | apt / systemd only |
 | `container/devcontainers.yml` | `npm install -g` as root |
-| `gui-tools/vscode.yml` | apt (`vscode_user` is declared but never used) |
 
 ### Mixed — shared install, personal tail (8)
 

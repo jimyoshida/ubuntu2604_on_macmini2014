@@ -110,10 +110,11 @@ leading underscore on `_multi-user/` still means staging.
   plugins the README recommended (`ctx`, `ns`, `node-shell`) can be plain binaries in
   `/usr/local/bin` if they are wanted back — see the retirement note for the full argument and
   for what the shared-root rehearsal established.
-- `core/` and `gui-tools/` — what remains of the legacy tree after this migration. `core/` is a
-  harder problem than any of the three tool directories (`agent-base.yml` and `x11vnc.yml` are
-  desktop-session and VNC setup, which is per-identity in a way no relocation fixes), and
-  `gui-tools/vscode.yml` is already an apt install with an unused `vscode_user` variable.
+- `core/` — all that remains of the legacy tree after this migration, and a harder problem than
+  any of the three tool directories: `agent-base.yml` and `x11vnc.yml` are desktop-session and
+  VNC setup, which is per-identity in a way no relocation fixes. `gui-tools/` was the other
+  survivor until 2026-08-14, when it was [retired](README.md#retired-gui-tools) with its one
+  VS Code playbook.
 - `container/*` itself stays in place until its successors are verified, the same way `tool/`
   and `cloud-cli/` did. Retiring it is the last step, not the first.
 - Running clusters. Every playbook here installs a client or a runtime; none creates a kind
@@ -440,13 +441,13 @@ the [survey below](#upstream-survey-2026-08-11) is stale the day after it was ta
 **Effect on the repo's classification when this is done.** The [multi-user support
 status](README.md#multi-user-support-status) table currently counts `container/` as six of the
 eight *mixed* rows (`docker`, `podman`, `kubectl`, `helm`, `kind`, `minikube`) and one of the
-four *effectively shared* rows (`devcontainers`) — its seven playbooks, in full. The eighth,
+three *effectively shared* rows (`devcontainers`) — its seven playbooks, in full. The eighth,
 `krew.yml`, was one of the *personal only* rows until it was retired, which already took that
-category from six to five.
-Completing this migration empties three quarters of the mixed category and leaves it as
-`core/mise.yml` and `core/samba.yml` alone — which is the point at which "the legacy tree" means
-`core/` plus one VS Code playbook, and the underscore on `_multi-user/` starts to look like it
-has outlived its purpose.
+category from six to five. Completing this migration empties three quarters of the mixed
+category and leaves it as `core/mise.yml` and `core/samba.yml` alone — which is the point at
+which "the legacy tree" means `core/` and nothing else, now that
+[`gui-tools/` is retired](README.md#retired-gui-tools) too, and the underscore on
+`_multi-user/` starts to look like it has outlived its purpose.
 
 ## Upstream survey (2026-08-11)
 
