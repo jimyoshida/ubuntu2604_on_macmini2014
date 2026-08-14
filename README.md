@@ -50,12 +50,14 @@ directories no longer exist: `tool/` (see [MIGRATION.md](MIGRATION.md)), `cloud-
 graduated into the multi-user tree in the next table, and `services/` and `gui-tools/` were
 deleted outright as out of scope — see [Retired: `services/`](#retired-services) and
 [Retired: `gui-tools/`](#retired-gui-tools). `core/` has not been looked at yet, and is the
-harder problem: `agent-base.yml` and `x11vnc.yml` are desktop-session and VNC setup, which is
-per-identity in a way no relocation fixes.
+harder problem: `agent-base.yml` is desktop-session setup, which is per-identity in a way no
+relocation fixes. `x11vnc.yml` was the other desktop-session playbook here; it is gone now,
+along with `disable-rsyslog.yml` — see
+[Retired: `core/disable-rsyslog.yml` and `core/x11vnc.yml`](#retired-coredisable-rsyslogyml-and-corex11vncyml).
 
 | Directory | Description |
 |-----------|-------------|
-| [core/](core/README.md) | Core system setup (SSH, Samba, runtimes) |
+| [core/](core/README.md) | Core system setup (SSH, runtimes) |
 
 ## Playbooks (multi-user)
 
@@ -101,13 +103,16 @@ ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice,bob
 
 This repo provisions a **workstation**, not an application server, so the directory that
 deployed long-running self-hosted servers is gone (2026-08-10). Nothing replaced it — these
-playbooks were deleted rather than migrated — except `samba.yml`, which moved into `core/`.
+playbooks were deleted rather than migrated — except `samba.yml`, which moved into `core/` at
+the time and outlived the rest of the directory by four days. It was retired from there too on
+2026-08-14, once the exception stopped holding up — see
+[Retired: `core/samba.yml`](#retired-coresambayml).
 
 | Playbook | Fate |
 |----------|------|
 | `services/vault.yml` | Deleted first, with the local Vault server it had deployed. The client half is [`_multi-user/cloud-cli/vault-cli.yml`](_multi-user/cloud-cli/README.md#vault-cliyml) |
 | `services/n8n.yml`, `services/jellyfin.yml`, `services/freshrss.yml` | Deleted — a workflow engine, a media server and a feed reader are services to point a workstation at, not to run on it |
-| `services/samba.yml` | **Kept**, moved to [`core/samba.yml`](core/README.md#sambayml). Sharing your own home directory over SMB is a workstation function; its two variables moved into [`core/env-tmpl.sh`](core/env-tmpl.sh) |
+| `services/samba.yml` | Moved to `core/samba.yml` on 2026-08-10, then retired from there too on 2026-08-14 — see [Retired: `core/samba.yml`](#retired-coresambayml) |
 
 Everything above is recoverable from git history (`git log --diff-filter=D -- services/`),
 including the retired `services/README.md` — which is where the account of what the Vault
@@ -247,39 +252,92 @@ performs. Note that the repository is *not* the one
 neither breaks nor cleans up that one. The playbook and its README are recoverable from git
 history (`git log --diff-filter=D -- gui-tools/`).
 
+## Retired: `core/disable-rsyslog.yml` and `core/x11vnc.yml`
+
+Two more `core/` playbooks gone (2026-08-14), both for **scope**, like `gui-tools/` before them:
+neither does anything an AI coding agent working over SSH needs.
+
+`x11vnc.yml` provisioned a full virtual desktop — Xvfb, XFCE, x11vnc, GDM disabled in favor of
+`multi-user.target` — to expose a GUI session nobody drives. That is the same argument that
+retired [`gui-tools/vscode.yml`](#retired-gui-tools): this host's work arrives over SSH, so a
+VNC-reachable desktop is infrastructure for a use case the workstation doesn't have.
+
+`disable-rsyslog.yml` started life in the now-gone `o11y/` tree, stopping `rsyslog` from
+duplicating journal entries that Alloy was already shipping to Loki — a real duplication problem.
+Once `o11y/` was retired, its job narrowed to trimming rsyslog's own disk usage, a hygiene task
+with no pipeline left to justify it. That's out of scope for the same reason the language
+toolchains were: it's upkeep for something this workstation doesn't run, not a defect in the
+playbook itself (see
+[Retired: `core/golang.yml` and `core/rust.yml`](#retired-coregolangyml-and-corerustyml)).
+
+As with every other retirement here, deleting the playbooks uninstalls nothing: a host already
+provisioned by `x11vnc.yml` keeps its Xvfb/x11vnc systemd user service, `~/.vnc`, and
+`multi-user.target` default, and one already provisioned by `disable-rsyslog.yml` keeps
+`rsyslog.service` stopped and `syslog.socket` masked. Undoing either is the per-host cleanup
+described in their respective sections while they existed. Both playbooks are recoverable from
+git history (`git log --diff-filter=D -- core/disable-rsyslog.yml core/x11vnc.yml`).
+
+## Retired: `core/samba.yml`
+
+The last `core/` playbook to go on 2026-08-14, for the reason its two neighbors above went:
+sharing your home directory over SMB is a service, and the exception that kept it around when
+[`services/` was retired](#retired-services) — "a workstation function, not a hosted service" —
+didn't survive a second look. It is the same shape as `services/n8n.yml`, `services/jellyfin.yml`
+and `services/freshrss.yml`: something to point a workstation at, not something to run on one.
+
+`vault.yml`'s split already established the pattern this repo prefers for anything with a
+client/server shape: keep the client, drop the server. Samba has no such split to fall back on
+here — the playbook's whole job was `smbd`/`nmbd` and a `[homes]` share — so there is nothing
+downstream of `core/samba.yml` left to point at, unlike
+[`_multi-user/cloud-cli/vault-cli.yml`](_multi-user/cloud-cli/README.md#vault-cliyml) for Vault.
+
+Deleting it uninstalls nothing: a host already provisioned keeps `smbd` and `nmbd` running, the
+`[homes]` share in `smb.conf`, and the Samba password set for whoever ran `smbpasswd -a`. Undoing
+that is a per-host cleanup this repo no longer performs. The playbook, its `core/env-tmpl.sh`
+entries (`SAMBA_PASSWORD`, `SAMBA_INTERFACES`) and its README section are recoverable from git
+history (`git log --diff-filter=D -- core/samba.yml`), as is the original
+`git log --diff-filter=D -- services/samba.yml` move from 2026-08-10.
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) and [MIGRATION3.md](MIGRATION3.md) amendments. 40 playbooks:
+[MIGRATION2.md](MIGRATION2.md) and [MIGRATION3.md](MIGRATION3.md) amendments. 37 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-31) | 31 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-2) | 2 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
-| [Mixed](#mixed--shared-install-personal-tail-2) | 2 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-5) | 5 | The whole install lands in one `$HOME` or one account |
+| [Effectively shared](#effectively-shared-1) | 1 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Mixed](#mixed--shared-install-personal-tail-1) | 1 | Shared install plus a tail that benefits only the invoker |
+| [Personal only](#personal-only-4) | 4 | The whole install lands in one `$HOME` or one account |
 
 Three quarters of the repo is now multi-user, and the balance moved in one step rather than
 gradually: a migrated playbook is a *new* file, so during a migration both generations are
 counted, and the total drops back when the originals are retired. That has now happened
 three times, and all three migrations are finished: `tool/` after MIGRATION.md, all thirteen
 of `cloud-cli/` after MIGRATION2.md, and all seven of `container/` after MIGRATION3.md. None
-of the three directories still exists. The total is unchanged at 40 across the last of them
-because seven successors replaced exactly seven originals. Nine playbooks went the other
-way and were deleted rather than migrated: all of `services/` except `samba.yml`, which moved
-to `core/` (see [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
+of the three directories still exists. The total held at 40 across the last of them because
+seven successors replaced exactly seven originals, then dropped to 37 when three more `core/`
+playbooks were deleted outright with no successor at all (see below). Twelve playbooks in total
+have gone the deleted-rather-than-migrated way: `services/vault.yml`, `services/n8n.yml`,
+`services/jellyfin.yml` and `services/freshrss.yml` (see
+[Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
 deleted once the migrations left it with no dependents (see
 [Retired: `core/homebrew.yml`](#retired-corehomebrewyml)); `core/golang.yml` and
 `core/rust.yml`, which were out of scope for a workstation that runs AI coding agents (see
 [Retired: `core/golang.yml` and `core/rust.yml`](#retired-coregolangyml-and-corerustyml));
 `container/krew.yml`, the first casualty of [MIGRATION3.md](MIGRATION3.md), dropped because a
 plugin manager with a shared root can be read by every account and written by none (see
-[Retired: `container/krew.yml`](#retired-containerkrewyml)); and `gui-tools/vscode.yml`, a GUI
+[Retired: `container/krew.yml`](#retired-containerkrewyml)); `gui-tools/vscode.yml`, a GUI
 editor on a box whose work arrives over SSH, which took its directory with it (see
-[Retired: `gui-tools/`](#retired-gui-tools)).
+[Retired: `gui-tools/`](#retired-gui-tools)); `core/disable-rsyslog.yml` and `core/x11vnc.yml`,
+a log-hygiene task with no pipeline left to justify it and a VNC desktop nobody drives (see
+[Retired: `core/disable-rsyslog.yml` and `core/x11vnc.yml`](#retired-coredisable-rsyslogyml-and-corex11vncyml));
+and `services/samba.yml` → `core/samba.yml`, which moved once (2026-08-10) on the strength of an
+exception to the `services/` retirement and was deleted anyway once that exception stopped
+holding (2026-08-14) — see [Retired: `core/samba.yml`](#retired-coresambayml).
 
-The 6 playbooks left in the legacy tree — all of `core/`, which is all the legacy tree is now —
+The 3 playbooks left in the legacy tree — all of `core/`, which is all the legacy tree is now —
 are `hosts: localhost` with `connection: local`, so even
 the "effectively shared" ones among them are personal in *execution model* — run on the box, by
 one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
@@ -309,20 +367,23 @@ discovering: `kind` and `minikube` are multi-user exactly as far as the `docker`
 reaches. Every account can execute the binary, and no account outside `docker_users` can do
 anything with it.
 
-### Effectively shared (2)
+### Effectively shared (1)
 
 This category used to be mostly `cloud-cli/`; those seven playbooks were migrated and their
 originals deleted, `services/jellyfin.yml` left with the rest of `services/`,
 `gui-tools/vscode.yml` left with [its directory](#retired-gui-tools), and
 `container/devcontainers.yml` — the third row here until 2026-08-14 — was migrated to
 [`_multi-user/container/devcontainers.yml`](_multi-user/container/README.md#devcontainersyml)
-and deleted with the rest of `container/`. What is left is the tail.
+and deleted with the rest of `container/`. `core/disable-rsyslog.yml` was the other row here
+until 2026-08-14, when it was
+[retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) rather than migrated — out of
+scope, not unsafe. What is left is the tail.
 
 | Playbook | Why it is already safe |
 |----------|------------------------|
-| `core/nodejs.yml`, `core/disable-rsyslog.yml` | apt / systemd only |
+| `core/nodejs.yml` | apt only |
 
-### Mixed — shared install, personal tail (2)
+### Mixed — shared install, personal tail (1)
 
 This category was three quarters `container/` until 2026-08-14: `docker`, `podman`, `kubectl`,
 `helm`, `kind` and `minikube` were six of its eight rows, each a shared install with a
@@ -330,36 +391,40 @@ This category was three quarters `container/` until 2026-08-14: `docker`, `podma
 [migrated](MIGRATION3.md) — the completions moved to `/etc/bash_completion.d` and the group
 add became `docker_users`. `core/golang.yml` was a ninth row before that, and left the other
 way: [retired](#retired-coregolangyml-and-corerustyml) rather than fixed, since a toolchain
-nobody here compiles with is not worth un-mixing. What is left is `core/` alone.
+nobody here compiles with is not worth un-mixing. `core/samba.yml` was the tenth, sharing
+`smb.conf` and the service but tying `smbpasswd -a` to the invoker; it also left the other way,
+[retired](#retired-coresambayml) on 2026-08-14 rather than fixed, since a service scoped out of
+the repo entirely is not worth un-mixing either. What is left is `core/mise.yml` alone.
 
 | Playbook | Shared part | Personal part |
 |----------|-------------|---------------|
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
-| `core/samba.yml` | `smb.conf` and service | `smbpasswd -a` for the invoker only |
 
-### Personal only (5)
+### Personal only (4)
 
 Three of these now live in [`_personal/`](#playbooks-personal), which is where this category is
-meant to end up. The other two are still mixed in with the shared trees. Four more left the
+meant to end up. The other one is still mixed in with the shared trees. Five more left the
 category without being fixed: `core/homebrew.yml` was [retired](#retired-corehomebrewyml) — it
 had been the root cause of four other entries here, `cloud-cli/{gcx,influx,jira,vault}-cli.yml`,
 all `brew install` as `lookup('env', 'USER')`, until wave 3 of MIGRATION2.md moved those to
 root-owned paths — `core/rust.yml` was
 [retired with `core/golang.yml`](#retired-coregolangyml-and-corerustyml) as out of scope,
 `container/krew.yml` was [retired](#retired-containerkrewyml) as per-user by design rather than
-by defect, and `core/ssh-key-setup.yml` became
+by defect, `core/ssh-key-setup.yml` became
 [`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every task was a
-`chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible.
+`chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible, and
+`core/x11vnc.yml` was
+[retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) as out of scope for a box whose
+work arrives over SSH.
 
 | Playbook | Cause |
 |----------|-------|
 | `_personal/ai-agent/claude-code.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
 | `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
 | `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
-| `core/x11vnc.yml` | `/home/$USER/.vnc`, user systemd unit, `~/.bashrc` |
 | `core/agent-base.yml` | `~/.xprofile`, `~/.xsessionrc`, three `~/.bashrc` blocks |
 
-The two still in the shared trees are per-identity by **defect** — each binds its work to
+The one still in the shared trees is per-identity by **defect** — it binds its work to
 whoever happens to run it. The fix for that shape is the one MIGRATION.md already names: an
 explicit user list instead of `$USER`, not a move to `/usr/local`. The three in `_personal/`
 are per-identity **by nature** and need no fix.
