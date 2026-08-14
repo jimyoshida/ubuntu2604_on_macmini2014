@@ -3,9 +3,12 @@
 Policy and procedure for migrating the container and Kubernetes playbooks from `container/` to
 `_multi-user/container/`.
 
-**Status: planned.** 0 of 7 source playbooks migrated. No playbook has been written yet; the
-decisions in [Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision)
-come first. See [Migration status](#migration-status).
+**Status: in progress. Wave 1 (decisions) is complete; 0 of 7 source playbooks migrated.** All
+three decisions [wave 1](#order-of-work) called for are settled — the kubectl package collision
+as (a), the Helm pin as 4.2.3-1, and the `xhost` question by deleting the line — so writing can
+start with `devcontainers.yml` and `podman.yml`. See
+[Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision) and
+[Migration status](#migration-status).
 
 `container/krew.yml` was the eighth. It is not in this plan: it was
 [retired](README.md#retired-containerkrewyml) on 2026-08-14 rather than migrated, because krew
@@ -241,15 +244,40 @@ Where the collision is real, an unpinned `apt: name=<pkg> state=present` is not 
 unpinned — it installs from a different vendor than the repository the playbook just configured,
 and reports success. See [#3's note](#notes-on-the-three-that-need-a-decision).
 
-The `xhost` question belongs here too, as the one input this plan has deliberately not resolved:
+The `xhost` question belonged here too, as the one input this plan deliberately left open:
 **establish what `xhost +local:docker` grants before deciding what replaces it.** The `local`
 family's name field may be ignored, in which case the line is equivalent to `xhost +local:` and
 grants every local connection — a much wider grant than its name suggests — or it may add a
-host entry that matches nothing and grant nothing at all. Test it with the negative control
-(`xhost +local:docker` versus `xhost +local:nosuchthing`, then `xhost` to list) on a host with a
-display, and record the answer here. The disposition follows from it: if it grants nothing,
-delete it; if it grants everything local, it is a security decision that belongs in the README
-under a `-e` flag, off by default, not in six accounts' `.bashrc`.
+host entry that matches nothing and grant nothing at all.
+
+> **Decided 2026-08-14: the `xhost` line is deleted, and nothing replaces it.** Neither
+> `docker.yml` nor `podman.yml` gets an `xhost` task, a `/etc/profile.d` equivalent, or the
+> `-e` flag this section previously floated.
+>
+> The decision does not depend on which way the semantics fall, which is why it could be taken
+> without the measurement. Both branches end outside `~/.bashrc`: if the name is ignored the
+> line silently grants every local connection to the X server, which is a security decision a
+> container-runtime installer has no business making on six accounts' behalf; if the name
+> matches nothing the line is dead code that has been running in every interactive shell for
+> its whole life. There is no third branch in which appending it to `.bashrc` is correct.
+>
+> **The measurement was attempted and is not recorded, because it failed.** A private `Xvfb`
+> with a real auth cookie was used to compare `+local:docker`, `+local:nosuchthing` and bare
+> `+local:` against an uncredentialed client. The run is void: `/tmp/.X11-unix` on this host is
+> owned by `gdm-greeter` rather than `root`, the test server's unix listener never bound, and
+> the contradiction shows plainly in the transcript — `xhost +` reported "access control
+> disabled" while the next listing still reported it enabled and every probe still refused, so
+> the probes and the `xhost` calls were not reaching one consistent server. The one thing it
+> did establish is client-side only and settles nothing about the server: `xhost` prints an
+> identical message for all three spellings, so the name never reaches the server as a
+> distinguishing value. Anyone re-running this needs a host whose `/tmp/.X11-unix` is
+> `root:root` mode `1777`, or an `Xvfb -displayfd` on a private `XDG_RUNTIME_DIR`.
+>
+> **Consequence to document, not to solve.** Deleting the line costs the one thing it was for:
+> a containerised GUI app can no longer reach the host X server just because the account once
+> ran the playbook. An account that wants that runs `xhost` itself, per session, deliberately.
+> `docker.yml`'s and `podman.yml`'s README sections must say so — it is a smaller regression
+> than [B1](#policy-amendments)'s, but it is the same shape, and the same person will hit it.
 
 ## Per-tool state, grants and shared config
 
@@ -342,6 +370,37 @@ file, still present on this host and still pointing at the EOL `v1.30` stream) u
 carry, and note that the stream is part of the pin: moving to `v1.37` means editing the URI, not
 just the version string.
 
+> **Decided 2026-08-14: (a).** Keep apt and pkgs.k8s.io, bump the stream to `v1.36`, pin
+> `1.36.3-1.1`, and write `/etc/apt/preferences.d/kubectl` pinning the pkgs.k8s.io origin at
+> priority `1001`. Re-verified on `localhost` the day the decision was taken:
+>
+> ```console
+> $ apt-cache policy kubectl
+>   Installed: 1:568.0.0-0
+>   Candidate: 1:580.0.0-0
+> $ curl -sSL https://dl.k8s.io/release/stable.txt
+> v1.36.3
+> ```
+>
+> **The candidate moved from `1:579.0.0-0` to `1:580.0.0-0` in the three days between writing
+> this plan and deciding it, which is the argument for (a) rather than a detail.** The epoch
+> side of the collision is not a fixed obstacle to be stepped over once — it is a stream that
+> republishes faster than this repo will ever re-run its playbooks, and every one of those
+> publications outranks every version pkgs.k8s.io will ever carry. Only a preferences pin
+> survives that; `--allow-downgrades` at install time does not, because the next unrelated
+> `apt upgrade` on the host silently takes `kubectl` back.
+>
+> Two mechanics for write time. The `v1.36` stream carries exactly one version, `1.36.3-1.1`
+> (confirmed against the flat repo's own `Packages` index, which needs `curl -L` — pkgs.k8s.io
+> 302-redirects), so the pin is exact rather than a floor, and it will need bumping in step with
+> upstream patch releases. **There is no `v1.37` stream yet** — `core:/stable:/v1.37` returns no
+> index — so the "editing the URI" note above is a future task, not a choice available now.
+>
+> (b) and (c) are both declined for the reasons already given: (b) shadows Google's
+> `/usr/bin/kubectl` by `PATH` order instead of resolving the conflict, recreating the exact
+> Homebrew precedence problem this repo has been carrying since MIGRATION.md, and (c) makes the
+> Kubernetes client version a function of Cloud SDK releases.
+
 **`helm.yml` (#5) — pinning it is a major version bump.** The source playbook installs
 `helm` unpinned from `packages.buildkite.com/helm-linux/helm-debian`, so it installs whatever is
 newest, which as of 2026-08-11 is **4.2.3-1**; the repository also still carries the 3.x line
@@ -359,6 +418,24 @@ host at all. Recommend **4.2.3-1**, stated explicitly in the README and the comm
 3→4 change, with the 3.x pin (`-e helm_version=3.21.3-1`) documented as the one-flag fallback
 for anyone with Helm 3 charts. Helm 4 keeps the same vendor repository and package name, so the
 fallback costs nothing to support.
+
+> **Decided 2026-08-14: 4.2.3-1**, with `-e helm_version=3.21.3-1` as the documented fallback.
+> Both figures re-verified against the vendor repository's own `Packages` index on the day of
+> the decision — 16 versions published, `3.13.3-1` through `4.2.3-1`, with `3.21.3-1` the
+> newest of the 3.x line and `4.2.0-1`/`4.2.3-1` the only 4.x entries. The repository serves
+> exactly one package name (`helm`), so the major version is carried entirely by the pin.
+>
+> The in-repo consumer check was re-run and still finds nothing, and `apt-cache policy helm` on
+> `localhost` is still empty — the Buildkite repository is not configured on this host, so
+> unlike `kubectl` there is no incumbent to displace and no collision to resolve. That also
+> means the figures above come from the vendor index over HTTP rather than from apt, and that
+> **this pin has never been resolved by apt on any host in this repo**; treat the first run as
+> the check that the version string is spelled the way apt expects.
+>
+> This is the one decision in wave 1 that changes what the repo installs rather than how, so it
+> is stated as a 3→4 change in the README, in the playbook header, and in the commit message —
+> three places, the same discipline [B1](#policy-amendments) gets, and for the same reason: a
+> reader who assumes continuity with the source playbook will be wrong.
 
 **`docker.yml` (#3) — the default that will look like a regression.** Covered by
 [B1](#policy-amendments); it is listed here because it is the single change in this migration
@@ -381,13 +458,21 @@ both.
 
 Four waves, each ending in a commit and a status-table update:
 
-1. **Decisions first (no playbooks).** The kubectl collision (#4), the Helm 3→4 pin (#5), and
-   the `xhost` question (B5). A fourth decision — krew's shape — was settled ahead of this plan
+1. **Decisions first (no playbooks). Done — all three, up front.** The kubectl collision (#4)
+   resolved as (a), the Helm 3→4 pin (#5) as `4.2.3-1`, and the `xhost` question (B5) by
+   deleting the line. A fourth decision — krew's shape — was settled ahead of this plan
    by [retiring it](README.md#retired-containerkrewyml). MIGRATION2's wave 1 tried this and only
    managed one of three up front; the reason it cost nothing was that both late decisions
    resolved *towards doing less*. One of these three does not have that property — the kubectl
    choice adds a file (a preferences pin) that the playbooks after it reference — so settle it
-   before writing, not during.
+   before writing, not during. That is what happened, and it is the first wave 1 in the series
+   to close before any playbook was written.
+
+   Two of the three resolved *towards doing less* anyway (delete the `xhost` line; keep the
+   apt mechanism kubectl already had), and the third is a version string. So no playbook
+   written in later waves is owed a revisit — but `kubectl.yml` now owes a file that no
+   playbook in either previous migration produced, an `/etc/apt/preferences.d/` entry, and
+   wave 3 is where that gets designed.
 2. **The two that are almost right — #1, #2.** `devcontainers.yml` and `podman.yml` are apt and
    npm, no vendor repository, no root-equivalent grant. Pure correctness work: pins,
    version-aware guards, unprivileged verification. They establish the house style for this
@@ -428,7 +513,7 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 | `devcontainers.yml` | `npm install -g @latest` | npm global, pinned, prefix from run time | TBD | Not started |
 | `podman.yml` | apt, unpinned | apt, pinned; linger by explicit list | TBD | Not started |
 | `docker.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned; group by explicit list | TBD | Not started |
-| `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | decision (a)/(b)/(c) — see note | TBD | Not started |
+| `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | `pkgs.k8s.io` v1.36 + `/etc/apt/preferences.d/kubectl` — decision (a) | TBD | Not started |
 | `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | TBD | Not started |
 | `kind.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
 | `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
@@ -437,6 +522,13 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 The `Pinned` column stays `TBD` until each playbook is written. This is deliberate and is the
 same call MIGRATION2 made: MIGRATION.md's step 3 requires checking upstream at write time, and
 the [survey below](#upstream-survey-2026-08-11) is stale the day after it was taken.
+
+Wave 1 decided two version strings without filling the column in, which is not a contradiction:
+`kubectl` at `1.36.3-1.1` and `helm` at `4.2.3-1` are decisions about *which* version this repo
+installs, and they were needed before writing because a preferences pin and a major-version bump
+both change what the playbook has to do. The column records what a written playbook actually
+pins, re-checked at write time — and the `kubectl` epoch moving twice in three days is the
+reason those are two different questions.
 
 **Effect on the repo's classification when this is done.** The [multi-user support
 status](README.md#multi-user-support-status) table currently counts `container/` as six of the
@@ -456,6 +548,12 @@ must be re-checked at write time, and every apt candidate re-checked against the
 These readings come from `localhost`, which already carries the Docker, Kubernetes, Google Cloud
 SDK, HashiCorp, NodeSource and mise repositories and is therefore not a clean read of what a
 fresh `ws01`/`ws02` sees.
+
+The `kubectl` and `helm` rows were re-checked on 2026-08-14 for wave 1's decisions, and the
+table below is left as the 2026-08-11 reading it was taken as. One figure had already moved in
+those three days — the colliding Google `kubectl` candidate, `1:579.0.0-0` → `1:580.0.0-0` —
+which is exactly the staleness this warning is about. The current readings are in
+[#4's](#notes-on-the-three-that-need-a-decision) and #5's decision notes.
 
 | Tool | Finding |
 | --- | --- |
@@ -482,6 +580,20 @@ fresh `ws01`/`ws02` sees.
   them and nothing else will ever take them out. Same class as the Homebrew per-user cleanup
   that MIGRATION2 documented and did not perform. The `krew` marker has no successor playbook
   at all now, so for that one the choice is by hand or not at all.
+
+  **Wave 1's `xhost` decision puts the `xhost` lines in that same position.** They are
+  `lineinfile` entries rather than marked blocks, so there is not even a marker to match on —
+  removing them means matching the literal line — and now that no migrated playbook writes an
+  `xhost` line, nothing this repo ships will ever revisit them. On `localhost` there is one,
+  `xhost +local:docker` at `~/.bashrc:118`, from `docker.yml`; `podman.yml`'s equivalent is
+  absent, so that playbook has never run here — worth knowing before reading a `podman` smoke
+  test on this host as a regression check. Unlike the completion blocks,
+  which are merely redundant once B3 puts the same completions in `/etc`, these keep doing
+  whatever they do on every interactive shell, in every account that ran `docker.yml` or
+  `podman.yml`. That makes them the strongest candidate in this list for cleanup by hand, and
+  the reason to establish the semantics after all — not to decide the migration, which is
+  settled, but to know whether the leftovers on existing hosts are inert or are an open X
+  server.
 - **`~/.krew` trees left by the retired playbook.** Retiring `krew.yml` uninstalls nothing: an
   account that ran it keeps its `~/.krew` tree, its plugins and the `PATH` entry that finds
   them, so krew goes on working there and goes on being invisible to every other account.
