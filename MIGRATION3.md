@@ -3,13 +3,15 @@
 Policy and procedure for migrating the container and Kubernetes playbooks from `container/` to
 `_multi-user/container/`.
 
-**Status: in progress. Waves 1 and 2 are complete; 2 of 7 source playbooks migrated.** All
+**Status: in progress. Waves 1, 2 and 3 are complete; 5 of 7 source playbooks migrated.** All
 three decisions [wave 1](#order-of-work) called for are settled — the kubectl package collision
 as (a), the Helm pin as 4.2.3-1, and the `xhost` question by deleting the line. Wave 2 migrated
-`devcontainers.yml` and `podman.yml`, both verified against `localhost`. Wave 3 is `docker.yml`,
-`kubectl.yml` and `helm.yml`. See
+`devcontainers.yml` and `podman.yml`; wave 3 migrated `docker.yml`, `kubectl.yml` and
+`helm.yml`, including the apt preferences pin that resolves the kubectl collision. All five are
+verified against `localhost`. Wave 4 is `kind.yml` and `minikube.yml`. See
 [Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision),
-[Wave 2](#wave-2-devcontainers-podman) and [Migration status](#migration-status).
+[Wave 2](#wave-2-devcontainers-podman), [Wave 3](#wave-3-docker-kubectl-helm) and
+[Migration status](#migration-status).
 
 `container/krew.yml` was the eighth. It is not in this plan: it was
 [retired](README.md#retired-containerkrewyml) on 2026-08-14 rather than migrated, because krew
@@ -479,7 +481,7 @@ Four waves, each ending in a commit and a status-table update:
    version-aware guards, unprivileged verification. They establish the house style for this
    directory (in particular the B4 verification shapes) at the lowest risk. Both verified
    against `localhost` — see [Wave 2](#wave-2-devcontainers-podman).
-3. **Docker and the k8s clients — #3, #4, #5.** `docker.yml` first: #6 and #7's smoke tests are
+3. **Docker and the k8s clients — #3, #4, #5. Done.** `docker.yml` first: #6 and #7's smoke tests are
    written against a host where the daemon exists, and B1's grant default is easier to reason
    about before the tools that depend on it. Then `kubectl.yml` (which needs wave 1's collision
    decision) and `helm.yml` (which needs the version decision).
@@ -514,9 +516,9 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 | --- | --- | --- | --- | --- |
 | `devcontainers.yml` | `npm install -g @latest` | npm global, pinned, prefix from run time | 0.88.0 | Verified (localhost) |
 | `podman.yml` | apt, unpinned | apt, pinned; linger by explicit list | podman 5.7.0+ds2-3build1, podman-compose 1.5.0-2 | Verified (localhost) |
-| `docker.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned; group by explicit list | TBD | Not started |
-| `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | `pkgs.k8s.io` v1.36 + `/etc/apt/preferences.d/kubectl` — decision (a) | TBD | Not started |
-| `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | TBD | Not started |
+| `docker.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned; group by explicit list | docker-ce 5:29.7.2-1~ubuntu.26.04~resolute, containerd.io 2.3.3, buildx 0.36.1, compose 5.4.0 | Verified (localhost) |
+| `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | `pkgs.k8s.io` v1.36 + `/etc/apt/preferences.d/kubectl` — decision (a) | 1.36.3-1.1 | Verified (localhost) |
+| `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | 4.2.3-1 | Verified (localhost) |
 | `kind.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
 | `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | TBD | Not started |
 | `krew.yml` | `curl \| sh` → `~/.krew` | — | — | [Retired](README.md#retired-containerkrewyml) 2026-08-14, not migrated |
@@ -594,6 +596,71 @@ account that cannot run rootless podman does not get lingering enabled for it as
 prize. Run with an account that has a range and already lingers, the grant tasks report `ok` and
 `skipping` rather than `changed`, which is the idempotency the source playbook's
 `changed_when: false` only pretended to have.
+
+### Wave 3 (`docker`, `kubectl`, `helm`)
+
+All three verified against `localhost`, `failed=0`, with the same caveats as everything else in
+`_multi-user/`: ansible-core 2.20 only, and no SSH path. Re-runs are idempotent — `ok=18
+changed=2` for `docker.yml`, `ok=19 changed=2` for `kubectl.yml`, `ok=18 changed=3` for
+`helm.yml` — every `changed` being scratch state created and removed. `--check` was exercised
+first on all three. Post-run checks independent of the playbooks: `docker 29.7.2` with
+`buildx 0.36.1` / `compose 5.4.0` and `containerd 2.3.3`, `kubectl v1.36.3`, `helm v4.2.3`;
+`apt-get update` warns about nothing; `/var/tmp` holds no leftovers.
+
+**Decision (a) works, and the pin is what does the work.** After the run `apt-cache policy
+kubectl` reports candidate `1.36.3-1.1` even though `1:580.0.0-0` is still visible in the
+version table, `kubectl version --client` prints `v1.36.3` with no `-dispatcher` suffix, and
+`apt-get -s upgrade` proposes no change to the package. That last check is the one worth keeping
+as a task: it is the difference between "the right version is installed today" and "the right
+version survives the next `apt upgrade`", and `kubectl.yml` task 12 asserts it on every run
+rather than trusting the install.
+
+**The two A5 key forms are not interchangeable, and this is the sharp edge.**
+`deb822_repository` given an **inline** armored key writes no keyring at all — it embeds the
+block in the `.sources` file's `Signed-By:` field — and returns `key_filename` **empty rather
+than undefined**, so `| default('/etc/apt/keyrings/<name>.asc')` does *not* fire (Jinja's
+`default()` only substitutes undefined values unless given `true` as its second argument). The
+first run of `docker.yml` failed on exactly this: gpg was invoked with an empty path and the
+fingerprint assertion reported the key missing, on a host where the key was perfectly correct.
+Given a **URL**, the module does download a keyring and does return `key_filename` — which is
+why `cloud-cli/github-cli.yml` and `kubectl.yml` can inspect the file and `docker.yml` and
+`helm.yml` cannot. The fix in the inline case is to assert the *variable's* bytes
+(`gpg --show-keys` with `stdin:`), which is the more meaningful check anyway: it verifies what
+this repo pins, and apt verifies the other direction for itself.
+
+**Which form to use was decided by expiry, per MIGRATION2's rule, and the three playbooks split
+two ways.** Docker's key (`9DC85822…`) and the Helm repository's packagecloud key
+(`DDF78C3E…`) carry no expiry, so their bytes are pinned inline. The Kubernetes stream key
+(`DE15B144…`) **expires 2026-12-29**, so `kubectl.yml` fetches it by URL each run and pins only
+the fingerprint. One difference from `github-cli.yml` is worth recording: there, an assertion
+against the *non-expiring successor* key survives the rotation. pkgs.k8s.io publishes no
+successor to assert, so when that key rotates `kubectl.yml` will fail at task 5 rather than
+follow a new key silently. That is the intended behaviour, and the failure message says so.
+
+**B3's destination was verified end to end, not assumed — and the first probe of it was wrong.**
+`/etc/bash_completion.d` is read on this host because `bash-completion`'s own
+`/etc/profile.d/bash_completion.sh` sources `/usr/share/bash-completion/bash_completion`, which
+lists `/etc/bash_completion.d` among its compat directories. An initial check suggested
+completions were *not* being loaded; that was a bad probe (it looked for `__start_gcloud`, a
+function the gcloud completion file does not define — it defines `_python_argcomplete`, and the
+vault file uses `complete -C` with no function at all). Both `kubectl.yml` and `helm.yml` now
+close with a task that starts a *non-login interactive shell as uid 65534* and asserts the
+completion is registered, so the claim is tested on every run rather than inferred from the
+existence of a file. The `k` alias needs the `/etc/bash.bashrc` bootstrap as well, and sources
+the completion file defensively rather than assuming profile.d runs after the compat directory.
+
+**Docker's negative assertion is the check this directory exists for.** As uid 65534,
+`docker ps` fails with `permission denied while trying to connect to the docker API at
+unix:///var/run/docker.sock` — matched as *text*, because a non-zero exit alone would also be
+produced by a daemon that simply is not running, which would make the assertion pass while
+proving nothing. Run with `docker_users` empty on a host where an account was already a member,
+the group was left exactly as it was: the empty default granted nothing and revoked nothing,
+which is B1's additive rule holding in practice rather than in principle.
+
+**`docker-ce-rootless-extras` is installed but not configured.** B1 requires the README to name
+the alternatives to a root-equivalent grant, and an alternative that is documented but absent
+from the host is not much of one. Installing the package costs nothing and leaves the per-account
+`dockerd-rootless-setuptool.sh install` to each account, which is where B2 says it belongs.
 
 ## Upstream survey (2026-08-11)
 

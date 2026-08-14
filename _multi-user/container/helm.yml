@@ -1,0 +1,413 @@
+---
+# Install Helm system-wide on a multi-user workstation.
+#
+#   /usr/bin/helm                            from the vendor apt package
+#   /etc/apt/sources.list.d/helm.sources     repository definition, with the
+#                                            signing key inline
+#   /etc/bash_completion.d/helm              generated from the binary
+#
+# THIS INSTALLS HELM 4, WHERE THE SOURCE PLAYBOOK MAY HAVE INSTALLED HELM 3.
+# container/helm.yml installed `helm` unpinned, so what landed depended on the
+# day it ran: anyone who ran it before Helm 4 shipped has 3.x, anyone who ran
+# it after gets 4.x, and nothing recorded which. Pinning is therefore not a
+# no-op -- it is choosing, on the record, which major version this repo
+# installs. 4.2.3-1 is that choice (MIGRATION3.md, decided 2026-08-14), taken
+# because no consumer in this repo templates a chart and Helm was not
+# installed on any host here at all.
+#
+# The 3.x line is still published from the same repository under the same
+# package name, so the fallback costs nothing to support:
+#
+#   ansible-playbook container/helm.yml -e host=ws01 -e helm_version=3.21.3-1
+#
+# What else changed versus the source playbook: A5 cleanup (deb822_repository
+# with the key pinned inline, replacing get_url + a `shell: gpg --dearmor` that
+# reported `changed` on every run), the version is pinned and verified, the
+# completion moved out of one account's ~/.bashrc into /etc/bash_completion.d
+# (B3), and verification is real offline work as an arbitrary uid rather than
+# `helm version` as the connecting account.
+#
+# Per-user state: ~/.config/helm, ~/.cache/helm and the repository list, all
+# created by each account for itself. This playbook touches none of it (B2),
+# and adds no chart repositories on anyone's behalf.
+#
+# Usage:
+#   ansible-playbook container/helm.yml -e host=<inventory host or group>
+#   ansible-playbook container/helm.yml -e host=ws01 -e helm_version=3.21.3-1
+
+- name: Install Helm system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # 4.2.3-1 is the newest 4.x; 3.21.3-1 is the newest 3.x. Both come from the
+    # same repository and the same package name.
+    helm_version: "4.2.3-1"
+    helm_repo_uri: "https://packages.buildkite.com/helm-linux/helm-debian/any/"
+    helm_suite: any
+    # Apt sources and keyrings written by predecessors of this playbook. The
+    # first two are container/helm.yml's own; the last two are the retired
+    # baltocdn repository that playbook already removed, kept here so a host
+    # that never ran the later version of it still gets cleaned up.
+    helm_legacy_paths:
+      - /etc/apt/sources.list.d/helm-stable-debian.list
+      - /etc/apt/keyrings/helm.gpg
+      - /etc/apt/sources.list.d/baltocdn_com_helm_stable_debian.list
+      - /etc/apt/keyrings/helm.asc
+    helm_smoke_dir: /var/tmp/helm-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    helm_verify_uid: 65534    # nobody
+    helm_verify_gid: 65534    # nogroup
+    # packagecloud's signing key for this repository, fingerprint
+    # DDF78C3E6EBB2D2CC223C95C62BA89D07698DBC6 -- the same one the source
+    # playbook asserted. It carries NO EXPIRY, so per MIGRATION2's rule the
+    # bytes are pinned inline as well as the fingerprint, the same form
+    # container/docker.yml uses. (Contrast container/kubectl.yml, whose key
+    # expires and is therefore fetched by URL each run.)
+    helm_key_fingerprint: "DDF78C3E6EBB2D2CC223C95C62BA89D07698DBC6"
+    helm_signing_key: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+
+      mQINBGid3ToBEADg6GXDG8jy1QTlAH3fN2uDuENyKFDaLfmpk+/zvfnoqbA8Hdov
+      ktADOeR+LFcB5SIUGR/WdK+oN71Bdk4JpWp3w2L/wdUg6dSIM3gserVTMItMygrk
+      kpZ2Yhyo47vAZ+ctDirXtBQlklLgzqzIW41XXJF+IGJOuTZpqg75sxr/IZ4QYV6M
+      Jorj6clALGrOtNlwxYp6Nth+iqSy7XKEpUf/NB4bS7zSXLBS9y36FPOnvn/lqV52
+      H23GkiNhGj5W4+UXpeBs/F/W5GAOUYgcBU4LTUURgGuw1OkI7bAkBpXueAA1Z2S6
+      Vz8QdppP3I2mI+jalUAUPQPBN0Cc0UXrxA0XyQ9B36B+3pSq/JhZLNyrS3hdxKA1
+      JwABVXPMq91FOnjVwDFPyxS6Gc6+ZtJ3AlWy1rL5XIKkRWcH3cQtl83B4ZLQcxtV
+      I4Of/aOjEleAHdopa5YBZb+O+0fE084XrKrAkfx7GodY+p2bQZjLCddOgb6ItRRn
+      zF9Av84ApTO2y0GqbLXpReQ5Or1hoQRyhie2xUHRw51/lGe61T/Bns5cy8BDVbrP
+      U0fLpmBF/jHx1iDX2py5Pt2EyTg7zmJpbUST0st197puHWF8187wgIyg/O6CO4cq
+      nWhIPMJkAbd8Uu04lmGQAUc5mohq5iLr2r+G4y4jycu3XxMiEWiMdWjv/wARAQAB
+      tKZodHRwczovL3BhY2thZ2VjbG91ZC5pby8wMTk4MTU4MC1lZDNhLTRlZWItOTVk
+      Ny0zNTI0MjFlMjIzZTkvMDE5OGE4YTgtMjJlNC03ODIwLTgwYmMtY2FmZjA2ZGQ5
+      ZTZjIChodHRwczovL3BhY2thZ2VjbG91ZC5pby9kb2NzI2dwZ19zaWduaW5nKSA8
+      c3VwcG9ydEBwYWNrYWdlY2xvdWQuaW8+iQJOBBMBCgA4FiEE3feMPm67LSzCI8lc
+      YrqJ0HaY28YFAmid3ToCGy8FCwkIBwIGFQoJCAsCBBYCAwECHgECF4AACgkQYrqJ
+      0HaY28ZLrw/+MHma7N08Uw1qCBHXOz07gzPSLJCa161p7Picsh5pm7cEUhhmiPzc
+      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
+      ENqhTLbMMQq5BcfMm+uPYV5ng25JYjPu
+      =Fin3
+      -----END PGP PUBLIC KEY BLOCK-----
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion is a hard prerequisite for B3: /etc/bash_completion.d
+      # is only read because that package's /etc/profile.d/bash_completion.sh
+      # sources it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Remove predecessor apt sources and keyrings for Helm
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ helm_legacy_paths }}"
+
+    - name: 3. Add the Helm apt repository
+      ansible.builtin.deb822_repository:
+        name: helm
+        types:
+          - deb
+        uris:
+          - "{{ helm_repo_uri }}"
+        suites:
+          - "{{ helm_suite }}"
+        components:
+          - main
+        signed_by: "{{ helm_signing_key }}"
+        state: present
+        mode: '0644'
+      register: helm_repo
+
+    - name: 4. Read the fingerprints in the pinned signing key
+      # Read from the variable, not from a file: with an inline armored key
+      # deb822_repository writes no keyring and embeds the block in the
+      # .sources file, returning key_filename empty. See container/docker.yml
+      # task 5 for the full note.
+      ansible.builtin.command:
+        cmd: gpg --show-keys --with-colons
+        stdin: "{{ helm_signing_key }}"
+      register: helm_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Confirm the pinned key is the Helm repository's signing key
+      ansible.builtin.fail:
+        msg: >-
+          The signing key pinned in this playbook is not
+          {{ helm_key_fingerprint }}. Refusing to configure a repository signed
+          by an unknown key.
+      when: helm_key_fingerprint not in (helm_fpr.stdout | default(''))
+
+    - name: 6. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: helm_repo.changed
+
+    - name: 7. Check the currently installed helm version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' helm
+      register: helm_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 8. Decide whether helm needs installing
+      ansible.builtin.set_fact:
+        helm_install_needed: >-
+          {{ helm_installed.rc != 0 or helm_installed.stdout != helm_version }}
+        helm_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (helm_installed.rc != 0
+                       or helm_installed.stdout != helm_version)) }}
+
+    - name: 8a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install helm {{ helm_version }}, so the version
+          check, the completion generation and the offline smoke tests below
+          are skipped rather than failed. Re-run without --check.
+      when: not (helm_can_verify | bool)
+
+    - name: 8b. Warn when this run changes the installed major version
+      # A 3 -> 4 move is not a routine upgrade: chart API compatibility and the
+      # repository cache layout both change. Said out loud rather than left to
+      # be discovered.
+      ansible.builtin.debug:
+        msg: >-
+          MAJOR VERSION CHANGE: helm {{ helm_installed.stdout }} is installed
+          and this run pins {{ helm_version }}. Charts and repository state
+          written by the other major version may need attention. Pass
+          -e helm_version={{ helm_installed.stdout }} to stay where you are.
+      when:
+        - helm_installed.rc == 0
+        - helm_installed.stdout | length > 0
+        - helm_installed.stdout.split('.')[0] != helm_version.split('.')[0]
+
+    - name: 9. Install helm via apt
+      # allow_downgrade so that the documented 4 -> 3 fallback actually applies
+      # rather than silently leaving 4.x in place.
+      ansible.builtin.apt:
+        name: "helm={{ helm_version }}"
+        state: present
+        allow_downgrade: true
+      when:
+        - helm_install_needed | bool
+        - not (ansible_check_mode and helm_repo.changed)
+
+    - name: 10. Verify the installed helm package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' helm
+      register: helm_dpkg
+      changed_when: false
+      failed_when: helm_dpkg.stdout != helm_version
+      when: helm_can_verify | bool
+
+    - name: 11. Generate the shared bash completion from the installed binary
+      # B3: written once at install time from the binary just installed, rather
+      # than `source <(helm completion bash)` in one account's ~/.bashrc, which
+      # re-runs helm on every interactive shell start.
+      ansible.builtin.command: helm completion bash
+      register: helm_completion
+      changed_when: false
+      check_mode: false
+      when: helm_can_verify | bool
+
+    - name: 12. Install the shared bash completion
+      ansible.builtin.copy:
+        content: "{{ helm_completion.stdout }}\n"
+        dest: /etc/bash_completion.d/helm
+        owner: root
+        group: root
+        mode: '0644'
+      when: helm_can_verify | bool
+
+    - name: 13. Create the scratch chart for the unprivileged checks
+      # helm writes ~/.config/helm and ~/.cache/helm on first run, so the
+      # scratch directory doubles as HOME. Owned by the verifying uid because
+      # helm must be able to create those directories inside it.
+      ansible.builtin.file:
+        path: "{{ helm_smoke_dir }}/chart/templates"
+        state: directory
+        owner: "{{ helm_verify_uid }}"
+        group: "{{ helm_verify_gid }}"
+        mode: '0755'
+        recurse: true
+      check_mode: false
+
+    - name: 14. Write a minimal but real chart
+      # Deliberately exercises the template engine rather than just the parser:
+      # the ConfigMap interpolates both a release value and a chart value, so
+      # rendering it proves helm's own rendering path works for an account with
+      # no configuration of its own.
+      ansible.builtin.copy:
+        dest: "{{ helm_smoke_dir }}/chart/{{ item.name }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: Chart.yaml
+          content: |
+            apiVersion: v2
+            name: smoke
+            description: Multi-user install verification chart
+            type: application
+            version: 0.1.0
+            appVersion: "1.0.0"
+        - name: values.yaml
+          content: |
+            value: multiuser
+        - name: templates/configmap.yaml
+          content: |
+            {% raw %}apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: {{ .Release.Name }}-smoke
+            data:
+              key: {{ .Values.value | quote }}
+            {% endraw %}
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: false
+
+    - name: 15. Report the helm version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ helm_verify_uid }} --regid={{ helm_verify_gid }} --clear-groups
+          env HOME={{ helm_smoke_dir }} helm version
+        chdir: "{{ helm_smoke_dir }}"
+      register: helm_smoke_version
+      changed_when: false
+      failed_when: ('v' ~ helm_version.split('-')[0]) not in helm_smoke_version.stdout
+      when: helm_can_verify | bool
+
+    - name: 16. Lint the chart as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ helm_verify_uid }} --regid={{ helm_verify_gid }} --clear-groups
+          env HOME={{ helm_smoke_dir }} helm lint chart
+        chdir: "{{ helm_smoke_dir }}"
+      register: helm_smoke_lint
+      changed_when: false
+      failed_when: "'0 chart(s) failed' not in helm_smoke_lint.stdout"
+      when: helm_can_verify | bool
+
+    - name: 17. Render the chart offline as an unprivileged user
+      # B4 verification, level 1 -- offline real work. `helm template` renders
+      # locally and contacts no cluster, so it exercises the real templating
+      # engine with no ~/.kube/config and no API server.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ helm_verify_uid }} --regid={{ helm_verify_gid }} --clear-groups
+          env HOME={{ helm_smoke_dir }} helm template smoke chart
+        chdir: "{{ helm_smoke_dir }}"
+      register: helm_smoke_template
+      changed_when: false
+      failed_when: >-
+        'name: smoke-smoke' not in helm_smoke_template.stdout
+        or 'key: "multiuser"' not in helm_smoke_template.stdout
+      when: helm_can_verify | bool
+
+    - name: 18. Confirm the shared completion is loaded by an unprivileged shell
+      # Proves B3 end to end rather than merely writing a file.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ helm_verify_uid }} --regid={{ helm_verify_gid }} --clear-groups
+          env -i HOME={{ helm_smoke_dir }} TERM=xterm PS1=$
+          bash -ic 'complete -p helm >/dev/null 2>&1 && echo COMPLETION_OK'
+        chdir: "{{ helm_smoke_dir }}"
+      register: helm_smoke_completion
+      changed_when: false
+      failed_when: "'COMPLETION_OK' not in helm_smoke_completion.stdout"
+      when: helm_can_verify | bool
+
+    - name: 19. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ helm_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 20. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               'Helm ' ~ helm_version ~ ' '
+               ~ (helm_can_verify | bool
+                  | ternary('is installed system-wide.', 'would be installed system-wide.')),
+               '',
+               '  /usr/bin/helm',
+               '  /etc/apt/sources.list.d/helm.sources   (signing key inline)',
+               '  /etc/bash_completion.d/helm            shared, generated from the binary',
+               '',
+             ]
+             + (helm_can_verify | bool
+                | ternary(['Verified: an unprivileged account (uid ' ~ helm_verify_uid
+                           ~ ') linted and rendered a real chart offline, and gets the shared',
+                           'completion in a non-login interactive shell.'],
+                          ['Not verified: this was a --check run.']))
+             + ['',
+                'This is Helm ' ~ helm_version.split('.')[0] ~ '.x. The source playbook was '
+                ~ 'unpinned, so hosts it ran on may',
+                'carry either major version. To stay on the 3.x line:',
+                '  ansible-playbook container/helm.yml -e host=<host> -e helm_version=3.21.3-1',
+                '',
+                'No chart repositories are configured by this playbook. Each account runs, for',
+                'itself:',
+                '  helm repo add <name> <url>     # writes ~/.config/helm/repositories.yaml',
+                '  helm repo update']
+          ) | join('\n') }}

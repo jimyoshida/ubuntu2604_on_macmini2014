@@ -1,0 +1,478 @@
+---
+# Install Docker Engine system-wide on a multi-user workstation.
+#
+#   /usr/bin/docker                            the CLI
+#   /usr/libexec/docker/cli-plugins/           buildx and compose, shared
+#   /etc/apt/sources.list.d/docker.sources     repository definition, with
+#                                              Docker's signing key inline
+#
+# THE DEFAULT GRANTS NOBODY ACCESS TO THE DAEMON, AND THAT IS DELIBERATE.
+# Membership of the `docker` group is equivalent to passwordless root on this
+# host: the socket it grants will start a container with the host filesystem
+# bind-mounted, as root. The source playbook (container/docker.yml) added
+# whoever ran it, read from lookup('env', 'USER'). This one adds only the
+# accounts named in docker_users, which defaults to empty -- so a fresh run
+# produces a working daemon that the invoking account cannot talk to. That is
+# the correct default on a shared box, and it will look like a regression to
+# the first person who hits it (MIGRATION3.md B1).
+#
+#   ansible-playbook container/docker.yml -e host=ws01 -e docker_users=alice,bob
+#
+# Grants are additive: an account left out of the list keeps whatever it
+# already has. Revoking is a deliberate act, not a side effect of running with
+# a shorter list.
+#
+# Alternatives to the grant, both real:
+#   - rootless Docker, via the docker-ce-rootless-extras package this playbook
+#     installs (`dockerd-rootless-setuptool.sh install`, per account)
+#   - podman (container/podman.yml), which needs no grant at all
+#
+# What else changed versus the source playbook: A5 cleanup (deb822_repository
+# instead of get_url + a `force: true` re-download that reported `changed` on
+# every run, architecture from facts instead of a hardcoded arch=amd64), all
+# five packages pinned, and the `xhost +local:docker` line appended to the
+# invoker's ~/.bashrc deleted with nothing replacing it (B5, decided
+# 2026-08-14).
+#
+# Per-user state (~/.docker/config.json, ~/.docker/contexts) is created by each
+# account the first time it runs docker. This playbook touches none of it (B2).
+#
+# Usage:
+#   ansible-playbook container/docker.yml -e host=<inventory host or group>
+#   ansible-playbook container/docker.yml -e host=ws01 -e docker_users=alice,bob
+
+- name: Install Docker Engine system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Release-specific pins: the version string embeds the Ubuntu codename, so
+    # these are not portable across releases the way a plain semver pin is.
+    # Check `apt-cache policy` on the target before bumping.
+    docker_version: "5:29.7.2-1~ubuntu.26.04~resolute"
+    containerd_version: "2.3.3-1~ubuntu.26.04~resolute"
+    docker_buildx_version: "0.36.1-1~ubuntu.26.04~resolute"
+    docker_compose_version: "5.4.0-1~ubuntu.26.04~resolute"
+    # Accounts to add to the `docker` group. ROOT-EQUIVALENT -- see the header.
+    # Never defaulted to the connecting account, never read from the
+    # environment. Accepts a comma-separated string or a YAML list, matching
+    # _personal/'s target_users.
+    docker_users: []
+    docker_repo_uri: "https://download.docker.com/linux/ubuntu"
+    # ansible_facts['architecture'] -> apt architecture name. The repository
+    # publishes amd64 and arm64; the source playbook hardcoded arch=amd64.
+    docker_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    docker_arch: "{{ docker_arch_map.get(ansible_facts['architecture'], '') }}"
+    # The source playbook used apt_repository with no filename:, so apt named
+    # the file after the URI. Left in place beside the .sources file below, apt
+    # reads the repository twice and warns about it.
+    docker_legacy_source: /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
+    docker_smoke_home: /var/tmp/docker-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user, and --
+    # more importantly here -- that an account outside the group is refused.
+    docker_verify_uid: 65534    # nobody
+    docker_verify_gid: 65534    # nogroup
+    # Docker's release-signing key, fingerprint
+    # 9DC858229FC7DD38854AE2D88D81803C0EBFCD88. It carries NO EXPIRY, so
+    # MIGRATION2's rule says to pin the bytes as well as the fingerprint: the
+    # key material is the trust anchor and a rotation should fail apt's Release
+    # check loudly rather than be followed silently. (Contrast github-cli.yml,
+    # whose signing key expires and is therefore fetched each run with only its
+    # fingerprint pinned.) Task 6 asserts the fingerprint too, which catches a
+    # mangled paste of the block below.
+    docker_key_fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+    docker_signing_key: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+
+      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
+      YT90qFF93M3v01BbxP+EIY2/9tiIPbrd
+      =0YYh
+      -----END PGP PUBLIC KEY BLOCK-----
+
+  pre_tasks:
+    - name: 0. Normalise docker_users into a list
+      ansible.builtin.set_fact:
+        docker_user_list: >-
+          {{ (docker_users.split(',') if docker_users is string else docker_users)
+             | map('trim') | select | list }}
+
+    - name: 0a. Read the target host's passwd database
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: 0b. Require every account named for the docker group to exist
+      ansible.builtin.assert:
+        that: item in ansible_facts.getent_passwd
+        fail_msg: "No account '{{ item }}' on {{ inventory_hostname }}."
+      loop: "{{ docker_user_list }}"
+
+    # Said out loud, before anything happens, because this is the one grant in
+    # this repo that is worth root. The list can also be silently truncated
+    # upstream of the playbook: `-e docker_users="alice, bob"` splits on
+    # whitespace at the shell and binds only "alice,".
+    - name: 0c. Show which accounts this run will grant root-equivalent access to
+      ansible.builtin.debug:
+        msg: >-
+          {{ (docker_user_list | length > 0)
+             | ternary('GRANTING ROOT-EQUIVALENT DOCKER ACCESS on ' ~ inventory_hostname
+                       ~ ' to ' ~ (docker_user_list | length) ~ ' account(s): '
+                       ~ (docker_user_list | join(', ')),
+                       'No docker_users given: this run grants nobody access to the '
+                       ~ 'daemon. The engine will be installed and running, and no '
+                       ~ 'account will be able to talk to it.') }}
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 5. The source
+      # playbook needed neither, and its apt-transport-https is unnecessary:
+      # apt has spoken https natively since 1.5.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No Docker apt architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to docker_arch_map.
+      when: docker_arch | length == 0
+
+    - name: 3. Remove the single-user playbook's apt source for this repository
+      # The old auto-named .list. Its keyring is the same /etc/apt/keyrings/
+      # docker.asc the module writes below, so there is no stale keyring to
+      # clean up here -- only the duplicate source definition.
+      ansible.builtin.file:
+        path: "{{ docker_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the Docker apt repository
+      # download.docker.com publishes for this release directly, so unlike the
+      # Microsoft and HashiCorp repositories no codename map is needed --
+      # ansible_facts['distribution_release'] is used as-is. Confirm the suite
+      # exists before bumping to a new Ubuntu release.
+      ansible.builtin.deb822_repository:
+        name: docker
+        types:
+          - deb
+        uris:
+          - "{{ docker_repo_uri }}"
+        suites:
+          - "{{ ansible_facts['distribution_release'] }}"
+        components:
+          - stable
+        architectures:
+          - "{{ docker_arch }}"
+        signed_by: "{{ docker_signing_key }}"
+        state: present
+        mode: '0644'
+      register: docker_repo
+
+    - name: 5. Read the fingerprints in the pinned signing key
+      # The key is read from the playbook variable, not from a file on the
+      # target, because with an INLINE armored key deb822_repository writes no
+      # keyring at all: it embeds the block in the .sources file's Signed-By:
+      # field. It also returns `key_filename` as an empty value rather than
+      # leaving it undefined, so `| default('/etc/apt/keyrings/docker.asc')`
+      # does NOT fire -- Jinja's default() only substitutes undefined values
+      # unless given `true` as its second argument. An earlier draft of this
+      # task ran gpg with an empty path and failed here for that reason.
+      #
+      # (The URL form of A5, as in cloud-cli/github-cli.yml, behaves the other
+      # way: the module downloads the key to /etc/apt/keyrings/<name>.gpg and
+      # does return key_filename. The two forms are not interchangeable in a
+      # task that wants to inspect the key.)
+      #
+      # Verifying the variable is the check that matters anyway: it asserts
+      # that the bytes this playbook pins really are Docker's key, which is
+      # what a mangled paste or a substituted block would break. apt verifies
+      # the other direction for itself -- a repository signed by anything else
+      # fails its Release check.
+      ansible.builtin.command:
+        cmd: gpg --show-keys --with-colons
+        stdin: "{{ docker_signing_key }}"
+      register: docker_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Confirm the pinned key is Docker's signing key
+      ansible.builtin.fail:
+        msg: >-
+          The signing key pinned in this playbook is not Docker's key
+          {{ docker_key_fingerprint }}. Refusing to configure a repository
+          signed by an unknown key.
+      when: docker_key_fingerprint not in (docker_fpr.stdout | default(''))
+
+    - name: 7. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: docker_repo.changed
+
+    - name: 8. Check the currently installed Docker package versions
+      # check_mode: false because this reads state that already exists -- a
+      # skipped command task registers rc 0 and an empty stdout, which task 9
+      # would read as "nothing is at the pinned version" by accident rather
+      # than by measurement.
+      ansible.builtin.command:
+        cmd: >-
+          dpkg-query -W -f='${Package} ${Version}\n'
+          docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      register: docker_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether the Docker packages need installing
+      ansible.builtin.set_fact:
+        docker_install_needed: >-
+          {{ ('docker-ce ' ~ docker_version) not in docker_installed.stdout
+             or ('docker-ce-cli ' ~ docker_version) not in docker_installed.stdout
+             or ('containerd.io ' ~ containerd_version) not in docker_installed.stdout
+             or ('docker-buildx-plugin ' ~ docker_buildx_version) not in docker_installed.stdout
+             or ('docker-compose-plugin ' ~ docker_compose_version) not in docker_installed.stdout }}
+        docker_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (('docker-ce ' ~ docker_version) not in docker_installed.stdout
+                       or ('docker-ce-cli ' ~ docker_version) not in docker_installed.stdout
+                       or ('containerd.io ' ~ containerd_version) not in docker_installed.stdout
+                       or ('docker-buildx-plugin ' ~ docker_buildx_version) not in docker_installed.stdout
+                       or ('docker-compose-plugin ' ~ docker_compose_version) not in docker_installed.stdout)) }}
+
+    - name: 9a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install the pinned Docker packages, so the version
+          check, the daemon state and the unprivileged checks below are skipped
+          rather than failed. Re-run without --check to verify.
+      when: not (docker_can_verify | bool)
+
+    - name: 10. Install Docker Engine, CLI, containerd and the CLI plugins
+      # docker-ce-rootless-extras is installed but not configured: it is what
+      # makes rootless Docker available to an account that would otherwise need
+      # the root-equivalent group grant, and each account opts in for itself
+      # with `dockerd-rootless-setuptool.sh install`.
+      #
+      # allow_downgrade so that moving a pin backwards actually applies.
+      ansible.builtin.apt:
+        name:
+          - "docker-ce={{ docker_version }}"
+          - "docker-ce-cli={{ docker_version }}"
+          - "containerd.io={{ containerd_version }}"
+          - "docker-buildx-plugin={{ docker_buildx_version }}"
+          - "docker-compose-plugin={{ docker_compose_version }}"
+          - "docker-ce-rootless-extras={{ docker_version }}"
+        state: present
+        allow_downgrade: true
+      when:
+        - docker_install_needed | bool
+        - not (ansible_check_mode and docker_repo.changed)
+
+    - name: 11. Verify the installed Docker package versions
+      ansible.builtin.command:
+        cmd: >-
+          dpkg-query -W -f='${Package} ${Version}\n'
+          docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      register: docker_dpkg
+      changed_when: false
+      failed_when: >-
+        ('docker-ce ' ~ docker_version) not in docker_dpkg.stdout
+        or ('docker-ce-cli ' ~ docker_version) not in docker_dpkg.stdout
+        or ('containerd.io ' ~ containerd_version) not in docker_dpkg.stdout
+        or ('docker-buildx-plugin ' ~ docker_buildx_version) not in docker_dpkg.stdout
+        or ('docker-compose-plugin ' ~ docker_compose_version) not in docker_dpkg.stdout
+      when: docker_can_verify | bool
+
+    - name: 12. Ensure the Docker daemon is enabled and running
+      # The package enables it on install; this asserts the state rather than
+      # assuming it, since the smoke tests below distinguish "cannot reach the
+      # socket" from "there is no socket".
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+      when: docker_can_verify | bool
+
+    - name: 13. Add the named accounts to the docker group
+      # append: true is the whole of B1's "grants are additive" rule: this must
+      # not remove a membership the run did not name. With docker_users empty
+      # the loop is empty and nothing is granted or revoked.
+      ansible.builtin.user:
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      loop: "{{ docker_user_list }}"
+
+    - name: 14. Create a scratch HOME for the unprivileged checks
+      # docker reads ~/.docker. /var/tmp rather than /tmp, which is a
+      # size-capped tmpfs on these hosts (MIGRATION.md's grype-syft finding).
+      ansible.builtin.file:
+        path: "{{ docker_smoke_home }}"
+        state: directory
+        owner: "{{ docker_verify_uid }}"
+        group: "{{ docker_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 15. List docker contexts as an unprivileged user
+      # B4 verification, level 2 -- a subcommand that inspects the install
+      # itself. It resolves the context configuration and reports the default
+      # endpoint without needing to reach the daemon.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ docker_verify_uid }} --regid={{ docker_verify_gid }} --clear-groups
+          env HOME={{ docker_smoke_home }} docker context ls
+        chdir: "{{ docker_smoke_home }}"
+      register: docker_smoke_context
+      changed_when: false
+      failed_when: "'unix:///var/run/docker.sock' not in docker_smoke_context.stdout"
+      when: docker_can_verify | bool
+
+    - name: 16. Run the buildx CLI plugin as an unprivileged user
+      # This is the actual multi-user question for Docker's CLI: the plugins
+      # live in /usr/libexec/docker/cli-plugins, and a plugin directory that
+      # only root can traverse would leave `docker buildx` working for the
+      # account that ran the playbook and nobody else.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ docker_verify_uid }} --regid={{ docker_verify_gid }} --clear-groups
+          env HOME={{ docker_smoke_home }} docker buildx version
+        chdir: "{{ docker_smoke_home }}"
+      register: docker_smoke_buildx
+      changed_when: false
+      failed_when: "'github.com/docker/buildx' not in docker_smoke_buildx.stdout"
+      when: docker_can_verify | bool
+
+    - name: 17. Assert that an ungranted account CANNOT reach the daemon
+      # B4's negative assertion, and the most important check in this playbook:
+      # it proves the grant is a grant. uid 65534 is never in docker_users, so
+      # it must be refused at the socket. A run where an ungranted account can
+      # drive the daemon is a finding, not a pass.
+      #
+      # The error text is matched rather than the exit status alone, because
+      # `docker ps` exits non-zero for many reasons -- including a daemon that
+      # is simply not running, which would make this assertion pass while
+      # proving nothing.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ docker_verify_uid }} --regid={{ docker_verify_gid }} --clear-groups
+          env HOME={{ docker_smoke_home }} docker ps
+        chdir: "{{ docker_smoke_home }}"
+      register: docker_smoke_refused
+      changed_when: false
+      failed_when: >-
+        docker_smoke_refused.rc == 0
+        or 'permission denied' not in (docker_smoke_refused.stderr | lower)
+        or '/var/run/docker.sock' not in docker_smoke_refused.stderr
+      when: docker_can_verify | bool
+
+    - name: 18. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ docker_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 19. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               'Docker Engine ' ~ docker_version ~ ' (' ~ docker_arch ~ ') '
+               ~ (docker_can_verify | bool
+                  | ternary('is installed and running.', 'would be installed.')),
+               '',
+               '  /usr/bin/docker',
+               '  /usr/libexec/docker/cli-plugins/   buildx ' ~ docker_buildx_version
+               ~ ', compose ' ~ docker_compose_version,
+               '  /etc/apt/sources.list.d/docker.sources   (signing key inline)',
+               '',
+             ]
+             + (docker_can_verify | bool
+                | ternary(['Verified: an unprivileged account (uid ' ~ docker_verify_uid
+                           ~ ') can run the CLI and its buildx plugin, and is REFUSED at the '
+                           ~ 'socket -- so group membership is what grants access, as intended.'],
+                          ['Not verified: this was a --check run.']))
+             + ['']
+             + ((docker_user_list | length > 0)
+                | ternary(['Granted membership of the `docker` group to: '
+                           ~ (docker_user_list | join(', ')),
+                           'That is EQUIVALENT TO PASSWORDLESS ROOT on this host: the socket will',
+                           'start a container with the host filesystem bind-mounted, as root.',
+                           'Members must log out and back in for the new group to take effect.'],
+                          ['Docker is installed and running. No account was granted access to the socket.',
+                           'Membership of the `docker` group is equivalent to passwordless root on this host.',
+                           'Grant it deliberately, per account:',
+                           '  ansible-playbook container/docker.yml -e host=' ~ inventory_hostname
+                           ~ ' -e docker_users=alice,bob',
+                           '',
+                           'This is NOT a bug and NOT a regression from container/docker.yml, which',
+                           'granted it automatically to whoever ran it. If you want the daemon usable',
+                           'without a root-equivalent grant, use rootless Docker',
+                           '(dockerd-rootless-setuptool.sh install, per account) or podman.']))
+          ) | join('\n') }}

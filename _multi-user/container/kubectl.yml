@@ -1,0 +1,367 @@
+---
+# Install kubectl system-wide on a multi-user workstation.
+#
+#   /usr/bin/kubectl                             from pkgs.k8s.io
+#   /etc/apt/sources.list.d/kubernetes.sources   repository definition
+#   /etc/apt/preferences.d/kubectl               THE PIN THAT MAKES IT STICK
+#   /etc/bash_completion.d/kubectl               generated from the binary
+#   /etc/profile.d/kubectl.sh                    the `k` alias
+#
+# This playbook exists to win an argument with apt, and the preferences file is
+# how it wins. Two repositories publish a package called `kubectl`:
+#
+#   pkgs.k8s.io          1.36.3-1.1     the real Kubernetes client
+#   packages.cloud.google.com  1:580.0.0-0   the Cloud SDK's dispatcher build
+#
+# The Google package carries an EPOCH, so its version outranks every version
+# upstream will ever publish, forever. Neither declares Conflicts or Replaces
+# and both ship /usr/bin/kubectl, so exactly one can be installed and without
+# intervention it is always Google's -- on any host that has ever run
+# cloud-cli/gcloud-cli.yml, which does not install kubectl and has no idea it
+# is involved. The source playbook's unpinned `apt: name=kubectl` therefore
+# installed a different vendor's binary than the repository it had just
+# configured, and reported success (MIGRATION3.md B5, decision (a)).
+#
+# Pinning at install time is not enough: `apt install kubectl=1.36.3-1.1
+# --allow-downgrades` works once, and the next unrelated `apt upgrade` drags
+# the epoch straight back. Priority 1001 is required rather than merely
+# preferred, because the correct version is "lower" than the incumbent and only
+# a priority above 1000 permits a downgrade.
+#
+# Per-user state: ~/.kube/config, created by each account for itself. This
+# playbook does not create, share, or pre-populate it (B2) -- it installs a
+# client and configures no cluster.
+#
+# Usage:
+#   ansible-playbook container/kubectl.yml -e host=<inventory host or group>
+#   ansible-playbook container/kubectl.yml -e host=ws01 -e kubectl_version=1.36.3-1.1
+
+- name: Install kubectl system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # The stream is part of the pin: moving to v1.37 means editing
+    # kubectl_stream as well as kubectl_version, because pkgs.k8s.io publishes
+    # one minor version per repository. As of 2026-08-14 the v1.36 stream
+    # carries exactly one version and no v1.37 stream exists yet.
+    kubectl_stream: "v1.36"
+    kubectl_version: "1.36.3-1.1"
+    kubectl_repo_uri: "https://pkgs.k8s.io/core:/stable:/{{ kubectl_stream }}/deb/"
+    kubectl_key_url: "https://pkgs.k8s.io/core:/stable:/{{ kubectl_stream }}/deb/Release.key"
+    # The OBS project key for this stream. It EXPIRES 2026-12-29, so
+    # MIGRATION2's rule puts this on the URL form: fetch each run (the module
+    # compares by checksum, so it stays idempotent) and pin only the
+    # fingerprint. Pinning the bytes, as container/docker.yml does for Docker's
+    # non-expiring key, would simply stop working at the end of the year.
+    #
+    # Unlike cloud-cli/github-cli.yml there is no published successor key to
+    # assert instead, so when this one is rotated the run will fail here rather
+    # than trust a new key silently. That is the intended failure: re-check the
+    # fingerprint against pkgs.k8s.io and update this value deliberately.
+    kubectl_key_fingerprint: "DE15B14486CD377B9E876E1A234654DA9A296436"
+    # apt's "origin" in a preferences file is the SITE (hostname), not the
+    # Origin: field of the Release file.
+    kubectl_pin_origin: "pkgs.k8s.io"
+    kubectl_pin_priority: 1001
+    # The source playbook's apt source, still pointing at the EOL v1.30 stream.
+    kubectl_legacy_source: /etc/apt/sources.list.d/kubernetes.list
+    kubectl_smoke_dir: /var/tmp/kubectl-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    kubectl_verify_uid: 65534    # nobody
+    kubectl_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion is a hard prerequisite for B3's shared completion:
+      # /etc/bash_completion.d is only read because that package's
+      # /etc/profile.d/bash_completion.sh sources it. python3-debian is what
+      # deb822_repository needs; gnupg is for the fingerprint assertion.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Remove the single-user playbook's apt source for this repository
+      # container/kubectl.yml wrote kubernetes.list for the v1.30 stream, which
+      # is EOL. Left in place it is a second repository for the same package
+      # name, which is the class of problem this playbook is about.
+      ansible.builtin.file:
+        path: "{{ kubectl_legacy_source }}"
+        state: absent
+
+    - name: 3. Add the Kubernetes apt repository
+      # A flat repository: the URI ends in a slash and the suite is literally
+      # "/", with no components. deb822_repository expresses that as a single
+      # "/" suite and no Components field.
+      ansible.builtin.deb822_repository:
+        name: kubernetes
+        types:
+          - deb
+        uris:
+          - "{{ kubectl_repo_uri }}"
+        suites:
+          - "/"
+        signed_by: "{{ kubectl_key_url }}"
+        state: present
+        mode: '0644'
+      register: kubectl_repo
+
+    - name: 4. Read the fingerprints in the repository keyring
+      # The URL form of A5 does write a keyring file and does return
+      # key_filename -- unlike the inline form used by container/docker.yml,
+      # which embeds the key in the .sources file and returns key_filename
+      # empty. check_mode: false so a dry run still measures the real keyring.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ kubectl_repo.key_filename | default('/etc/apt/keyrings/kubernetes.asc', true) }}
+      register: kubectl_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Confirm the keyring holds the Kubernetes stream's signing key
+      ansible.builtin.fail:
+        msg: >-
+          The keyring for {{ kubectl_repo_uri }} does not contain the expected
+          signing key {{ kubectl_key_fingerprint }}. It may have been rotated
+          (this key expires 2026-12-29). Verify the new key against pkgs.k8s.io
+          and update kubectl_key_fingerprint deliberately -- do not delete this
+          check.
+      when:
+        - kubectl_key_fingerprint not in (kubectl_fpr.stdout | default(''))
+        - not (ansible_check_mode and kubectl_fpr.rc | default(1) != 0)
+
+    - name: 6. Pin the kubectl package to the Kubernetes repository
+      # Written BEFORE the install, because it is what makes the install
+      # resolve to the intended vendor. Priority 1001 (not 990, not 1000)
+      # because the pinned version is lower than the incumbent epoch and only
+      # >1000 permits apt to move backwards.
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/kubectl
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Managed by _multi-user/container/kubectl.yml
+          #
+          # packages.cloud.google.com publishes a `kubectl` package with an epoch
+          # (1:...), which outranks every version pkgs.k8s.io will ever publish.
+          # Without this pin, any `apt upgrade` on a host that has the Cloud SDK
+          # repository replaces the Kubernetes client with the Cloud SDK's
+          # dispatcher build, silently.
+          Package: kubectl
+          Pin: origin "{{ kubectl_pin_origin }}"
+          Pin-Priority: {{ kubectl_pin_priority }}
+      register: kubectl_preferences
+
+    - name: 7. Refresh the apt cache when the repository or the pin changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: kubectl_repo.changed or kubectl_preferences.changed
+
+    - name: 8. Check the currently installed kubectl version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' kubectl
+      register: kubectl_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether kubectl needs installing
+      ansible.builtin.set_fact:
+        kubectl_install_needed: >-
+          {{ kubectl_installed.rc != 0 or kubectl_installed.stdout != kubectl_version }}
+        kubectl_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (kubectl_installed.rc != 0
+                       or kubectl_installed.stdout != kubectl_version)) }}
+
+    - name: 9a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install kubectl {{ kubectl_version }}, so the version
+          check, the completion generation and the unprivileged smoke tests
+          below are skipped rather than failed. Re-run without --check.
+      when: not (kubectl_can_verify | bool)
+
+    - name: 10. Install kubectl via apt
+      # allow_downgrade is not optional here: replacing Google's epoch package
+      # with the upstream one IS a downgrade as far as apt is concerned, and
+      # without this the task silently succeeds while leaving the wrong binary
+      # in place.
+      ansible.builtin.apt:
+        name: "kubectl={{ kubectl_version }}"
+        state: present
+        allow_downgrade: true
+      when:
+        - kubectl_install_needed | bool
+        - not (ansible_check_mode and kubectl_repo.changed)
+
+    - name: 11. Verify the installed kubectl package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' kubectl
+      register: kubectl_dpkg
+      changed_when: false
+      failed_when: kubectl_dpkg.stdout != kubectl_version
+      when: kubectl_can_verify | bool
+
+    - name: 12. Confirm apt will not replace kubectl on the next upgrade
+      # The whole point of task 6, asserted rather than assumed. apt-cache
+      # policy reports the candidate it would install; if the epoch package is
+      # still winning, the pin is not doing its job and the next `apt upgrade`
+      # on this host would undo this playbook.
+      ansible.builtin.command: apt-cache policy kubectl
+      register: kubectl_policy
+      changed_when: false
+      failed_when: >-
+        ('Candidate: ' ~ kubectl_version) not in kubectl_policy.stdout
+      when: kubectl_can_verify | bool
+
+    - name: 13. Generate the shared bash completion from the installed binary
+      # B3: written once at install time from the binary that was just
+      # installed, rather than `source <(kubectl completion bash)` in each
+      # account's ~/.bashrc -- which re-runs the tool on every interactive
+      # shell start and breaks for any account whose PATH lacks it. Writing the
+      # generated output also versions the completion with the install: it
+      # changes when the pin changes, and shows up as `changed` when it does.
+      ansible.builtin.command: kubectl completion bash
+      register: kubectl_completion
+      changed_when: false
+      check_mode: false
+      when: kubectl_can_verify | bool
+
+    - name: 14. Install the shared bash completion
+      ansible.builtin.copy:
+        content: "{{ kubectl_completion.stdout }}\n"
+        dest: /etc/bash_completion.d/kubectl
+        owner: root
+        group: root
+        mode: '0644'
+      when: kubectl_can_verify | bool
+
+    - name: 15. Install the shared `k` alias
+      # The alias is not completion data, so it goes to /etc/profile.d rather
+      # than /etc/bash_completion.d -- and needs the /etc/bash.bashrc bootstrap
+      # that _multi-user/tools/modern-cli-tools.yml installs to be read by
+      # non-login interactive shells.
+      #
+      # The completion file is sourced defensively rather than assumed: if
+      # profile.d is read before the compat directory, __start_kubectl does not
+      # exist yet and `complete -F` would fail noisily in every shell.
+      ansible.builtin.copy:
+        dest: /etc/profile.d/kubectl.sh
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Managed by _multi-user/container/kubectl.yml
+          alias k=kubectl
+          if ! declare -F __start_kubectl >/dev/null 2>&1 \
+             && [ -r /etc/bash_completion.d/kubectl ]; then
+              . /etc/bash_completion.d/kubectl
+          fi
+          if declare -F __start_kubectl >/dev/null 2>&1; then
+              complete -o default -F __start_kubectl k
+          fi
+
+    - name: 16. Create the scratch directory for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ kubectl_smoke_dir }}"
+        state: directory
+        owner: "{{ kubectl_verify_uid }}"
+        group: "{{ kubectl_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 17. Report the client version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kubectl_verify_uid }} --regid={{ kubectl_verify_gid }} --clear-groups
+          env HOME={{ kubectl_smoke_dir }} kubectl version --client
+        chdir: "{{ kubectl_smoke_dir }}"
+      register: kubectl_smoke_version
+      changed_when: false
+      failed_when: >-
+        ('v' ~ kubectl_version.split('-')[0]) not in kubectl_smoke_version.stdout
+        or 'dispatcher' in kubectl_smoke_version.stdout
+      when: kubectl_can_verify | bool
+
+    - name: 18. Build a manifest offline as an unprivileged user
+      # B4 verification, level 1 -- offline real work. --dry-run=client renders
+      # the object through kubectl's own scheme and serializer without
+      # contacting an API server, so it exercises the real client with no
+      # cluster and no ~/.kube/config.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kubectl_verify_uid }} --regid={{ kubectl_verify_gid }} --clear-groups
+          env HOME={{ kubectl_smoke_dir }}
+          kubectl create deployment smoke --image=nginx:1.29 --dry-run=client -o yaml
+        chdir: "{{ kubectl_smoke_dir }}"
+      register: kubectl_smoke_dryrun
+      changed_when: false
+      failed_when: >-
+        'kind: Deployment' not in kubectl_smoke_dryrun.stdout
+        or 'image: nginx:1.29' not in kubectl_smoke_dryrun.stdout
+      when: kubectl_can_verify | bool
+
+    - name: 19. Confirm the shared completion is loaded by an unprivileged shell
+      # Proves B3 end to end rather than merely writing a file: a non-login
+      # interactive shell for an arbitrary uid must define __start_kubectl,
+      # which only happens if bash-completion reads /etc/bash_completion.d.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kubectl_verify_uid }} --regid={{ kubectl_verify_gid }} --clear-groups
+          env -i HOME={{ kubectl_smoke_dir }} TERM=xterm PS1=$
+          bash -ic 'declare -F __start_kubectl >/dev/null && echo COMPLETION_OK'
+        chdir: "{{ kubectl_smoke_dir }}"
+      register: kubectl_smoke_completion
+      changed_when: false
+      failed_when: "'COMPLETION_OK' not in kubectl_smoke_completion.stdout"
+      when: kubectl_can_verify | bool
+
+    - name: 20. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ kubectl_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 21. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               'kubectl ' ~ kubectl_version ~ ' (' ~ kubectl_stream ~ ' stream) '
+               ~ (kubectl_can_verify | bool
+                  | ternary('is installed system-wide.', 'would be installed system-wide.')),
+               '',
+               '  /usr/bin/kubectl',
+               '  /etc/apt/sources.list.d/kubernetes.sources',
+               '  /etc/apt/preferences.d/kubectl        pinned to ' ~ kubectl_pin_origin
+               ~ ' at priority ' ~ kubectl_pin_priority,
+               '  /etc/bash_completion.d/kubectl        shared, generated from the binary',
+               '  /etc/profile.d/kubectl.sh             the `k` alias',
+               '',
+             ]
+             + (kubectl_can_verify | bool
+                | ternary(['Verified: an unprivileged account (uid ' ~ kubectl_verify_uid
+                           ~ ') rendered a Deployment offline with --dry-run=client, and gets the',
+                           'shared completion in a non-login interactive shell.',
+                           '',
+                           'apt candidate is now ' ~ kubectl_version ~ ', not the Cloud SDK epoch build.'],
+                          ['Not verified: this was a --check run.']))
+             + ['',
+                'No cluster is configured. Each account writes its own ~/.kube/config:',
+                '  kubectl config set-cluster / set-credentials / set-context',
+                '  or receive one from whoever runs the cluster.',
+                '',
+                'NOTE: removing /etc/apt/preferences.d/kubectl re-opens the collision with',
+                'packages.cloud.google.com, whose epoch version wins every time.']
+          ) | join('\n') }}

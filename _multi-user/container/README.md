@@ -159,17 +159,147 @@ ansible-playbook container/podman.yml -e host=ws01 \
   -e podman_version=5.7.0+ds2-3build1 -e podman_compose_version=1.5.0-2
 ```
 
+## docker.yml
+
+Installs Docker Engine from `download.docker.com`.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/docker` | the CLI |
+| `/usr/libexec/docker/cli-plugins/` | `buildx` and `compose`, shared by every account |
+| `/etc/apt/sources.list.d/docker.sources` | repository definition, signing key inline |
+
+> **A fresh run grants nobody access to the daemon, and that is deliberate.** The engine is
+> installed and running; no account can talk to it until you name accounts in `docker_users`.
+> `container/docker.yml` added whoever ran it, so this *will* look like a regression. It is
+> not one — see [Grants](#grants).
+
+```bash
+ansible-playbook container/docker.yml -e host=ws01 -e docker_users=alice,bob
+```
+
+Members must log out and back in for the new group to take effect.
+
+**If you do not want a root-equivalent grant,** two real alternatives: rootless Docker, via
+the `docker-ce-rootless-extras` package this playbook installs but does not configure (each
+account runs `dockerd-rootless-setuptool.sh install` for itself), or
+[podman](#podmanyml), which needs no grant at all.
+
+**What changed versus `container/docker.yml`.** All five packages are pinned; the repository
+uses `deb822_repository` with Docker's signing key pinned inline by content (it carries no
+expiry) instead of a `get_url` that re-downloaded with `force: true` on every run;
+architecture comes from facts rather than a hardcoded `arch=amd64`; the auto-named
+`download_docker_com_linux_ubuntu.list` the source playbook left behind is removed; the
+`xhost` line is [gone](#the-xhost-line-is-gone); and the group membership is the explicit
+`docker_users` list.
+
+Verification does something the source playbook never did: as uid 65534 it runs the CLI and
+the `buildx` plugin (proving `/usr/libexec/docker/cli-plugins` is reachable by an ordinary
+account, which is the actual multi-user question for Docker), and then asserts that the same
+account is **refused** at the socket. A run where an ungranted account can drive the daemon
+fails.
+
+The pins embed the Ubuntu codename (`5:29.7.2-1~ubuntu.26.04~resolute`), so they are not
+portable across releases:
+
+```bash
+ansible-playbook container/docker.yml -e host=ws01 \
+  -e docker_version=5:29.7.2-1~ubuntu.26.04~resolute \
+  -e containerd_version=2.3.3-1~ubuntu.26.04~resolute
+```
+
+## kubectl.yml
+
+Installs kubectl from `pkgs.k8s.io`, **and pins apt so it stays installed.**
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/kubectl` | the client |
+| `/etc/apt/sources.list.d/kubernetes.sources` | repository definition (`v1.36` stream) |
+| `/etc/apt/preferences.d/kubectl` | the pin that resolves the collision below |
+| `/etc/bash_completion.d/kubectl` | shared completion, generated from the binary |
+| `/etc/profile.d/kubectl.sh` | the `k` alias, with completion wired to it |
+
+**Two repositories publish a package called `kubectl`, and without the pin the wrong one
+always wins.** `packages.cloud.google.com` — added by `cloud-cli/gcloud-cli.yml`, which does
+not install kubectl and has no idea it is involved — publishes a Cloud SDK dispatcher build
+with an **epoch** (`1:580.0.0-0`). An epoch outranks every version upstream will ever publish.
+Both ship `/usr/bin/kubectl` and neither declares `Conflicts`, so exactly one can be installed,
+and on any host that has ever run `gcloud-cli.yml` it was Google's — which the source
+playbook installed while reporting success. The giveaway is a `-dispatcher` suffix in
+`kubectl version --client`.
+
+Installing the right version once is not enough: the next unrelated `apt upgrade` takes it
+straight back. `/etc/apt/preferences.d/kubectl` pins the `pkgs.k8s.io` origin at priority
+**1001** — above 1000, which is what permits apt to move *backwards* across the epoch. The
+playbook asserts on every run that `apt-cache policy` reports the pinned version as the
+candidate, so the protection is tested rather than assumed.
+
+**Deleting that preferences file re-opens the collision.**
+
+The stream is part of the pin: moving to `v1.37` means editing `kubectl_stream` as well as
+`kubectl_version`. As of 2026-08-14 the `v1.36` stream carries exactly one version and no
+`v1.37` stream exists.
+
+The repository's signing key **expires 2026-12-29**, so it is fetched each run and only its
+fingerprint is pinned. When it rotates, the run fails with instructions rather than trusting
+a new key silently — that is intended; verify the new fingerprint and update it deliberately.
+
+```bash
+ansible-playbook container/kubectl.yml -e host=ws01 -e kubectl_version=1.36.3-1.1
+```
+
+## helm.yml
+
+Installs Helm from `packages.buildkite.com/helm-linux/helm-debian`.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/helm` | the binary |
+| `/etc/apt/sources.list.d/helm.sources` | repository definition, signing key inline |
+| `/etc/bash_completion.d/helm` | shared completion, generated from the binary |
+
+> **This installs Helm 4, where the source playbook may have installed Helm 3.**
+> `container/helm.yml` was unpinned, so what it installed depended on the day it ran and
+> nothing recorded which. Pinning it was a deliberate choice of major version, taken because
+> nothing in this repo templates a chart and Helm was not installed on any host here.
+
+The 3.x line is still published from the same repository under the same package name, so the
+fallback is one flag:
+
+```bash
+ansible-playbook container/helm.yml -e host=ws01 -e helm_version=3.21.3-1
+```
+
+The playbook prints a **MAJOR VERSION CHANGE** warning when a run would move between 3.x and
+4.x in either direction.
+
+**What changed versus `container/helm.yml`.** The version is pinned and verified; the
+repository uses `deb822_repository` with the packagecloud key pinned inline (it carries no
+expiry) instead of `get_url` plus a `shell: gpg --dearmor` that reported `changed` every run;
+the completion moved out of one account's `~/.bashrc` into `/etc/bash_completion.d`; and
+verification is real offline work — as uid 65534 it lints and renders a small chart the
+playbook writes, rather than running `helm version` as the connecting account.
+
 ## Status
 
 | Playbook | Successor to | Pinned | Status |
 | --- | --- | --- | --- |
 | `devcontainers.yml` | `container/devcontainers.yml` | 0.88.0 | Verified (localhost) |
 | `podman.yml` | `container/podman.yml` | podman 5.7.0+ds2-3build1, podman-compose 1.5.0-2 | Verified (localhost) |
+| `docker.yml` | `container/docker.yml` | docker-ce 5:29.7.2-1~ubuntu.26.04~resolute, containerd.io 2.3.3, buildx 0.36.1, compose 5.4.0 | Verified (localhost) |
+| `kubectl.yml` | `container/kubectl.yml` | 1.36.3-1.1 | Verified (localhost) |
+| `helm.yml` | `container/helm.yml` | 4.2.3-1 | Verified (localhost) |
 
-The remaining five (`docker`, `kubectl`, `helm`, `kind`, `minikube`) are not yet written;
-see [MIGRATION3.md](../../MIGRATION3.md#migration-status). `container/krew.yml` is
+The remaining two (`kind`, `minikube`) are not yet written; see
+[MIGRATION3.md](../../MIGRATION3.md#migration-status). `container/krew.yml` is
 [retired](../../README.md#retired-containerkrewyml) rather than migrated, so there will be
 no `krew.yml` here.
+
+**`kind` and `minikube` will only be as multi-user as the `docker` group is.** Both drive
+Docker, so a perfectly migrated playbook installs a binary every account can execute and that
+no account outside `docker_users` can use for anything. That is the honest state of those
+tools, not a defect in the migration.
 
 "Verified (localhost)" carries the same two caveats as everything else in `_multi-user/`:
 the runs were made under ansible-core 2.20 with `ansible_connection=local`, so they
