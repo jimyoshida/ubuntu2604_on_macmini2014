@@ -1,4 +1,4 @@
-# Physical Host Setup (Non-EC2)
+# Desktop Host Setup (Non-EC2)
 
 Manual steps for a host these playbooks no longer configure. Most sections below were removed
 from `core/agent-base.yml` on 2026-08-14 (see
@@ -7,16 +7,26 @@ from `core/agent-base.yml` on 2026-08-14 (see
 the target already satisfies them or doesn't need them. That assumption holds for an AWS EC2
 instance — cloud-init sets the hostname, the AMI ships `sshd` enabled, there is no lid or suspend
 to fight on a VM, and there is no desktop session to blank or lock. None of it holds for a fresh
-physical-PC Ubuntu install, so if that's the target, work through whichever sections below apply
+desktop-PC Ubuntu install, so if that's the target, work through whichever sections below apply
 after `_multi-user/core/core-tools.yml` (`core/core-tools.yml` until it was retired on
 2026-08-16 per [MIGRATION4.md](MIGRATION4.md)) and before treating the box as ready. The
 [Samba](#samba-file-sharing-optional)
 section is different: `core/samba.yml` wasn't removed for being EC2-redundant, it was retired
 outright as out of scope (see
 [Retired: `core/samba.yml`](README.md#retired-coresambayml)) — it's here because sharing a home
-directory over SMB is still something a physical LAN workstation may want, EC2 or not.
+directory over SMB is still something a desktop LAN workstation may want, EC2 or not.
 
 Every command needs root (`sudo`) unless noted otherwise.
+
+## Passwordless sudo
+
+```bash
+./setup-passwordless-sudo.sh
+```
+
+Configures passwordless sudo for the current account — eliminates the need for `-K`
+(or `--ask-become-pass`) flags when running the Ansible playbooks referenced throughout this
+doc, and avoids sudo prompt compatibility issues with newer Ubuntu versions.
 
 ## Hostname
 
@@ -44,8 +54,28 @@ sudo systemctl restart ssh
 ```
 
 Client-side key setup (`~/.ssh` permissions, `authorized_keys`) is
-[`setup-passwordless-ssh.sh`](setup-passwordless-ssh.sh), not this doc — see
-[Passwordless SSH Setup](README.md#passwordless-ssh-setup).
+[Passwordless SSH](#passwordless-ssh) below, not this section.
+
+## Passwordless SSH
+
+After uploading `id_rsa` and `id_rsa.pub` to `~/.ssh` (sshd itself must already be enabled,
+per [SSH server](#ssh-server) above):
+
+```bash
+./setup-passwordless-ssh.sh
+```
+
+Sets `~/.ssh` to `0700`, the private key to `0600`, the public key to `0644` and `config` and
+`authorized_keys` to `0600`, then appends your public key to `authorized_keys` unless that
+exact line is already there. Missing files are reported and skipped rather than treated as an
+error, so it is safe to run before the keys are in place.
+
+This is a script rather than a playbook for the same reason
+[`setup-passwordless-sudo.sh`](#passwordless-sudo) above is: it configures **the account
+running it**, needs no privileges and no remote connection, and touches nothing outside that
+account's `$HOME`. It was `core/ssh-key-setup.yml` until 2026-08-10 — a `become: no`,
+`connection: local` playbook whose every task was a `chmod` — and the conversion cost the repo
+nothing except an Ansible dependency for the one step you run before Ansible is useful.
 
 ## Avahi (mDNS discovery)
 
@@ -185,7 +215,7 @@ sudo journalctl --vacuum-size=500M
 
 ## Samba file sharing (optional)
 
-Shares the current user's home directory over SMB — useful for a physical workstation on a LAN
+Shares the current user's home directory over SMB — useful for a desktop workstation on a LAN
 that other machines (e.g. a macOS laptop) need to browse files on. Not EC2-specific: an EC2
 instance could run this too, it just rarely has anything on the same LAN to share with.
 

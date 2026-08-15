@@ -11,36 +11,14 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y ansible
 ```
 
-## Passwordless Sudo Setup
+## Passwordless sudo and SSH
 
-Configure passwordless sudo first:
-
-```bash
-./setup-passwordless-sudo.sh
-```
-
-This eliminates the need for `-K` (or `--ask-become-pass`) flags and avoids sudo prompt compatibility issues with newer Ubuntu versions.
-
-## Passwordless SSH Setup
-
-After uploading `id_rsa` and `id_rsa.pub` to `~/.ssh` (sshd itself is assumed already enabled on
-the host):
-
-```bash
-./setup-passwordless-ssh.sh
-```
-
-Sets `~/.ssh` to `0700`, the private key to `0600`, the public key to `0644` and `config` and
-`authorized_keys` to `0600`, then appends your public key to `authorized_keys` unless that
-exact line is already there. Missing files are reported and skipped rather than treated as an
-error, so it is safe to run before the keys are in place.
-
-This is a script rather than a playbook for the same reason
-[`setup-passwordless-sudo.sh`](setup-passwordless-sudo.sh) is: it configures **the account
-running it**, needs no privileges and no remote connection, and touches nothing outside that
-account's `$HOME`. It was `core/ssh-key-setup.yml` until 2026-08-10 — a `become: no`,
-`connection: local` playbook whose every task was a `chmod` — and the conversion cost the repo
-nothing except an Ansible dependency for the one step you run before Ansible is useful.
+Both are host-bootstrap steps rather than part of running these playbooks, and are documented
+in [Desktop Host Setup](DESKTOP-HOST-SETUP.md): [Passwordless sudo](DESKTOP-HOST-SETUP.md#passwordless-sudo)
+and [Passwordless SSH](DESKTOP-HOST-SETUP.md#passwordless-ssh). Run both first if this host
+doesn't have them yet — an AWS EC2 instance (or similar cloud image) usually already does: the
+AMI grants the default user passwordless sudo and cloud-init injects your key into
+`authorized_keys` at launch.
 
 ## Playbooks (old)
 
@@ -476,7 +454,7 @@ wave 3 of MIGRATION2.md moved those to root-owned paths — `core/rust.yml` was
 [retired with `core/golang.yml`](#retired-coregolangyml-and-corerustyml) as out of scope,
 `container/krew.yml` was [retired](#retired-containerkrewyml) as per-user by design rather than
 by defect, `core/ssh-key-setup.yml` became
-[`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every task was a
+[`setup-passwordless-ssh.sh`](DESKTOP-HOST-SETUP.md#passwordless-ssh), since a playbook whose every task was a
 `chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible, `core/x11vnc.yml`
 was [retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) as out of scope for a box whose
 work arrives over SSH, the three `_personal/ai-agent/` playbooks named above were
