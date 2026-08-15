@@ -17,7 +17,7 @@
 #
 # eval "$(mise activate bash)" is a PATH/env-rewriting hook, not a completion
 # and not a static alias, so per MIGRATION3's B3 it takes the same
-# destination as _multi-user/tools/modern-cli-tools.yml's fzf.sh: a literal,
+# destination as modern-tools.yml's fzf.sh: a literal,
 # live `eval "$(mise activate bash)"` line in /etc/profile.d/mise.sh, run
 # fresh on every interactive shell rather than a snapshot of its output. That
 # also needs /etc/bash.bashrc to source /etc/profile.d for non-login
@@ -209,7 +209,7 @@
 
     - name: 12. Install the shared mise activation hook
       # A literal, live eval -- not a captured snapshot of `mise activate
-      # bash`'s output -- matching modern-cli-tools.yml's fzf.sh exactly.
+      # bash`'s output -- matching modern-tools.yml's fzf.sh exactly.
       # Confirmed separately that `mise activate bash` itself writes nothing
       # under $HOME, so there is nothing this task needs to sandbox.
       ansible.builtin.copy:

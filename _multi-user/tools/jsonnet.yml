@@ -1,0 +1,87 @@
+---
+# Install jsonnet system-wide on a multi-user workstation.
+#
+# jsonnet's Ubuntu apt package is current enough to use as-is, so the
+# multi-user story is simple:
+#
+#   /usr/bin/jsonnet   installed by apt, root-owned
+#
+# There is no per-user state and nothing to add to a shell profile.
+#
+# Split out from core/modern-tools.yml (like jq.yml) so it can be pinned and
+# verified independently of the rest of that bundle.
+#
+# Usage:
+#   ansible-playbook tools/jsonnet.yml -e host=<inventory host or group>
+#   ansible-playbook tools/jsonnet.yml -e host=ws01 -e jsonnet_version=0.20.0+ds-3.3build1
+
+- name: Install jsonnet system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt candidate version on Ubuntu 26.04 (resolute). apt versions are
+    # release-specific (see shellcheck.yml's note on the same issue), so
+    # overriding this only helps if that exact dpkg version is available
+    # from the target's configured apt sources.
+    jsonnet_version: "0.20.0+ds-3.3build1"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    jsonnet_verify_uid: 65534    # nobody
+    jsonnet_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed jsonnet version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' jsonnet
+      register: jsonnet_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 2. Decide whether jsonnet needs installing
+      ansible.builtin.set_fact:
+        jsonnet_install_needed: >-
+          {{ jsonnet_installed.rc != 0 or jsonnet_installed.stdout != jsonnet_version }}
+
+    - name: 3. Install jsonnet via apt
+      ansible.builtin.apt:
+        name: "jsonnet={{ jsonnet_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: jsonnet_install_needed | bool
+
+    - name: 4. Verify the installed jsonnet version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' jsonnet
+      register: jsonnet_version_out
+      changed_when: false
+      failed_when: jsonnet_version != jsonnet_version_out.stdout
+
+    - name: 5. Evaluate a jsonnet expression as an unprivileged user
+      ansible.builtin.shell:
+        cmd: >-
+          echo '1 + 1' |
+          setpriv --reuid={{ jsonnet_verify_uid }} --regid={{ jsonnet_verify_gid }} --clear-groups
+          jsonnet -
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: jsonnet_smoke
+      changed_when: false
+      failed_when: (jsonnet_smoke.stdout | trim) != '2'
+
+    - name: 6. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "jsonnet {{ jsonnet_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  /usr/bin/jsonnet"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ jsonnet_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  jsonnet file.jsonnet         # Evaluate a jsonnet file to JSON"
+          - "  echo '{a: 1}' | jsonnet -    # Evaluate from stdin"

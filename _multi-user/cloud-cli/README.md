@@ -202,7 +202,7 @@ repository.
 
 The package already installs to root-owned paths and its completions are already a
 system-wide drop-in, so this playbook has no dependency on the `/etc/profile.d` bootstrap
-that `tools/modern-cli-tools.yml` provides.
+that `core/modern-tools.yml` provides.
 
 **What changed versus `cloud-cli/azure-cli.yml`.** The mechanism is unchanged — same
 package, same repository, same paths — so this was correctness work:

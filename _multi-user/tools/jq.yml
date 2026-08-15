@@ -1,0 +1,87 @@
+---
+# Install jq system-wide on a multi-user workstation.
+#
+# jq's Ubuntu apt package is current enough to use as-is, so the multi-user
+# story is simple:
+#
+#   /usr/bin/jq   installed by apt, root-owned
+#
+# There is no per-user state and nothing to add to a shell profile.
+#
+# Split out from core/modern-tools.yml (like jsonnet.yml) so it can be pinned
+# and verified independently of the rest of that bundle.
+#
+# Usage:
+#   ansible-playbook tools/jq.yml -e host=<inventory host or group>
+#   ansible-playbook tools/jq.yml -e host=ws01 -e jq_version=1.8.1-4ubuntu2
+
+- name: Install jq system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt candidate version on Ubuntu 26.04 (resolute). apt versions are
+    # release-specific (see shellcheck.yml's note on the same issue), so
+    # overriding this only helps if that exact dpkg version is available
+    # from the target's configured apt sources.
+    jq_version: "1.8.1-4ubuntu2"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    jq_verify_uid: 65534    # nobody
+    jq_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed jq version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' jq
+      register: jq_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 2. Decide whether jq needs installing
+      ansible.builtin.set_fact:
+        jq_install_needed: >-
+          {{ jq_installed.rc != 0 or jq_installed.stdout != jq_version }}
+
+    - name: 3. Install jq via apt
+      ansible.builtin.apt:
+        name: "jq={{ jq_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: jq_install_needed | bool
+
+    - name: 4. Verify the installed jq version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' jq
+      register: jq_version_out
+      changed_when: false
+      failed_when: jq_version != jq_version_out.stdout
+
+    - name: 5. Filter a JSON value as an unprivileged user
+      ansible.builtin.shell:
+        cmd: >-
+          echo '{"a": 1}' |
+          setpriv --reuid={{ jq_verify_uid }} --regid={{ jq_verify_gid }} --clear-groups
+          jq '.a'
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: jq_smoke
+      changed_when: false
+      failed_when: (jq_smoke.stdout | trim) != '1'
+
+    - name: 6. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "jq {{ jq_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  /usr/bin/jq"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ jq_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  jq '.key' file.json          # Read a value"
+          - "  echo '{}' | jq '.key = 1'    # Build/transform JSON"

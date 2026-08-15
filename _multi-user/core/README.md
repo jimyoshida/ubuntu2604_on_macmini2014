@@ -128,7 +128,7 @@ Installs mise from its own apt repository.
 account, and only shells it opened afterward, ever got mise's shell integration. Per
 MIGRATION3.md's B3, a `PATH`/env-rewriting hook is neither a completion nor a static alias, so it
 takes `/etc/profile.d/mise.sh` — the same destination and the same shape (a live `eval`, not a
-captured snapshot) as `tools/modern-cli-tools.yml`'s `fzf.sh`. `/etc/bash.bashrc` needs the
+captured snapshot) as `modern-tools.yml`'s `fzf.sh`. `/etc/bash.bashrc` needs the
 `/etc/profile.d` bootstrap for non-login interactive shells to read it, which this playbook lays
 down defensively in case it runs on a host neither `tools/` nor `container/` has touched yet.
 
@@ -156,6 +156,60 @@ Version overrides:
 ```bash
 ansible-playbook core/mise.yml -e host=ws01 -e mise_version=2026.8.6
 ```
+
+## modern-tools.yml
+
+Installs 12 modern CLI tool replacements from apt, root-owned, at `/usr/bin` (no per-user
+state, nothing added to a shell profile for any of them):
+
+| Tool | apt package | Binary |
+| --- | --- | --- |
+| gum, fzf, eza, lsd, duf, procs, gdu, htop, glow | same name | same name |
+| ripgrep | `ripgrep` | `rg` |
+| bat | `bat` | `batcat` (symlinked to `/usr/local/bin/bat`) |
+| dust | `du-dust` | `dust` |
+
+Also lays down:
+
+| Path | Contents |
+| --- | --- |
+| `/etc/profile.d/fzf.sh` | `eval "$(fzf --bash)"` — fzf key bindings and completion |
+
+Relocated here from `tools/modern-tools.yml`. Unlike the three playbooks above, it has no
+`core/` legacy predecessor — its lineage runs through the retired `tool/` single-user tree via
+`tools/` (see [tools/README.md](../tools/README.md)), so it sits outside the "all three ...
+only generation" claim in [Status](#status) below.
+
+The source playbook installed 16 tools (including `yq` and `llhttp`, a manual dependency
+shim) via Homebrew. Three of those are split into their own playbooks in `tools/` rather than
+bundled here: `yq.yml`, since it is not a plain apt install, and `jq.yml` / `jsonnet.yml`, so
+each can be pinned and verified independently of the rest of the bundle. Migrating the rest
+uncovered two real differences from the plan in `MIGRATION.md`, both only visible by checking
+the actual target host rather than assuming:
+
+- **No Charm apt repo needed.** The plan called for Aqua-style vendor apt repo for `gum` and
+  `glow`, on the assumption Ubuntu's own repos lagged. On the actual target (Ubuntu 26.04
+  "resolute"), apt already carries both directly (`gum` 0.17.0-1, `glow` 2.1.1-1) — one apt
+  install covers all 14 tools, no vendor repo at all.
+- **`llhttp` is dropped entirely**, not migrated. The source playbook symlinked a Homebrew
+  Cellar path (`libllhttp.so.9.3`) so its Homebrew-built `eza` could find the library at
+  runtime — a Homebrew Cellar-isolation workaround. apt's `eza` package declares
+  `libgit2-1.9` etc. as proper package dependencies, so nothing extra is needed.
+
+fzf's key bindings need `/etc/profile.d` to actually be read by interactive shells, which is
+not true by default for a non-login shell (e.g. a plain SSH session) on stock Ubuntu — see
+"Known follow-ups" in `MIGRATION.md`. This playbook adds that hook to `/etc/bash.bashrc`,
+since fzf is the first migrated tool that needs it; the task is an idempotent no-op for any
+later playbook (`vault.yml`) that adds the same hook.
+
+The unprivileged verification step runs every tool's `--version` as `nobody`, then separately
+opens a non-login interactive `bash -i` shell as the same user and checks that fzf's
+`__fzf_select__` function is defined — proving the `/etc/profile.d` → `/etc/bash.bashrc` chain
+actually works end-to-end for a real interactive session, not just that the binaries exist.
+
+apt package pins are release-specific (see `tools/shellcheck.yml`'s note on the same issue);
+to override one, edit `modern_tools_packages` with `-e` as a JSON list, the same pattern
+`tools/grype-syft.yml` uses for its tool list.
 
 ## What is *not* here
 

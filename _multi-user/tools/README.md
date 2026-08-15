@@ -216,61 +216,13 @@ Version overrides:
 ansible-playbook tools/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
 ```
 
-## modern-cli-tools.yml
-
-Installs 14 modern CLI tool replacements from apt, root-owned, at `/usr/bin` (no per-user
-state, nothing added to a shell profile for any of them):
-
-| Tool | apt package | Binary |
-| --- | --- | --- |
-| gum, fzf, jq, jsonnet, eza, lsd, duf, procs, gdu, htop, glow | same name | same name |
-| ripgrep | `ripgrep` | `rg` |
-| bat | `bat` | `batcat` (symlinked to `/usr/local/bin/bat`) |
-| dust | `du-dust` | `dust` |
-
-Also lays down:
-
-| Path | Contents |
-| --- | --- |
-| `/etc/profile.d/fzf.sh` | `eval "$(fzf --bash)"` — fzf key bindings and completion |
-
-The source playbook installed 16 tools (including `yq` and `llhttp`, a manual dependency
-shim; see below) via Homebrew. `yq` is split out to its own `yq.yml`, since it is the one
-tool in this bundle that is not a plain apt install. Migrating the rest uncovered two real
-differences from the plan in `MIGRATION.md`, both only visible by checking the actual target
-host rather than assuming:
-
-- **No Charm apt repo needed.** The plan called for Aqua-style vendor apt repo for `gum` and
-  `glow`, on the assumption Ubuntu's own repos lagged. On the actual target (Ubuntu 26.04
-  "resolute"), apt already carries both directly (`gum` 0.17.0-1, `glow` 2.1.1-1) — one apt
-  install covers all 14 tools, no vendor repo at all.
-- **`llhttp` is dropped entirely**, not migrated. The source playbook symlinked a Homebrew
-  Cellar path (`libllhttp.so.9.3`) so its Homebrew-built `eza` could find the library at
-  runtime — a Homebrew Cellar-isolation workaround. apt's `eza` package declares
-  `libgit2-1.9` etc. as proper package dependencies, so nothing extra is needed.
-
-fzf's key bindings need `/etc/profile.d` to actually be read by interactive shells, which is
-not true by default for a non-login shell (e.g. a plain SSH session) on stock Ubuntu — see
-"Known follow-ups" in `MIGRATION.md`. This playbook adds that hook to `/etc/bash.bashrc`,
-since fzf is the first migrated tool that needs it; the task is an idempotent no-op for any
-later playbook (`vault.yml`) that adds the same hook.
-
-The unprivileged verification step runs every tool's `--version` as `nobody`, then separately
-opens a non-login interactive `bash -i` shell as the same user and checks that fzf's
-`__fzf_select__` function is defined — proving the `/etc/profile.d` → `/etc/bash.bashrc` chain
-actually works end-to-end for a real interactive session, not just that the binaries exist.
-
-apt package pins are release-specific (see `shellcheck.yml`'s note on the same issue); to
-override one, edit `modern_cli_tools_packages` with `-e` as a JSON list, the same pattern
-`grype-syft.yml` uses for its tool list.
-
 ## yq.yml
 
 Installs [mikefarah/yq](https://github.com/mikefarah/yq) as a single static binary at
 `/usr/local/bin/yq`, root-owned, mode `0755`. There is no per-user state and nothing to add
 to a shell profile.
 
-Split out from `modern-cli-tools.yml` rather than bundled with it, since it is the one tool
+Split out from `core/modern-tools.yml` rather than bundled with it, since it is the one tool
 in that source playbook that is not a plain apt install: per the decision-order gotcha in
 `MIGRATION.md`, Ubuntu's apt `yq` is `kislyuk/yq`, a Python wrapper around `jq` with entirely
 different syntax from mikefarah's Go `yq` that Homebrew's `yq` formula installs. Silently
@@ -295,6 +247,43 @@ Version overrides:
 
 ```bash
 ansible-playbook tools/yq.yml -e host=ws01 -e yq_version=4.53.3
+```
+
+## jq.yml
+
+Installs [jq](https://github.com/jqlang/jq) from the Ubuntu apt package, `/usr/bin/jq`,
+root-owned. There is no per-user state and nothing to add to a shell profile.
+
+Split out from `core/modern-tools.yml` (along with `jsonnet.yml`) so it can be pinned and
+verified on its own, independent of the other tools bundled there. It is otherwise a plain
+apt install, pinned by exact dpkg version the same way `shellcheck.yml` is.
+
+The unprivileged verification step pipes `{"a": 1}` into `jq '.a'` as `nobody` and checks
+the output.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/jq.yml -e host=ws01 -e jq_version=1.8.1-4ubuntu2
+```
+
+## jsonnet.yml
+
+Installs [jsonnet](https://github.com/google/jsonnet) from the Ubuntu apt package,
+`/usr/bin/jsonnet`, root-owned. There is no per-user state and nothing to add to a shell
+profile.
+
+Split out from `core/modern-tools.yml` (along with `jq.yml`) so it can be pinned and verified
+on its own, independent of the other tools bundled there. It is otherwise a plain apt
+install, pinned by exact dpkg version the same way `shellcheck.yml` is.
+
+The unprivileged verification step pipes the expression `1 + 1` into `jsonnet -` as `nobody`
+and checks that the output is `2`.
+
+Version overrides:
+
+```bash
+ansible-playbook tools/jsonnet.yml -e host=ws01 -e jsonnet_version=0.20.0+ds-3.3build1
 ```
 
 ## junit2html.yml

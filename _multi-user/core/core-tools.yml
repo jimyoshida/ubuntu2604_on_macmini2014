@@ -46,7 +46,7 @@
 
   vars:
     # apt candidate versions on Ubuntu 26.04 (resolute), checked 2026-08-15.
-    # Like modern-cli-tools.yml's pins, these are release-specific: overriding
+    # Like modern-tools.yml's pins, these are release-specific: overriding
     # one only helps if that exact dpkg version is available from the
     # target's configured apt sources.
     core_tools_packages:

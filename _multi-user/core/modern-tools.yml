@@ -1,11 +1,15 @@
 ---
 # Install modern CLI tool replacements system-wide on a multi-user workstation.
 #
-# All fourteen of these are current-enough Ubuntu apt packages, so they need no
-# more than a version pin. (yq, the fifteenth tool in the source playbook, is
-# split out to yq.yml: Ubuntu's apt `yq` is the unrelated Python jq-wrapper, not
-# mikefarah's Go yq that Homebrew installs, so it needs a release binary instead
-# of a plain apt install.)
+# All twelve of these are current-enough Ubuntu apt packages, so they need no
+# more than a version pin. Three tools from the fifteen-tool source playbook
+# are split into their own playbooks instead of bundled here:
+#   - yq.yml: Ubuntu's apt `yq` is the unrelated Python jq-wrapper, not
+#     mikefarah's Go yq that Homebrew installs, so it needs a release binary
+#     instead of a plain apt install.
+#   - jq.yml, jsonnet.yml: plain apt installs like the rest of this bundle,
+#     split out so each can be pinned and verified independently of the
+#     others.
 #
 #   /usr/bin/<tool>            for everything installed via apt
 #   /usr/local/bin/bat         symlink; apt installs the binary as batcat
@@ -18,7 +22,7 @@
 # that needs the same hook (blockinfile is idempotent on its marker).
 #
 # Usage:
-#   ansible-playbook tools/modern-cli-tools.yml -e host=<inventory host or group>
+#   ansible-playbook core/modern-tools.yml -e host=<inventory host or group>
 
 - name: Install modern CLI tools system-wide
   hosts: "{{ host }}"
@@ -33,7 +37,7 @@
     # release-specific (see shellcheck.yml's note on the same issue), so
     # overriding one of these only helps if that exact dpkg version is
     # available from the target's configured apt sources.
-    modern_cli_tools_packages:
+    modern_tools_packages:
       - name: gum
         apt_package: gum
         version: "0.17.0-1"
@@ -46,14 +50,6 @@
         apt_package: ripgrep
         version: "15.1.0-1ubuntu1"
         binary: rg
-      - name: jq
-        apt_package: jq
-        version: "1.8.1-4ubuntu2"
-        binary: jq
-      - name: jsonnet
-        apt_package: jsonnet
-        version: "0.20.0+ds-3.3build1"
-        binary: jsonnet
       - name: bat
         apt_package: bat
         version: "0.25.0-5ubuntu1"
@@ -91,14 +87,14 @@
         version: "2.1.1-1"
         binary: glow
     # uid/gid used to prove the install is usable by an arbitrary user
-    modern_cli_tools_verify_uid: 65534    # nobody
-    modern_cli_tools_verify_gid: 65534    # nogroup
+    modern_tools_verify_uid: 65534    # nobody
+    modern_tools_verify_gid: 65534    # nogroup
 
   tasks:
     - name: 1. Check the currently installed version of each apt-based tool
       ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.apt_package }}"
-      register: modern_cli_tools_installed
-      loop: "{{ modern_cli_tools_packages }}"
+      register: modern_tools_installed
+      loop: "{{ modern_tools_packages }}"
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
@@ -106,30 +102,30 @@
 
     - name: 2. Decide which apt-based tools need installing
       # A single filtered list, rather than a per-package task, so the
-      # install task below is one apt-get invocation instead of fourteen.
+      # install task below is one apt-get invocation instead of twelve.
       ansible.builtin.set_fact:
-        modern_cli_tools_pending: "{{ modern_cli_tools_pending | default([]) + [item.0.apt_package ~ '=' ~ item.0.version] }}"
-      loop: "{{ modern_cli_tools_packages | zip(modern_cli_tools_installed.results) | list }}"
+        modern_tools_pending: "{{ modern_tools_pending | default([]) + [item.0.apt_package ~ '=' ~ item.0.version] }}"
+      loop: "{{ modern_tools_packages | zip(modern_tools_installed.results) | list }}"
       loop_control:
         label: "{{ item.0.name }}"
       when: item.0.version != (item.1.stdout | default(''))
 
     - name: 3. Install the apt-based tools that need installing
       ansible.builtin.apt:
-        name: "{{ modern_cli_tools_pending | default([]) }}"
+        name: "{{ modern_tools_pending | default([]) }}"
         state: present
         update_cache: true
         cache_valid_time: 3600
-      when: (modern_cli_tools_pending | default([])) | length > 0
+      when: (modern_tools_pending | default([])) | length > 0
 
     - name: 4. Verify the installed versions of each apt-based tool
       ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.apt_package }}"
-      register: modern_cli_tools_version_out
-      loop: "{{ modern_cli_tools_packages }}"
+      register: modern_tools_version_out
+      loop: "{{ modern_tools_packages }}"
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
-      failed_when: item.version != modern_cli_tools_version_out.stdout
+      failed_when: item.version != modern_tools_version_out.stdout
 
     - name: 5. Ensure /usr/local/bin/bat symlinks to batcat
       # apt names the binary batcat to avoid a clash with bacula-console.
@@ -165,36 +161,36 @@
       # exercised end-to-end, not just the binaries themselves.
       ansible.builtin.shell:
         cmd: >-
-          setpriv --reuid={{ modern_cli_tools_verify_uid }} --regid={{ modern_cli_tools_verify_gid }} --clear-groups
+          setpriv --reuid={{ modern_tools_verify_uid }} --regid={{ modern_tools_verify_gid }} --clear-groups
           bash -i -c '{{ item.binary }} --version'
-      loop: "{{ modern_cli_tools_packages }}"
+      loop: "{{ modern_tools_packages }}"
       loop_control:
         label: "{{ item.name }}"
       environment:
         HOME: /tmp
         TMPDIR: /tmp
-      register: modern_cli_tools_smoke
+      register: modern_tools_smoke
       changed_when: false
 
     - name: 9. Verify fzf key bindings load for an unprivileged interactive shell
       ansible.builtin.shell:
         cmd: >-
-          setpriv --reuid={{ modern_cli_tools_verify_uid }} --regid={{ modern_cli_tools_verify_gid }} --clear-groups
+          setpriv --reuid={{ modern_tools_verify_uid }} --regid={{ modern_tools_verify_gid }} --clear-groups
           bash -i -c 'declare -F __fzf_select__'
       environment:
         HOME: /tmp
         TMPDIR: /tmp
-      register: modern_cli_tools_fzf_smoke
+      register: modern_tools_fzf_smoke
       changed_when: false
-      failed_when: "'__fzf_select__' not in modern_cli_tools_fzf_smoke.stdout"
+      failed_when: "'__fzf_select__' not in modern_tools_fzf_smoke.stdout"
 
     - name: 10. Display installation summary
       ansible.builtin.debug:
         msg:
           - "Modern CLI tools installed system-wide:"
-          - "{% for t in modern_cli_tools_packages %}  {{ t.name }} {{ t.version }}{% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}"
+          - "{% for t in modern_tools_packages %}  {{ t.name }} {{ t.version }}{% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}"
           - ""
-          - "Verified runnable by an unprivileged user (uid {{ modern_cli_tools_verify_uid }}),"
+          - "Verified runnable by an unprivileged user (uid {{ modern_tools_verify_uid }}),"
           - "including fzf key bindings in a non-login interactive shell."
           - ""
           - "No per-user setup is required: fzf's key bindings and completion"

@@ -271,7 +271,7 @@
     - name: 15. Install the shared `k` alias
       # The alias is not completion data, so it goes to /etc/profile.d rather
       # than /etc/bash_completion.d -- and needs the /etc/bash.bashrc bootstrap
-      # that _multi-user/tools/modern-cli-tools.yml installs to be read by
+      # that _multi-user/core/modern-tools.yml installs to be read by
       # non-login interactive shells.
       #
       # The completion file is sourced defensively rather than assumed: if
