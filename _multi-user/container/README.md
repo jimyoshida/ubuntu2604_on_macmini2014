@@ -45,8 +45,8 @@ deliberate act rather than a side effect of running with a shorter list.
 | `docker_users` | `docker.yml` | membership of the `docker` group | **equivalent to passwordless root** on this host |
 | `podman_linger_users` | `podman.yml` | `loginctl enable-linger` | the account's user services survive logout |
 
-Both accept a comma-separated string or a YAML list, matching `_personal/`'s
-`target_users`:
+Both accept a comma-separated string or a YAML list — the same shape every named-account var in
+this repo takes:
 
 ```bash
 ansible-playbook container/podman.yml -e host=ws01 -e podman_linger_users=alice,bob

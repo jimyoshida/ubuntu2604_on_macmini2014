@@ -436,14 +436,17 @@ summary text affects `failed=`, so this was never going to surface as a run fail
 - **Renaming `_multi-user/`.** The underscore has meant *staging*, sorting the tree apart from
   the live single-user directories it would replace, since MIGRATION.md. Those directories are
   gone now — the legacy tree does not exist at all — so the prefix marks a distinction that no
-  longer exists, on 34 of the repo's 37 playbooks. Dropping it is cheaper than it looks —
+  longer exists, on all 34 of the repo's playbooks. Dropping it is cheaper than it looks —
   `ansible.cfg`'s `inventory` is relative and does not move — but it rewrites the `cd _multi-user`
   line in every documented command, in five `README.md` files (the root one plus `tools/`,
   `cloud-cli/`, `container/` and `core/` under `_multi-user/`) and in `ansible.cfg`'s own header
-  comment, and `_personal/` would want the same treatment or a stated reason not to (its
-  underscore means something different — per-identity by design, not staging — so it may earn
-  that reason rather than need the rename). Worth doing as its own change rather than as the tail
-  of this migration.
+  comment. **The `_personal/` half of this question closed itself on 2026-08-16, the same day:**
+  it did not earn the stated reason to keep its own underscore that this bullet left room for —
+  it was retired outright instead, per-identity work ruled out of scope for the whole repo rather
+  than kept staged under a different name (see
+  [Retired: `_personal/`](README.md#retired-_personal)). `_multi-user/` is now the only
+  underscore tree left, so this rename, if it happens, has no sibling decision to make alongside
+  it any more. Worth doing as its own change rather than as the tail of this migration.
 - **`~/.bashrc`'s `mise` block, left behind on any host that ran the source playbook.** Same
   shape as MIGRATION3's `kubectl`/`helm`/`kind`/`minikube` completion blocks and `xhost` lines:
   deleting `core/mise.yml` removed nothing already written into an account's `~/.bashrc`. On

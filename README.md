@@ -62,11 +62,15 @@ remained — `core-tools.yml`, `nodejs.yml` and `mise.yml` — was straightforwa
 compatible and migrated to [`_multi-user/core/`](_multi-user/core/README.md) per
 [MIGRATION4.md](MIGRATION4.md); the three originals and `core/README.md` were deleted on
 2026-08-16 once every successor was verified, the same gate `tool/`, `cloud-cli/` and
-`container/` passed before it. Nothing named `core/`, `tool/`, `cloud-cli/`, `container/`,
-`services/` or `gui-tools/` remains anywhere in the repo — only
-[`_multi-user/`](#playbooks-multi-user) below and [`_personal/`](#playbooks-personal). Every
-deleted playbook is recoverable from git history (`git log --diff-filter=D -- core/` for the
-last of them).
+`container/` passed before it. `_personal/` went the same day, but by the `services/`/
+`gui-tools/` route rather than this one — deleted outright, with no successor — because what it
+held was out of scope for a different reason: not a desktop or a hosted service, but per-identity
+work that belongs to the account it's for, not to a shared workstation-provisioning repo. See
+[Retired: `_personal/`](#retired-_personal). Nothing named `core/`, `tool/`, `cloud-cli/`,
+`container/`, `services/`, `gui-tools/` or `_personal/` remains anywhere in the repo — only
+[`_multi-user/`](#playbooks-multi-user) below. Every deleted playbook is recoverable from git
+history (`git log --diff-filter=D -- core/` for the last of the migrated ones, `git log
+--diff-filter=D -- _personal/` for the retired-outright ones).
 
 ## Playbooks (multi-user)
 
@@ -87,27 +91,6 @@ and is not one: it grants **no** account access to the Docker socket unless you 
 `docker_users`, where its predecessor added whoever ran it automatically. Membership of that
 group is equivalent to passwordless root, so it is typed out per account, per run — see
 [Grants](_multi-user/container/README.md#grants). `podman_linger_users` works the same way.
-
-## Playbooks (personal)
-
-The opposite staging tree: playbooks that are per-identity **by nature** and are not candidates
-for migration, because what they install is an identity rather than a tool — an agent's
-credentials, a user systemd service, a checkout in `$HOME`. The leading underscore means
-staging, same convention as `_multi-user/`.
-
-Same push model as `_multi-user/`, but with a second required var. `host` names the machine;
-`target_users` names the accounts on it to provision. The account Ansible connects as is
-neither of those — defaulting the work to it would reproduce the `$USER` bug this tree exists
-to avoid, so the accounts are always named explicitly:
-
-```bash
-cd _personal
-ansible-playbook ai-agent/claude-code.yml -e host=ws01 -e target_users=alice,bob
-```
-
-| Directory | Description |
-|-----------|-------------|
-| [_personal/ai-agent/](_personal/ai-agent/README.md) | AI agent tools (Claude Code, NanoClaw, vertex-ai-proxy) |
 
 ## Retired: `services/`
 
@@ -311,36 +294,79 @@ entries (`SAMBA_PASSWORD`, `SAMBA_INTERFACES`) and its README section are recove
 history (`git log --diff-filter=D -- core/samba.yml`), as is the original
 `git log --diff-filter=D -- services/samba.yml` move from 2026-08-10.
 
+## Retired: `_personal/`
+
+Gone entirely (2026-08-16) — three playbooks, its `ai-agent/README.md`, and its own
+`ansible.cfg`/`inventory.ini(.example)`. Unlike every retirement above it, this was not legacy
+debt or an unmaintained corner: `_personal/` was a deliberate second staging tree, built up
+alongside `_multi-user/` across [MIGRATION3.md](MIGRATION3.md) and
+[MIGRATION4.md](MIGRATION4.md) as the place per-identity playbooks were *meant* to end up — its
+`target_users` convention is even what `docker_users` and `podman_linger_users` were written to
+match (see [B1 in MIGRATION3.md](MIGRATION3.md#policy-amendments)). It is retired anyway, for
+**scope**, the same call as [`services/`](#retired-services) and [`gui-tools/`](#retired-gui-tools)
+rather than a defect in any of the three playbooks: this repo provisions shared, multi-user
+infrastructure, and an individual account's AI agent — its credentials, its checkout, its
+systemd user service — is that account's own setup, not something a shared
+workstation-provisioning repo should own. `_multi-user/` earns its scope because a tool
+installed once serves every account; nothing in `_personal/` was ever going to do that by
+nature, so keeping a permanent home for it here just because it had gained good conventions was
+optimizing the wrong thing.
+
+| Playbook | Installed |
+|----------|-----------|
+| `_personal/ai-agent/claude-code.yml` | Claude Code CLI via the official installer, into each named account's `~/.local/bin` |
+| `_personal/ai-agent/vertex-ai-proxy.yml` | `vertex-ai-proxy`, globally via npm, plus a `~/.config/systemd/user` unit per named account |
+| `_personal/ai-agent/nanoclaw.yml` | A NanoClaw checkout in `/home/$USER/nanoclaw`, systemd lingering, a `docker` group check |
+
+Nothing replaces any of them here. An account that wants Claude Code, NanoClaw or
+vertex-ai-proxy installs it the way `gui-tools/vscode.yml`'s retirement left VS Code to be
+installed — by hand, or from its own dotfiles, following each tool's own upstream instructions —
+which is where per-identity setup belongs once it stops being this repo's job to wrap it in a
+playbook.
+
+As with every other retirement, deleting the playbooks uninstalls nothing: an account already
+provisioned by them keeps its `~/.local/bin/claude`, its `~/nanoclaw` checkout and lingering
+systemd user session, and its `vertex-ai-proxy.service`, and all three keep running exactly as
+before. Undoing that is a per-account cleanup this repo no longer performs. Everything —
+the three playbooks, `ai-agent/README.md`, `ansible.cfg` and `inventory.ini.example` — is
+recoverable from git history (`git log --diff-filter=D -- _personal/`); `inventory.ini` itself
+was gitignored and held only the same RFC 5737 placeholder addresses `_multi-user/inventory.ini`
+does, so nothing real was lost with it.
+
 ## Multi-user support status
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
 [MIGRATION2.md](MIGRATION2.md), [MIGRATION3.md](MIGRATION3.md) and [MIGRATION4.md](MIGRATION4.md)
-amendments. 37 playbooks, now that the legacy tree is fully retired:
+amendments. 34 playbooks, now that the legacy tree is fully retired and `_personal/` is gone
+with it:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-34) | 34 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
 | [Effectively shared](#effectively-shared-0) | 0 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-0) | 0 | Shared install plus a tail that benefits only the invoker |
-| [Personal only](#personal-only-3) | 3 | The whole install lands in one `$HOME` or one account |
+| [Personal only](#personal-only-0) | 0 | The whole install lands in one `$HOME` or one account |
 
-The repo is now entirely multi-user or personal-by-design, and the balance moved in steps rather
-than gradually: a migrated playbook is a *new* file, so during a migration both generations are
-counted, and the total drops back when the originals are retired. That has now happened four
+The repo is entirely multi-user now, and the balance moved in steps rather than gradually: a
+migrated playbook is a *new* file, so during a migration both generations are counted, and the
+total drops back when the originals are retired. That has happened four
 times, and all four migrations are finished: `tool/` after MIGRATION.md, all thirteen of
 `cloud-cli/` after MIGRATION2.md, all seven of `container/` after MIGRATION3.md, and all three
 of `core/` after MIGRATION4.md. None of the four directories still exists — nothing named
 `core/`, `tool/`, `cloud-cli/`, `container/`, `services/` or `gui-tools/` remains anywhere in the
-repo. The total held at 40 across `container/`'s retirement because seven successors replaced
+repo, and now neither does `_personal/` (see [Retired: `_personal/`](#retired-_personal)). The
+total held at 40 across `container/`'s retirement because seven successors replaced
 exactly seven originals, then dropped to 37 when three more `core/` playbooks were deleted
 outright with no successor at all (see below), then rose back to 40 as MIGRATION4.md's three
 `_multi-user/core/` successors were written and verified against `localhost` — with their
 `core/` originals not yet retired, so for a time both generations were counted, the same way the
-first three migrations were counted mid-flight. It is back to 37 now that those three originals
+first three migrations were counted mid-flight. It went back to 37 once those three originals
 were retired (2026-08-16): three successors replaced exactly three originals, the same 1:1
-arithmetic every migration here has held to. Twelve playbooks in total
-have gone the deleted-rather-than-migrated way: `services/vault.yml`, `services/n8n.yml`,
+arithmetic every migration here has held to. It dropped once more the same day, to 34, when
+`_personal/`'s three playbooks were retired outright with no successor at all — the same shape
+as the `core/` drop to 37, not a migration's 1:1 replacement. Fifteen playbooks in total
+have now gone the deleted-rather-than-migrated way: `services/vault.yml`, `services/n8n.yml`,
 `services/jellyfin.yml` and `services/freshrss.yml` (see
 [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
 deleted once the migrations left it with no dependents (see
@@ -354,19 +380,26 @@ editor on a box whose work arrives over SSH, which took its directory with it (s
 [Retired: `gui-tools/`](#retired-gui-tools)); `core/disable-rsyslog.yml` and `core/x11vnc.yml`,
 a log-hygiene task with no pipeline left to justify it and a VNC desktop nobody drives (see
 [Retired: `core/disable-rsyslog.yml` and `core/x11vnc.yml`](#retired-coredisable-rsyslogyml-and-corex11vncyml));
-and `services/samba.yml` → `core/samba.yml`, which moved once (2026-08-10) on the strength of an
+`services/samba.yml` → `core/samba.yml`, which moved once (2026-08-10) on the strength of an
 exception to the `services/` retirement and was deleted anyway once that exception stopped
-holding (2026-08-14) — see [Retired: `core/samba.yml`](#retired-coresambayml).
+holding (2026-08-14) — see [Retired: `core/samba.yml`](#retired-coresambayml); and, last,
+`_personal/ai-agent/claude-code.yml`, `nanoclaw.yml` and `vertex-ai-proxy.yml`, retired the same
+day for scope rather than defect — per-identity work that belongs to the account it's for, not
+to a shared workstation-provisioning repo — see [Retired: `_personal/`](#retired-_personal).
 
-The legacy tree is empty now — there are no more `hosts: localhost`, `connection: local`
-playbooks left to classify as personal in *execution model* but shared in *outcome*. Both
-underscore trees use the push model instead, for opposite reasons: `_multi-user/` because the
-install belongs to no one account, `_personal/` because it belongs to accounts named explicitly
-rather than to whoever is logged in. `_multi-user/`'s leading underscore has meant "staging,
+The legacy tree is empty, and now so is the tree that stood opposite it. There are no more
+`hosts: localhost`, `connection: local` playbooks left to classify as personal in *execution
+model* but shared in *outcome* — that emptied out with `core/` — and there is no longer a
+staging tree for playbooks that are personal **by design**, either: `_personal/` filled that role
+from MIGRATION3.md onward and is retired now (see [Retired: `_personal/`](#retired-_personal)),
+so per-identity work has no home in this repo at all, rather than a separate one.
+`_multi-user/` is the only underscore tree left. Its leading underscore has meant "staging,
 sorts apart from the live single-user directories it will replace" since MIGRATION.md; now that
-none of those directories exist, the distinction it marks is gone too — renaming it is a
-deliberate, separate decision this document leaves open rather than folds in here, per
-[MIGRATION4.md's known follow-ups](MIGRATION4.md#known-follow-ups).
+none of those directories exist — and there is no `_personal/` left to distinguish it from
+either — the distinction it marks is gone too. Renaming it is a deliberate, separate decision
+this document leaves open rather than folds in here, per
+[MIGRATION4.md's known follow-ups](MIGRATION4.md#known-follow-ups), which no longer needs to ask
+whether `_personal/` would want the same treatment — there is no `_personal/` left to ask.
 
 ### Multi-user (34)
 
@@ -430,36 +463,33 @@ activation line to `/etc/profile.d/mise.sh`, counted under [Multi-user](#multi-u
 before the original was retired — the same order every other row in this category's history has
 followed.
 
-### Personal only (3)
+### Personal only (0)
 
-All three of these live in [`_personal/`](#playbooks-personal), which is where this category is
-meant to end up — none are left "mixed in with the shared trees" any more. Six more left the
-category without being fixed: `core/homebrew.yml` was [retired](#retired-corehomebrewyml) — it
-had been the root cause of four other entries here, `cloud-cli/{gcx,influx,jira,vault}-cli.yml`,
-all `brew install` as `lookup('env', 'USER')`, until wave 3 of MIGRATION2.md moved those to
-root-owned paths — `core/rust.yml` was
+Empty now, and permanently rather than provisionally. The three playbooks that lived here —
+`_personal/ai-agent/claude-code.yml`, `vertex-ai-proxy.yml` and `nanoclaw.yml` — left by
+retirement, not migration, and there is no `_personal/` left for a future personal-only playbook
+to land in (see [Retired: `_personal/`](#retired-_personal)). That makes nine playbooks in total
+that have left this category without being fixed in place: `core/homebrew.yml` was
+[retired](#retired-corehomebrewyml) — it had been the root cause of four other entries here,
+`cloud-cli/{gcx,influx,jira,vault}-cli.yml`, all `brew install` as `lookup('env', 'USER')`, until
+wave 3 of MIGRATION2.md moved those to root-owned paths — `core/rust.yml` was
 [retired with `core/golang.yml`](#retired-coregolangyml-and-corerustyml) as out of scope,
 `container/krew.yml` was [retired](#retired-containerkrewyml) as per-user by design rather than
 by defect, `core/ssh-key-setup.yml` became
 [`setup-passwordless-ssh.sh`](#passwordless-ssh-setup), since a playbook whose every task was a
 `chmod` inside the invoker's own `~/.ssh` was never getting anything from Ansible, `core/x11vnc.yml`
 was [retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) as out of scope for a box whose
-work arrives over SSH, and `core/agent-base.yml` left the category the one way none of the others
-did: neither retired nor given an explicit user list, but stripped of the tasks that made it
-personal in the first place. Renamed `core/core-tools.yml` (2026-08-14), it kept only the `apt
-install` task and lost the `~/.xprofile`, `~/.xsessionrc` and three `~/.bashrc` blocks along with
-it — the removed tasks are recoverable from git history
+work arrives over SSH, the three `_personal/ai-agent/` playbooks named above were
+[retired](#retired-_personal) the same way — out of scope, per-identity work that belongs to the
+account it's for rather than to this repo — and `core/agent-base.yml` left the category the one
+way none of the others did: neither retired nor given an explicit user list, but stripped of the
+tasks that made it personal in the first place. Renamed `core/core-tools.yml` (2026-08-14), it
+kept only the `apt install` task and lost the `~/.xprofile`, `~/.xsessionrc` and three
+`~/.bashrc` blocks along with it — the removed tasks are recoverable from git history
 (`git log --all --full-history -- core/agent-base.yml core/core-tools.yml`).
 
-| Playbook | Cause |
-|----------|-------|
-| `_personal/ai-agent/claude-code.yml` | `install.sh` into `~/.local/bin`, plus `~/.bashrc` and `~/.profile` |
-| `_personal/ai-agent/vertex-ai-proxy.yml` | `~/.config/systemd/user` unit plus `enable-linger $USER` |
-| `_personal/ai-agent/nanoclaw.yml` | Repository in `/home/$USER/nanoclaw`, lingering, docker-group check |
-
-All three are per-identity **by nature** — an agent's credentials, a user systemd service, a
-checkout in `$HOME` — and need no fix. None are per-identity by **defect** any more:
-`agent-base.yml` was the last one, and it left the shared trees instead of being fixed within
-them, so the fix MIGRATION.md names for that shape — an explicit user list instead of `$USER` —
-currently has nothing left to apply to.
+Nothing is left to fix in place here, and by design nothing new can land in this category again:
+a playbook that would be "personal only" is out of scope for this repo entirely now, the same
+call [Retired: `_personal/`](#retired-_personal) made explicit rather than something MIGRATION.md's
+explicit-user-list fix would apply to.
 

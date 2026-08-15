@@ -52,8 +52,8 @@
     podman_compose_version: "1.5.0-2"
     # Accounts whose user services survive logout. A grant, not an install, so it
     # defaults to empty and is never inferred from the connecting account (B1).
-    # Accepts a comma-separated string or a YAML list, matching _personal/'s
-    # target_users -- the same operator types both.
+    # Accepts a comma-separated string or a YAML list, the same shape every
+    # named-account var in this repo takes.
     podman_linger_users: []
     # Scratch HOME for the smoke test. Disk-backed rather than /tmp, which is a
     # size-capped tmpfs on these hosts (MIGRATION.md's grype-syft finding).

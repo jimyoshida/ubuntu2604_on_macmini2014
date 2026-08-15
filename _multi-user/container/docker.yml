@@ -59,8 +59,8 @@
     docker_compose_version: "5.4.0-1~ubuntu.26.04~resolute"
     # Accounts to add to the `docker` group. ROOT-EQUIVALENT -- see the header.
     # Never defaulted to the connecting account, never read from the
-    # environment. Accepts a comma-separated string or a YAML list, matching
-    # _personal/'s target_users.
+    # environment. Accepts a comma-separated string or a YAML list, the same
+    # shape every named-account var in this repo takes.
     docker_users: []
     docker_repo_uri: "https://download.docker.com/linux/ubuntu"
     # ansible_facts['architecture'] -> apt architecture name. The repository

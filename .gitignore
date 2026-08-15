@@ -1,7 +1,6 @@
 env.sh
 .antigravitycli/
 
-# Real inventories; see the inventory.ini.example next to each. They hold real
-# hostnames and addresses.
+# Real inventory; see inventory.ini.example next to it. Holds real hostnames and
+# addresses.
 _multi-user/inventory.ini
-_personal/inventory.ini
