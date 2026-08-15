@@ -251,7 +251,8 @@ a new key silently — that is intended; verify the new fingerprint and update i
 ansible-playbook container/kubectl.yml -e host=ws01 -e kubectl_version=1.36.3-1.1
 ```
 
-**kubectx and kubens are the partial exception to [krew's retirement](../../README.md#retired-containerkrewyml).**
+**kubectx and kubens are the partial exception to krew's retirement** (`git log
+--diff-filter=D -- container/krew.yml` has the history).
 That note named `ctx` and `ns` as things a plain binary in `/usr/local/bin` could bring
 back; this playbook does it more simply than that implies. The Ubuntu archive already
 carries a `kubectx` package — one source, no vendor collision, no repository or key to
@@ -368,8 +369,8 @@ ansible-playbook container/minikube.yml -e host=ws01 -e minikube_version=1.38.1
 All seven are migrated, and these are now the only generation: `container/` was deleted on
 2026-08-14 once every successor was verified, so the "Successor to" column names files that
 exist only in git history (`git log --diff-filter=D -- container/`). `container/krew.yml` was
-[retired](../../README.md#retired-containerkrewyml) rather than migrated, so there is no
-`krew.yml` here. What the retirement gate did *not* cover is below, and it is worth reading:
+retired rather than migrated, so there is no `krew.yml` here. What the retirement gate did
+*not* cover is below, and it is worth reading:
 the successors were verified against a real host, but never against a *remote* one — see
 [MIGRATION3.md](../../MIGRATION3.md#known-follow-ups).
 

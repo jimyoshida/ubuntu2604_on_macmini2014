@@ -1,20 +1,14 @@
 # Desktop Host Setup (Non-EC2)
 
-Manual steps for a host these playbooks no longer configure. Most sections below were removed
-from `core/agent-base.yml` on 2026-08-14 (see
-[_multi-user/core/README.md](_multi-user/core/README.md#core-toolsyml) and
-`git log --all --full-history -- core/agent-base.yml core/core-tools.yml`) on the assumption that
-the target already satisfies them or doesn't need them. That assumption holds for an AWS EC2
-instance — cloud-init sets the hostname, the AMI ships `sshd` enabled, there is no lid or suspend
-to fight on a VM, and there is no desktop session to blank or lock. None of it holds for a fresh
-desktop-PC Ubuntu install, so if that's the target, work through whichever sections below apply
-after `_multi-user/core/core-tools.yml` (`core/core-tools.yml` until it was retired on
-2026-08-16 per [MIGRATION4.md](MIGRATION4.md)) and before treating the box as ready. The
-[Samba](#samba-file-sharing-optional)
-section is different: `core/samba.yml` wasn't removed for being EC2-redundant, it was retired
-outright as out of scope (see
-[Retired: `core/samba.yml`](README.md#retired-coresambayml)) — it's here because sharing a home
-directory over SMB is still something a desktop LAN workstation may want, EC2 or not.
+Manual steps for a host these playbooks don't configure — hostname, SSH server, Avahi,
+sleep/screen-blanking, IPv6, journald tuning and Samba. An AWS EC2 instance typically needs none
+of this: cloud-init sets the hostname, the AMI ships `sshd` enabled, there is no lid or suspend to
+fight on a VM, and there is no desktop session to blank or lock. A fresh desktop-PC Ubuntu install
+needs most of it — work through whichever sections below apply, after
+[`_multi-user/core/core-tools.yml`](_multi-user/core/README.md#core-toolsyml), before treating the
+box as ready. [Samba](#samba-file-sharing-optional) is the exception: it isn't EC2-redundant, it's
+here because sharing a home directory over SMB is something a desktop LAN workstation may want,
+EC2 or not.
 
 Every command needs root (`sudo`) unless noted otherwise.
 
@@ -73,9 +67,7 @@ error, so it is safe to run before the keys are in place.
 This is a script rather than a playbook for the same reason
 [`setup-passwordless-sudo.sh`](#passwordless-sudo) above is: it configures **the account
 running it**, needs no privileges and no remote connection, and touches nothing outside that
-account's `$HOME`. It was `core/ssh-key-setup.yml` until 2026-08-10 — a `become: no`,
-`connection: local` playbook whose every task was a `chmod` — and the conversion cost the repo
-nothing except an Ansible dependency for the one step you run before Ansible is useful.
+account's `$HOME`.
 
 ## Avahi (mDNS discovery)
 
@@ -155,7 +147,7 @@ sudo systemctl restart systemd-logind
 
 ## Shell niceties (optional)
 
-A small `~/.bashrc` addition the old playbook made — cosmetic, add only if wanted:
+A small, cosmetic `~/.bashrc` addition — add only if wanted:
 
 ```bash
 # git branch in the prompt

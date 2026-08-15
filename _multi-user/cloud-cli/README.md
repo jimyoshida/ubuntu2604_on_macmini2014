@@ -245,9 +245,9 @@ repo references it, and an unused keyring is inert.
 
 `gui-tools/vscode.yml` also added a `packages.microsoft.com` repository, but a different one
 (`/repos/code`) under its own filename and keyring, so the two never collided. That playbook was
-[retired](../../README.md#retired-gui-tools) on 2026-08-14; a host that ran it keeps the
-`vscode.list` source and the `/usr/share/keyrings/packages.microsoft.gpg` keyring, which are
-still none of this playbook's business.
+retired on 2026-08-14 (`git log --diff-filter=D -- gui-tools/` has the history); a host that ran
+it keeps the `vscode.list` source and the `/usr/share/keyrings/packages.microsoft.gpg` keyring,
+which are still none of this playbook's business.
 
 ### Per-user setup
 
@@ -832,8 +832,8 @@ host that also runs a Vault server:
   is not a CLI installer's business. Task 19 reports the state instead of changing it.
 
 This repo ships no Vault server playbook: `services/vault.yml` was deleted rather than
-migrated, along with the local server it had deployed. The rest of `services/` followed it —
-see [Retired: `services/`](../../README.md#retired-services).
+migrated, along with the local server it had deployed. The rest of `services/` followed it
+(`git log --diff-filter=D -- services/` has the history).
 
 A "client-only" install still lays down server scaffolding, because the package does:
 a `vault` system user, a self-signed cert under `/opt/vault/tls`, `/opt/vault/data`, a

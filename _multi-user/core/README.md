@@ -164,9 +164,9 @@ and got no multi-user successor; it is recoverable from git history
 (`git log --diff-filter=D -- core/README.md`) along with the rest of that file. The Go and Rust
 toolchains that used to live in this directory (`core/golang.yml`, `core/rust.yml`) were retired
 outright on 2026-08-10 as out of scope for a workstation that runs AI coding agents rather than
-compiling with either — see the root
-[README.md](../../README.md#retired-coregolangyml-and-corerustyml). `mise.yml` above is the
-general-purpose replacement for a per-account runtime, same as it was in `core/`.
+compiling with either (`git log --diff-filter=D -- core/golang.yml core/rust.yml` has the
+history). `mise.yml` above is the general-purpose replacement for a per-account runtime, same as
+it was in `core/`.
 
 ## Status
 
