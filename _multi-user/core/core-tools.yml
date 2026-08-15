@@ -1,0 +1,267 @@
+---
+# Install the fixed list of general-purpose CLI packages system-wide on a
+# multi-user workstation.
+#
+#   /usr/bin/<tool>                    for every package that ships a binary
+#   /etc/ssl/certs/ca-certificates.crt the one package here with no binary
+#
+# All nineteen packages already come from Ubuntu's own apt archive, so unlike
+# most of _multi-user/tools/ this migration needed no reach work: the source
+# playbook (core/core-tools.yml, renamed from core/agent-base.yml on
+# 2026-08-14) already installs to root-owned /usr paths. What it does not do
+# is pin anything (plain `state: present` on all nineteen) or verify that any
+# of them actually work, so this is pure correctness work: version-aware
+# idempotency (policy point 6) and per-package unprivileged verification
+# (policy point 9).
+#
+# The verification list is heterogeneous on purpose, not sixteen copies of
+# `--version`: three packages do not fit that shape at all.
+#   - ca-certificates ships no binary. Verified by checking the bundle file
+#     itself: present, non-empty, world-readable.
+#   - cowsay's Ubuntu package is the classic Perl build, which has no
+#     --version flag at all. Verified by running it and checking the message
+#     comes back inside the cow's speech bubble.
+#   - aha has no reliable --version output either. Verified by feeding it a
+#     real ANSI escape sequence and checking it did real work: converted to
+#     an HTML document, not just echoed back.
+# Every verify_cmd below was confirmed against the actual installed binary on
+# this host, not carried over from documentation -- see MIGRATION4.md's own
+# note that several of its guesses were only "medium" or "low" confidence
+# before that check.
+#
+# There is no shell configuration here and no per-user state: every package
+# in this list is a plain CLI tool or a system-wide data file, so there is
+# nothing for B2/B3 to say and nothing to add to a shell profile.
+#
+# Usage:
+#   ansible-playbook core/core-tools.yml -e host=<inventory host or group>
+
+- name: Install core CLI tools system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt candidate versions on Ubuntu 26.04 (resolute), checked 2026-08-15.
+    # Like modern-cli-tools.yml's pins, these are release-specific: overriding
+    # one only helps if that exact dpkg version is available from the
+    # target's configured apt sources.
+    core_tools_packages:
+      - name: curl
+        version: "8.18.0-1ubuntu2.3"
+        verify_cmd: "curl --version | grep -q '^curl 8.18.0'"
+      - name: gnupg
+        version: "2.4.8-4ubuntu3"
+        verify_cmd: "gpg --version | grep -q 'gpg (GnuPG) 2.4.8'"
+      - name: lsb-release
+        version: "12.1-2build1"
+        verify_cmd: "lsb_release -a 2>/dev/null | grep -q '^Distributor ID:.*Ubuntu'"
+      - name: git
+        version: "1:2.53.0-1ubuntu1"
+        verify_cmd: "git --version | grep -q 'git version 2.53.0'"
+      - name: git-lfs
+        version: "3.7.1-1"
+        verify_cmd: "git lfs version | grep -q '^git-lfs/3.7.1'"
+      - name: git-secret
+        version: "0.5.0-1build1"
+        verify_cmd: "git secret --version | grep -q '^0.5.0$'"
+      - name: python3-pip
+        version: "25.1.1+dfsg-1ubuntu2"
+        verify_cmd: "python3 -m pip --version | grep -q 'pip 25.1.1'"
+      - name: jq
+        version: "1.8.1-4ubuntu2"
+        verify_cmd: "jq --version | grep -q '^jq-1.8.1'"
+      - name: zip
+        version: "3.0-15ubuntu3"
+        verify_cmd: "zip -v | grep -q 'This is Zip 3.0'"
+      - name: unzip
+        version: "6.0-29ubuntu1"
+        verify_cmd: "unzip -v | grep -q 'UnZip 6.00'"
+      - name: vim
+        version: "2:9.1.2141-1ubuntu4.7"
+        verify_cmd: "vim --version | grep -q 'VIM - Vi IMproved 9.1'"
+      - name: net-tools
+        version: "2.10-2ubuntu1"
+        verify_cmd: "netstat --version | grep -q 'net-tools 2.10'"
+      - name: ncat
+        version: "7.98+dfsg-1"
+        verify_cmd: "ncat --version 2>&1 | grep -qi 'Ncat'"
+      - name: figlet
+        version: "2.2.5-3.1"
+        verify_cmd: "figlet -v 2>&1 | grep -qi 'FIGlet'"
+      - name: dos2unix
+        version: "7.5.4-1"
+        verify_cmd: "dos2unix -V 2>&1 | grep -qi 'dos2unix'"
+      - name: make
+        version: "4.4.1-3"
+        verify_cmd: "make --version | grep -q 'GNU Make 4.4.1'"
+    # ca-certificates ships no binary, so it is installed with the rest but
+    # verified separately (task 8), not through core_tools_packages.
+    core_tools_ca_certificates_version: "20260601~26.04.1"
+    core_tools_cowsay_version: "3.03+dfsg2-8build1"
+    core_tools_aha_version: "0.5.1-3build2"
+    core_tools_smoke_home: /var/tmp/core-tools-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    core_tools_verify_uid: 65534    # nobody
+    core_tools_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed version of each package
+      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.name }}"
+      register: core_tools_installed
+      loop: >-
+        {{ core_tools_packages
+           + [{'name': 'ca-certificates', 'version': core_tools_ca_certificates_version},
+              {'name': 'cowsay', 'version': core_tools_cowsay_version},
+              {'name': 'aha', 'version': core_tools_aha_version}] }}
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide which packages need installing
+      # A single filtered list, rather than a per-package task, so the
+      # install task below is one apt-get invocation instead of nineteen.
+      ansible.builtin.set_fact:
+        core_tools_pending: "{{ core_tools_pending | default([]) + [item.item.name ~ '=' ~ item.item.version] }}"
+      loop: "{{ core_tools_installed.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.item.version != (item.stdout | default(''))
+
+    - name: 3. Install the packages that need installing
+      ansible.builtin.apt:
+        name: "{{ core_tools_pending | default([]) }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        allow_downgrade: true
+      when: (core_tools_pending | default([])) | length > 0
+
+    - name: 4. Verify the installed version of each package
+      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.name }}"
+      register: core_tools_version_out
+      loop: >-
+        {{ core_tools_packages
+           + [{'name': 'ca-certificates', 'version': core_tools_ca_certificates_version},
+              {'name': 'cowsay', 'version': core_tools_cowsay_version},
+              {'name': 'aha', 'version': core_tools_aha_version}] }}
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: item.version != core_tools_version_out.stdout
+
+    - name: 5. Verify the ca-certificates bundle
+      # ca-certificates ships no binary -- policy point 9's "exercise the
+      # tool" becomes "confirm the data file it installs is real and
+      # readable by everyone", which is the equivalent check for a package
+      # with no executable to run.
+      ansible.builtin.stat:
+        path: /etc/ssl/certs/ca-certificates.crt
+      register: core_tools_ca_bundle
+
+    - name: 6. Assert the ca-certificates bundle is present, non-empty and world-readable
+      ansible.builtin.assert:
+        that:
+          - core_tools_ca_bundle.stat.exists
+          - core_tools_ca_bundle.stat.size > 0
+          - core_tools_ca_bundle.stat.roth
+        fail_msg: >-
+          /etc/ssl/certs/ca-certificates.crt is missing, empty, or not
+          world-readable.
+
+    - name: 7. Create a scratch HOME for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ core_tools_smoke_home }}"
+        state: directory
+        owner: "{{ core_tools_verify_uid }}"
+        group: "{{ core_tools_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 8. Run each package's verify command as an unprivileged user
+      # chdir into the scratch HOME, not ansible's own working directory:
+      # uid 65534 cannot stat this playbook's checkout path, and git (lfs,
+      # secret) stats the current directory just to start up, which failed
+      # here on the first run with "Permission denied" before this was added.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ core_tools_verify_uid }} --regid={{ core_tools_verify_gid }} --clear-groups
+          env HOME={{ core_tools_smoke_home }} bash -c "{{ item.verify_cmd }}"
+        chdir: "{{ core_tools_smoke_home }}"
+      loop: "{{ core_tools_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: core_tools_smoke
+      changed_when: false
+      failed_when: core_tools_smoke.rc != 0
+
+    - name: 9. Print a speech-bubble message as an unprivileged user (cowsay)
+      # cowsay's Ubuntu package is the classic Perl build, which has no
+      # --version flag at all -- confirmed by running it with no arguments
+      # to check for a --version option, which does not exist. Real work
+      # instead: a known string must come back inside the cow's bubble.
+      #
+      # Absolute path, not a bare `cowsay` on PATH: Debian/Ubuntu installs it
+      # to /usr/games, which sudo's default secure_path
+      # (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin,
+      # confirmed on this host) does not include -- confirmed at run time,
+      # where the bare name failed with "No such file or directory" under
+      # become even though it resolves fine in an interactive login shell.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ core_tools_verify_uid }} --regid={{ core_tools_verify_gid }} --clear-groups
+          env HOME={{ core_tools_smoke_home }} /usr/games/cowsay multi-user-smoke-test
+        chdir: "{{ core_tools_smoke_home }}"
+      register: core_tools_cowsay_smoke
+      changed_when: false
+      failed_when: "'multi-user-smoke-test' not in core_tools_cowsay_smoke.stdout"
+
+    - name: 10. Convert an ANSI escape sequence to HTML as an unprivileged user (aha)
+      # aha's --version output is not reliable enough to pin a match string
+      # against, so this proves real work instead: a bold ANSI escape must
+      # come back as an actual HTML document, not merely echoed unchanged.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ core_tools_verify_uid }} --regid={{ core_tools_verify_gid }} --clear-groups
+          env HOME={{ core_tools_smoke_home }} bash -c
+          "printf '\\033[1mmulti-user-smoke-test\\033[0m\\n' | aha"
+        chdir: "{{ core_tools_smoke_home }}"
+      register: core_tools_aha_smoke
+      changed_when: false
+      failed_when: >-
+        'multi-user-smoke-test' not in core_tools_aha_smoke.stdout
+        or '<html' not in (core_tools_aha_smoke.stdout | lower)
+
+    - name: 11. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ core_tools_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 12. Display installation summary
+      # Built as a real Jinja list, not a folded string joined on a literal
+      # '\n' -- confirmed at run time that a '\n' inside a >- folded scalar
+      # never reaches Jinja as an escape (YAML block scalars do not process
+      # backslash escapes, so it stays two literal characters), which is what
+      # MIGRATION.md's trim_blocks finding was working around. A YAML/Jinja
+      # list handed straight to debug's msg prints one line per element with
+      # no join or escaping needed at all.
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['Core CLI tools installed system-wide:']
+             + ((core_tools_packages | map(attribute='name') | list)
+                | zip(core_tools_packages | map(attribute='version') | list)
+                | map('join', ' ')
+                | map('regex_replace', '^', '  ')
+                | list)
+             + ['  ca-certificates ' ~ core_tools_ca_certificates_version,
+                '  cowsay ' ~ core_tools_cowsay_version,
+                '  aha ' ~ core_tools_aha_version,
+                '',
+                'Verified runnable by an unprivileged user (uid ' ~ core_tools_verify_uid ~ ').',
+                'No shell configuration was changed and no per-user state was written.'] }}

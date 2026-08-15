@@ -3,11 +3,13 @@
 Policy and procedure for migrating the last three playbooks — `core/core-tools.yml`,
 `core/mise.yml`, `core/nodejs.yml` — from `core/` to `_multi-user/core/`.
 
-**Status: planned, not started.** `_multi-user/core/` already exists as an empty directory (no
-README, no playbooks) but nothing has been written into it yet. This document is the plan;
-see [Migration status](#migration-status) for what remains before it can say "complete" the way
-[MIGRATION.md](MIGRATION.md), [MIGRATION2.md](MIGRATION2.md) and [MIGRATION3.md](MIGRATION3.md)
-do.
+**Status: all three playbooks written and verified (localhost).** `_multi-user/core/` now holds
+`core-tools.yml`, `nodejs.yml` and `mise.yml`, each run to `failed=0` against `localhost`, re-run
+idempotently, and checked clean under `--check` — see [Migration status](#migration-status). What
+is still open, unlike [MIGRATION.md](MIGRATION.md), [MIGRATION2.md](MIGRATION2.md) and
+[MIGRATION3.md](MIGRATION3.md)'s "complete": `core/` itself is not yet retired. Retiring it is a
+deliberate, separate decision this document deferred from the start — see [Known
+follow-ups](#known-follow-ups) — not a gap in the playbooks themselves.
 
 This document is the fourth in the series and, if it closes, the last: `core/` is the whole of
 what remains of the original single-user tree (`tool/`, `cloud-cli/` and `container/` are gone —
@@ -340,23 +342,68 @@ additions apply unchanged, with one more specific to this directory:
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `core-tools.yml` | apt, unpinned | apt, pinned, per-package verify | TBD | Not started |
-| `nodejs.yml` | NodeSource setup script, unpinned; Corepack shims mistaken for Yarn/pnpm | `deb822_repository`, pinned; Yarn/pnpm via `npm install -g` per decision (a) | TBD | Not started |
-| `mise.yml` | vendor apt repo (`.list` + shell dearmor), unpinned; `mise activate` in `~/.bashrc` | `deb822_repository` (URL key form), pinned; activation in `/etc/profile.d/mise.sh` | TBD | Not started |
+| `core-tools.yml` | apt, unpinned | apt, pinned, per-package verify | 19 packages, see the playbook's `vars` | Verified (localhost) |
+| `nodejs.yml` | NodeSource setup script, unpinned; Corepack shims mistaken for Yarn/pnpm | `deb822_repository`, pinned; Yarn/pnpm via `npm install -g` per decision (a) | nodejs 24.19.0-1nodesource1, yarn 1.22.22, pnpm 11.21.0 | Verified (localhost) |
+| `mise.yml` | vendor apt repo (`.list` + shell dearmor), unpinned; `mise activate` in `~/.bashrc` | `deb822_repository` (URL key form), pinned; activation in `/etc/profile.d/mise.sh` | 2026.8.6 | Verified (localhost) |
 
-The `Pinned` column stays `TBD` until each playbook is written, the same call MIGRATION2 and
-MIGRATION3 made and for the same reason: MIGRATION.md's step 3 requires checking upstream at
-write time, and every version cited in this document is a 2026-08-14 reading that will be stale
-by then.
+All three were run to `failed=0` against `localhost`, re-run a second time to confirm
+`changed=` only the scratch-`HOME` create/remove every other `_multi-user/` playbook shows on a
+re-run, and checked clean under `--check`. Same two caveats as every prior migration: ansible-core
+2.20 only, `ansible_connection=local` only — neither the 24.04 control node nor the SSH/`ubuntu`
+path has been exercised.
+
+**`mise_version` moved mid-session, which is the argument for checking upstream at write time
+rather than trusting this document.** The pin was first set to `2026.8.5` (`apt-cache policy
+mise`'s candidate when this plan was written, 2026-08-14) and failed to install a few minutes
+later with "no available installation candidate": upstream had published `2026.8.6` in the
+interim and apt's candidate moved with it. Re-checking and pinning `2026.8.6` fixed it
+immediately. The underlying mechanism (`apt`'s `allow_downgrade: true` synthesizing a
+priority-1001 version pin) is necessary but not sufficient on this host's `python3-apt`
+(3.1.0ubuntu1) whenever the requested version is not also the current apt candidate — reproduced
+directly against `apt_pkg.Policy.get_candidate_ver()`, independently of Ansible, while plain
+`apt-get install <pkg>=<version> --allow-downgrades` resolves the identical request correctly.
+This is not particular to `mise.yml` or `nodejs.yml` (both hit it while testing an artificial
+downgrade during verification): every `_multi-user/` playbook that pins an apt package the same
+way carries the same exposure, and none of the prior "Verified" rows in MIGRATION.md/2/3 are
+known to have exercised a genuine downgrade of an already-different-and-newer-installed package
+through the module itself. It does not affect the normal case any of these playbooks is written
+for — installing the pinned version onto a host with an older or no package at all, which is
+what was actually verified in every row above.
+
+**Two more findings only visible by running the playbooks, not by reading the source.** First,
+`cowsay`'s Ubuntu package lives in `/usr/games`, which sudo's default `secure_path` does not
+include — `core-tools.yml` calls it by absolute path rather than relying on `PATH`. Second, every
+unprivileged smoke test in this directory needed an explicit `chdir` into its scratch `HOME` that
+an early draft omitted: `git lfs`/`git secret` (in `core-tools.yml`) and both `yarn` and `pnpm`
+(in `nodejs.yml`, the latter walking up from cwd looking for an rc file) all stat or scan the
+current directory on startup, and an unprivileged uid cannot even stat this repository's checkout
+path — the same class of defect MIGRATION2.md documented for `gcx-cli.yml`'s cwd read, recurring
+here in tools this migration didn't itself write.
+
+**A cosmetic defect in the `msg: >-` + `join('\n')` summary pattern several already-"Verified"
+`_multi-user/` playbooks use (`docker.yml`, `kubectl.yml`, `github-cli.yml`, and this
+migration's own first drafts of `nodejs.yml`/`mise.yml`).** Confirmed directly: a `'\n'` written
+inside a YAML folded (`>-`) scalar never reaches Jinja as an escape sequence — YAML block scalars
+do not process backslash escapes at all, so the two characters stay literal, and `join('\n')`
+prints one line of visible backslash-n text instead of a multi-line summary. This is not the
+`trim_blocks` defect MIGRATION.md already found and fixed with the same-looking `{{ '\n' }}`
+idiom — that fix works only when the surrounding scalar is YAML **double-quoted** (as in
+`modern-cli-tools.yml`'s working example), because it is YAML's own quote parsing that turns
+`\n` into a real newline before Jinja ever sees it, not Jinja's. The fix used here avoids the
+whole class: hand `ansible.builtin.debug`'s `msg` a real Jinja **list** built with `+` and
+`ternary(...)` and skip `join()` entirely — the module already prints one line per list element,
+confirmed working inside a `>-` scalar with no escaping needed at all. Worth applying to the
+already-"Verified" playbooks named above the next time one of them is touched; none of their
+summary text affects `failed=`, so this was never going to surface as a run failure.
 
 ## Known follow-ups
 
-- **Retiring `core/`.** Once all three playbooks are written and verified, `core/` can be
-  retired the same way `tool/`, `cloud-cli/` and `container/` were — and, unlike the three
-  before it, retiring `core/` retires *the entire legacy tree*: nothing named `core/`, `tool/`,
-  `cloud-cli/`, `container/`, `services/` or `gui-tools/` would remain, only `_multi-user/` and
-  `_personal/`. That is the point at which the two follow-ups MIGRATION3.md left open stop being
-  hypothetical:
+- **Retiring `core/`.** Now that all three playbooks are written and verified, `core/` can be
+  retired the same way `tool/`, `cloud-cli/` and `container/` were — a deliberate decision this
+  document has left open rather than taken. Unlike the three before it, retiring `core/` retires
+  *the entire legacy tree*: nothing named `core/`, `tool/`, `cloud-cli/`, `container/`,
+  `services/` or `gui-tools/` would remain, only `_multi-user/` and `_personal/`. That is the
+  point at which the two follow-ups MIGRATION3.md left open stop being hypothetical:
   - **Renaming `_multi-user/`.** The leading underscore has meant "staging, sorts apart from the
     live single-user directories it will replace" since MIGRATION.md. Once `core/` is gone there
     are no live single-user directories left to sort apart from, on any of the (then) 34
@@ -375,6 +422,7 @@ by then.
   playbook should remove it (a `blockinfile` with `state: absent` against an explicit user list)
   is the same open question MIGRATION3 left open for its own six blocks, for the same reason: it
   is the opposite of B2, and only argued for by nothing else in the repo ever taking it out.
-- **Bare `ansible_architecture`.** Carried forward again: write `nodejs.yml` and `mise.yml` using
+- ~~**Bare `ansible_architecture`.**~~ **Done.** `nodejs.yml` and `mise.yml` were written using
   `ansible_facts['architecture']` from the start, per MIGRATION2's and MIGRATION3's follow-up
-  note, rather than adding two more playbooks to the outstanding repo-wide pass.
+  note, so neither adds to the outstanding repo-wide pass, which still has only `aws-cli.yml` and
+  the `_multi-user/tools/` playbooks to touch.

@@ -1,0 +1,321 @@
+---
+# Install mise (polyglot runtime version manager) system-wide on a multi-user
+# workstation.
+#
+#   /usr/bin/mise                                from mise's own apt repository
+#   /etc/apt/sources.list.d/mise.sources         repository definition
+#   /etc/profile.d/mise.sh                       activation hook (interactive shells only)
+#
+# The apt install itself already lands in a root-owned path, so most of this
+# migration is the same correctness work as core-tools.yml and nodejs.yml:
+# pin the version, replace the get_url + shell: gpg --dearmor + apt_repository
+# sequence with a declarative deb822_repository per A5, take the architecture
+# from facts. The one genuine relocation is task 6 in the source playbook,
+# which appended `eval "$(mise activate bash)"` to the invoking account's own
+# ~/.bashrc -- so only that one account, and only new shells it opened after
+# running the playbook, ever got mise's shell integration.
+#
+# eval "$(mise activate bash)" is a PATH/env-rewriting hook, not a completion
+# and not a static alias, so per MIGRATION3's B3 it takes the same
+# destination as _multi-user/tools/modern-cli-tools.yml's fzf.sh: a literal,
+# live `eval "$(mise activate bash)"` line in /etc/profile.d/mise.sh, run
+# fresh on every interactive shell rather than a snapshot of its output. That
+# also needs /etc/bash.bashrc to source /etc/profile.d for non-login
+# interactive shells (an SSH session, for instance), which this playbook lays
+# down defensively in case it is the first one run on a given host.
+#
+# MISE WRITES TO $HOME ON A PLAIN --version, so this playbook never runs mise
+# itself as root: the install and post-install version checks compare
+# dpkg-query output instead (confirmed live: `HOME=<scratch> mise --version`
+# creates <scratch>/.cache/mise/latest-version -- a self-update-check cache
+# -- from the plainest possible invocation. Running that as root would leave
+# /root/.cache/mise behind, which is exactly what B2 forbids). The
+# unprivileged checks below give mise a scratch, writable HOME for the same
+# reason every other tool in this repo that touches $HOME gets one.
+#
+# mise also has an unrelated, confirmed-harmless quirk worth knowing before
+# reading its stderr: a "[WARN] migrate: error parsing config file: ..."
+# line names the REAL invoking account's ~/.config/mise/config.toml even when
+# $HOME has been overridden -- it resolves that one path via the OS user
+# database rather than $HOME (confirmed with `strace` and `env -i`; every
+# other mise state, including the cache write above, does respect $HOME).
+# It is a read, not a write, and reading a path that does not exist for uid
+# 65534 or for root produces no error -- so it is noise, not a defect this
+# playbook needs to work around.
+#
+# Usage:
+#   ansible-playbook core/mise.yml -e host=<inventory host or group>
+#   ansible-playbook core/mise.yml -e host=ws01 -e mise_version=2026.8.5
+
+- name: Install mise system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt candidate on Ubuntu 26.04 (resolute), checked 2026-08-15 -- and
+    # re-checked minutes later while writing this playbook, when upstream
+    # published 2026.8.6 mid-session and moved the candidate out from under
+    # the first pin. mise ships releases fast enough that this pin should be
+    # expected to lag by the time anyone reads it; re-check apt-cache policy
+    # before trusting it.
+    mise_version: "2026.8.6"
+    mise_repo_uri: "https://mise.jdx.dev/deb"
+    mise_suite: stable
+    mise_key_url: "https://mise.jdx.dev/gpg-key.pub"
+    # ansible_facts['architecture'] -> apt architecture name. Both amd64 and
+    # arm64 Packages indices are confirmed to exist under this repository.
+    mise_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    mise_arch: "{{ mise_arch_map.get(ansible_facts['architecture'], '') }}"
+    # mise's signing key EXPIRES 2028-01-02 (checked 2026-08-15), so
+    # MIGRATION2's rule puts this on the URL form: fetch each run (the module
+    # compares by checksum, so it stays idempotent) and pin only the
+    # fingerprint -- the github-cli.yml/kubectl.yml form, not the
+    # docker.yml/nodejs.yml one.
+    mise_key_fingerprint: "24853EC9F655CE80B48E6C3A8B81C9D17413A06D"
+    # The source playbook's apt source, written by apt_repository with
+    # filename: mise.
+    mise_legacy_source: /etc/apt/sources.list.d/mise.list
+    mise_smoke_home: /var/tmp/mise-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    mise_verify_uid: 65534    # nobody
+    mise_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 5.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No mise apt architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to mise_arch_map.
+      when: mise_arch | length == 0
+
+    - name: 3. Remove the single-user playbook's apt source for this repository
+      # core/mise.yml wrote mise.list via apt_repository. Left beside the
+      # .sources file below, apt reads the repository twice and warns that
+      # the target is configured multiple times. Its keyring
+      # (/usr/share/keyrings/mise-archive-keyring.gpg) is left alone: no
+      # other playbook references it, and an unused keyring is inert.
+      ansible.builtin.file:
+        path: "{{ mise_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the mise apt repository
+      ansible.builtin.deb822_repository:
+        name: mise
+        types:
+          - deb
+        uris:
+          - "{{ mise_repo_uri }}"
+        suites:
+          - "{{ mise_suite }}"
+        components:
+          - main
+        architectures:
+          - "{{ mise_arch }}"
+        signed_by: "{{ mise_key_url }}"
+        state: present
+        mode: '0644'
+      register: mise_repo
+
+    - name: 5. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring, and
+      # this tolerates a miss (failed_when: false): on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ mise_repo.key_filename | default('/etc/apt/keyrings/mise.asc', true) }}
+      register: mise_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Confirm the keyring holds mise's signing key
+      ansible.builtin.fail:
+        msg: >-
+          The keyring for {{ mise_repo_uri }} does not contain mise's signing
+          key {{ mise_key_fingerprint }}. It may have been rotated (this key
+          expires 2028-01-02). Verify the new key against mise.jdx.dev and
+          update mise_key_fingerprint deliberately -- do not delete this
+          check.
+      when:
+        - mise_key_fingerprint not in (mise_fpr.stdout | default(''))
+        - not (ansible_check_mode and mise_fpr.rc | default(1) != 0)
+
+    - name: 7. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: mise_repo.changed
+
+    - name: 8. Check the currently installed mise version
+      # dpkg-query, never `mise --version` as root -- see the header comment
+      # on why running mise itself as root is a B2 violation.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' mise
+      register: mise_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether mise needs installing
+      ansible.builtin.set_fact:
+        mise_install_needed: >-
+          {{ mise_installed.rc != 0 or mise_installed.stdout != mise_version }}
+        mise_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (mise_installed.rc != 0
+                       or mise_installed.stdout != mise_version)) }}
+
+    - name: 9a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install mise {{ mise_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather
+          than failed. Re-run without --check.
+      when: not (mise_can_verify | bool)
+
+    - name: 10. Install mise via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
+      ansible.builtin.apt:
+        name: "mise={{ mise_version }}"
+        state: present
+        allow_downgrade: true
+      when:
+        - mise_install_needed | bool
+        - not (ansible_check_mode and mise_repo.changed)
+
+    - name: 11. Verify the installed mise package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' mise
+      register: mise_dpkg
+      changed_when: false
+      failed_when: mise_dpkg.stdout != mise_version
+      when: mise_can_verify | bool
+
+    - name: 12. Install the shared mise activation hook
+      # A literal, live eval -- not a captured snapshot of `mise activate
+      # bash`'s output -- matching modern-cli-tools.yml's fzf.sh exactly.
+      # Confirmed separately that `mise activate bash` itself writes nothing
+      # under $HOME, so there is nothing this task needs to sandbox.
+      ansible.builtin.copy:
+        dest: /etc/profile.d/mise.sh
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Managed by _multi-user/core/mise.yml
+          eval "$(mise activate bash)"
+
+    - name: 13. Ensure interactive non-login shells read /etc/profile.d
+      # /etc/profile.d/*.sh is only sourced by login shells by default; a
+      # non-login interactive shell (a plain SSH session, for instance) reads
+      # /etc/bash.bashrc instead. Idempotent no-op if another _multi-user/
+      # playbook already laid this down on the target.
+      ansible.builtin.blockinfile:
+        path: /etc/bash.bashrc
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: profile.d for interactive shells"
+        block: |
+          for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
+
+    - name: 14. Create a scratch HOME for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ mise_smoke_home }}"
+        state: directory
+        owner: "{{ mise_verify_uid }}"
+        group: "{{ mise_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: mise_can_verify | bool
+
+    - name: 15. Confirm the activation hook loads for an unprivileged interactive shell
+      # Proves B3 end to end, not merely that a file was written: a
+      # non-login interactive shell for an arbitrary uid must define both
+      # mise() and _mise_hook(), which only happens if /etc/bash.bashrc ->
+      # /etc/profile.d/mise.sh -> `mise activate bash` actually ran.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ mise_verify_uid }} --regid={{ mise_verify_gid }} --clear-groups
+          bash -i -c 'declare -F mise && declare -F _mise_hook'
+        chdir: "{{ mise_smoke_home }}"
+      environment:
+        HOME: "{{ mise_smoke_home }}"
+      register: mise_smoke_activation
+      changed_when: false
+      failed_when: >-
+        'mise' not in mise_smoke_activation.stdout
+        or '_mise_hook' not in mise_smoke_activation.stdout
+      when: mise_can_verify | bool
+
+    - name: 16. Inspect the install as an unprivileged user
+      # Stronger than --version: mise doctor inspects the real install
+      # (build target, aqua registry, resolved directories) rather than
+      # printing a bare version string, which is A4's preferred level-2
+      # check. Confirmed to return in well under a second with a scratch,
+      # empty HOME -- it does make a fast self-update-check request, so this
+      # asserts only the version string it reports, not anything about that
+      # check's outcome, which tolerates the target having no network egress.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ mise_verify_uid }} --regid={{ mise_verify_gid }} --clear-groups
+          env HOME={{ mise_smoke_home }} mise doctor
+        chdir: "{{ mise_smoke_home }}"
+      register: mise_smoke_doctor
+      changed_when: false
+      failed_when: mise_version not in mise_smoke_doctor.stdout
+      when: mise_can_verify | bool
+
+    - name: 17. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ mise_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 18. Display installation summary
+      # A real Jinja list handed to msg, not a string joined on a literal
+      # '\n' -- confirmed at run time that '\n' inside a >- folded scalar
+      # never reaches Jinja as an escape (YAML block scalars do not process
+      # backslash escapes), so a join('\n') here would have printed one line
+      # of literal backslash-n text instead of actual newlines.
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               'mise ' ~ mise_version ~ ' (' ~ mise_arch ~ ') '
+               ~ (mise_can_verify | bool
+                  | ternary('is installed system-wide.', 'would be installed system-wide.')),
+               '',
+               '  /usr/bin/mise',
+               '  /etc/apt/sources.list.d/mise.sources',
+               '  /etc/profile.d/mise.sh                live `eval "$(mise activate bash)"`',
+               '',
+             ]
+             + (mise_can_verify | bool
+                | ternary(['Verified: an unprivileged account (uid ' ~ mise_verify_uid
+                           ~ ') gets the activation hook in a non-login interactive shell,',
+                           'and `mise doctor` inspects the install cleanly.'],
+                          ['Not verified: this was a --check run against a host without this version.']))
+             + ['',
+                'Each account manages its own runtimes, e.g.:',
+                '  mise use --global python@3.12',
+                '  mise ls-remote python',
+                '',
+                'NOTE: a host that ran core/mise.yml before this playbook may still carry',
+                "an 'ANSIBLE MANAGED BLOCK: mise' eval in that one account's ~/.bashrc.",
+                'This playbook does not remove it -- it is redundant with the hook above,',
+                "not harmful, and removing text from an account's $HOME is a decision this",
+                'migration leaves to the operator (see MIGRATION4.md known follow-ups).']
+          ) }}

@@ -78,6 +78,7 @@ per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every a
 | [_multi-user/tools/](_multi-user/tools/README.md) | Developer tools (bats, gomplate, shellcheck, trivy, hadolint, grype-syft, modern-cli-tools, yq, junit2html, markdownlint, kube-score) |
 | [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, tofu, promtool/amtool, vault — the [MIGRATION2.md](MIGRATION2.md) migration is complete) |
 | [_multi-user/container/](_multi-user/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers — the [MIGRATION3.md](MIGRATION3.md) migration is complete) |
+| [_multi-user/core/](_multi-user/core/README.md) | Core CLI tools, Node.js/Yarn/pnpm, mise (the [MIGRATION4.md](MIGRATION4.md) playbooks are written and verified; `core/` itself is not yet retired) |
 
 One difference to know before running `container/docker.yml`, because it reads as a regression
 and is not one: it grants **no** account access to the Docker socket unless you name them in
@@ -309,23 +310,27 @@ history (`git log --diff-filter=D -- core/samba.yml`), as is the original
 
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
-[MIGRATION2.md](MIGRATION2.md) and [MIGRATION3.md](MIGRATION3.md) amendments. 37 playbooks:
+[MIGRATION2.md](MIGRATION2.md), [MIGRATION3.md](MIGRATION3.md) and [MIGRATION4.md](MIGRATION4.md)
+amendments. 40 playbooks:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
-| [Multi-user](#multi-user-31) | 31 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
+| [Multi-user](#multi-user-34) | 34 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
 | [Effectively shared](#effectively-shared-2) | 2 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
 | [Mixed](#mixed--shared-install-personal-tail-1) | 1 | Shared install plus a tail that benefits only the invoker |
 | [Personal only](#personal-only-3) | 3 | The whole install lands in one `$HOME` or one account |
 
-Three quarters of the repo is now multi-user, and the balance moved in one step rather than
-gradually: a migrated playbook is a *new* file, so during a migration both generations are
-counted, and the total drops back when the originals are retired. That has now happened
-three times, and all three migrations are finished: `tool/` after MIGRATION.md, all thirteen
-of `cloud-cli/` after MIGRATION2.md, and all seven of `container/` after MIGRATION3.md. None
-of the three directories still exists. The total held at 40 across the last of them because
-seven successors replaced exactly seven originals, then dropped to 37 when three more `core/`
-playbooks were deleted outright with no successor at all (see below). Twelve playbooks in total
+Most of the repo is now multi-user, and the balance moved in steps rather than gradually: a
+migrated playbook is a *new* file, so during a migration both generations are counted, and the
+total drops back when the originals are retired. That has now happened three times, and three
+migrations are finished: `tool/` after MIGRATION.md, all thirteen of `cloud-cli/` after
+MIGRATION2.md, and all seven of `container/` after MIGRATION3.md. None of the three directories
+still exists. The total held at 40 across the last of them because seven successors replaced
+exactly seven originals, then dropped to 37 when three more `core/` playbooks were deleted
+outright with no successor at all (see below), then rose back to 40 as MIGRATION4.md's three
+`_multi-user/core/` successors were written and verified against `localhost` — with their
+`core/` originals **not yet retired**, so for now both generations are counted, the same way the
+first three migrations were counted mid-flight. Twelve playbooks in total
 have gone the deleted-rather-than-migrated way: `services/vault.yml`, `services/n8n.yml`,
 `services/jellyfin.yml` and `services/freshrss.yml` (see
 [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
@@ -351,10 +356,12 @@ one person. They are shared only in *outcome*. Both underscore trees use the pus
 for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
 because it belongs to accounts named explicitly rather than to whoever is logged in.
 
-### Multi-user (31)
+### Multi-user (34)
 
-All of `_multi-user/tools/` (11), all of `_multi-user/cloud-cli/` (13) and all of
-`_multi-user/container/` (7). Each uses
+All of `_multi-user/tools/` (11), all of `_multi-user/cloud-cli/` (13), all of
+`_multi-user/container/` (7) and all of `_multi-user/core/` (3 — `core-tools.yml`, `nodejs.yml`,
+`mise.yml`, written and verified against `localhost` by MIGRATION4.md; their `core/` originals
+are counted separately below, since they are not yet retired). Each uses
 `hosts: "{{ host }}"`, installs to root-owned system paths, puts shell configuration in
 `/etc/profile.d`, `/etc/bash_completion.d` or `/etc/environment`, pins its version in
 `vars:`, and ends with a `setpriv --reuid=65534` task that proves the tool works for an
@@ -394,6 +401,10 @@ logind, journald, hostname and IPv6 handling were all peeled off — see
 | `core/nodejs.yml` | apt only |
 | `core/core-tools.yml` | apt only |
 
+Both now have `_multi-user/core/` successors ([MIGRATION4.md](MIGRATION4.md)), counted separately
+under [Multi-user](#multi-user-34) above; these two rows are the originals, kept here until
+`core/` is deliberately retired.
+
 ### Mixed — shared install, personal tail (1)
 
 This category was three quarters `container/` until 2026-08-14: `docker`, `podman`, `kubectl`,
@@ -410,6 +421,11 @@ the repo entirely is not worth un-mixing either. What is left is `core/mise.yml`
 | Playbook | Shared part | Personal part |
 |----------|-------------|---------------|
 | `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
+
+`core/mise.yml` now has an unmixed `_multi-user/core/mise.yml` successor
+([MIGRATION4.md](MIGRATION4.md)) that moves the activation line to `/etc/profile.d/mise.sh`,
+counted separately under [Multi-user](#multi-user-34) above — this row is the original, kept
+here until `core/` is deliberately retired.
 
 ### Personal only (3)
 

@@ -1,0 +1,429 @@
+---
+# Install Node.js LTS system-wide from NodeSource, plus Yarn Classic and
+# pnpm, on a multi-user workstation.
+#
+#   /usr/bin/node, /usr/bin/npm, /usr/bin/npx    from the NodeSource package
+#   /usr/bin/yarn, /usr/bin/pnpm                 real npm-global installs, NOT Corepack shims
+#   /etc/apt/sources.list.d/nodesource.sources   repository definition, NodeSource's key inline
+#
+# Node.js itself already lands in a root-owned system path -- npm's global
+# prefix on a NodeSource install is /usr -- so like core-tools.yml this
+# migration is correctness work: pin the version (the source playbook ran
+# NodeSource's own `curl | bash` setup script and installed whatever LTS
+# release that resolved to on the day it ran, recording nothing), replace the
+# script with a declarative deb822_repository per A5, and take the
+# architecture from facts instead of the hardcoded amd64 the setup script's
+# own internals assume.
+#
+# THE YARN/PNPM FIX IS THE REAL WORK HERE. NodeSource's `nodejs` package
+# bundles Corepack, and Corepack ships /usr/bin/yarn and /usr/bin/pnpm as its
+# own dispatcher shims -- present from the moment nodejs is installed, before
+# this playbook's Yarn/pnpm tasks ever run. The source playbook's
+# `npm install -g yarn` / `npm install -g pnpm` were guarded on
+# `creates: /usr/bin/yarn` / `creates: /usr/bin/pnpm`, which is satisfied by
+# Corepack's shims and never actually replaces them -- so on every host that
+# has ever run it, "yarn" and "pnpm" are not this repo's install at all: they
+# are Corepack's own dispatcher, which downloads whatever version is current
+# on the npm registry the first time any account invokes it, non-deterministic
+# across accounts and across time, into that account's own npm/Corepack cache.
+#
+# The fix (MIGRATION4.md's decision (a)): `corepack disable` removes
+# Corepack's shims, then `npm install -g yarn@<version> pnpm@<version>` --
+# already this repo's trusted mechanism for a root-owned global npm install,
+# per tools/markdownlint.yml -- puts real, pinned packages at the same paths.
+#
+# The idempotency check never invokes yarn/pnpm directly while a Corepack
+# shim might still be at that path: doing so would trigger exactly the
+# non-deterministic download this playbook exists to prevent. It instead
+# resolves the binary with `readlink -f` and checks whether the path leads
+# into Corepack's own tree, and separately asks npm's own package metadata
+# (`npm ls -g <pkg>@<version>`) rather than executing the binary at all.
+# Only once that confirms a real npm-managed install at the pinned version is
+# `yarn --version` / `pnpm --version` run, for the human-readable summary and
+# the unprivileged smoke test.
+#
+# Usage:
+#   ansible-playbook core/nodejs.yml -e host=<inventory host or group>
+#   ansible-playbook core/nodejs.yml -e host=ws01 -e nodejs_version=24.19.0-1nodesource1
+
+- name: Install Node.js LTS, Yarn and pnpm system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # The stream is part of the pin: moving to Node 26 when it becomes LTS
+    # means editing nodejs_stream (which changes the repository URI) as well
+    # as nodejs_version, not just the version string.
+    nodejs_stream: "24.x"
+    nodejs_version: "24.19.0-1nodesource1"
+    nodejs_repo_uri: "https://deb.nodesource.com/node_{{ nodejs_stream }}"
+    nodejs_suite: nodistro
+    # ansible_facts['architecture'] -> apt architecture name. Both amd64 and
+    # arm64 Packages indices are confirmed to exist under this repository;
+    # the source playbook's setup script mapped this internally, which a
+    # declarative deb822_repository task has to do for itself.
+    nodejs_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    nodejs_arch: "{{ nodejs_arch_map.get(ansible_facts['architecture'], '') }}"
+    # NodeSource's signing key carries NO EXPIRY (checked 2026-08-15:
+    # `gpg --show-keys` reports an empty expiration field on the primary
+    # [SC] key), so MIGRATION2's rule pins the bytes inline rather than
+    # fetching by URL -- the docker.yml/azure-cli.yml form, not the
+    # github-cli.yml/kubectl.yml one.
+    nodejs_key_fingerprint: "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
+    nodejs_signing_key: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+
+      mQENBFdDN1ABCADaNd/I3j3tn40deQNgz7hB2NvT+syXe6k4ZmdiEcOfBvFrkS8B
+      hNS67t93etHsxEy7E0qwsZH32bKazMqe9zDwoa3aVImryjh6SHC9lMtW27JPHFeM
+      Srkt9YmH1WMwWcRO6eSY9B3PpazquhnvbammLuUojXRIxkDroy6Fw4UKmUNSRr32
+      9Ej87jRoR1B2/57Kfp2Y4+vFGGzSvh3AFQpBHq51qsNHALU6+8PjLfIt+5TPvaWR
+      TB+kAZnQZkaIQM2nr1n3oj6ak2RATY/+kjLizgFWzgEfbCrbsyq68UoY5FPBnu4Z
+      E3iDZpaIqwKr0seUC7iA1xM5eHi5kty1oB7HABEBAAG0Ik5Tb2xpZCA8bnNvbGlk
+      LWdwZ0Bub2Rlc291cmNlLmNvbT6JAU4EEwEKADgCGwMCHgECF4AWIQRvcfUlKChB
+      7tr4UbQvWbX5mxvgtAUCaWfGnwULCQgHAgYVCgkICwIEFgIDAQAKCRAvWbX5mxvg
+      tL0CB/0TTur63uXTPbq+JBQET6jnEVaDrNmpHI/z2RMuj163gmy9CtCwG060c+TI
+      qzmzlPacbTkGc5C50teX2mhs+5JIthfhMibR6Dgy0zeSVuvt9WJ3TNWBpoW5Ezka
+      17SA3Xv9UEJS2eyRd7ALf7TGGAj8DG+xRABXl6bJIXh1s7Hki7kwgVrpNxm/EqyX
+      OrzExm0g2UjgdkbnZrnTyZMB6X8f8fZPo0QcByPvLee2DtkKeE+SZlFXyvnCzcw0
+      94K45vlWkEdRzmiiWAG7guzZyZYGcCO5EoJ3LUP90qhrmQUfsbtczeoEW17EW1jM
+      RohLo8BqVyYc1CAFlULIDNeS3aipuQENBFdDN1ABCACq02gutmss6jiD2u50vdAR
+      x3JOGd92trWRf7qH9/MTToslhoU/LiXhaE0x5+UkKuRbcruCtytn226brvwD0BdO
+      QGpY81ZAxjTFuKUpIDmrHcrI/N9XLrLKx19kWEttsIPNJOgvx8JoeReOX2hLjcbF
+      fmz8e6D1K7eZ+hjMfOLxD94tfhQwYtKbfwf0JwxQV5ItQRryd+X+TcA3nyvFWiJ8
+      Vz92Tf1iG7Z+XasaaZFf2JDuxoiZaSZY7va395ClCEMykFsRbGwgDyB6Fr+6x/UU
+      sYA4rYV7RumIOUdWngWyWjzVy/cKSWASW4jI5ABWs+AfeRTqmZt6+6B7oIghrB19
+      ABEBAAGJAR8EGAECAAkFAldDN1ACGwwACgkQL1m1+Zsb4LRPzgf9FTfPA0d2N37q
+      su5av3bYZJ+w6pvWF3aK2Zdy9ednhCBfPNmhvBRN6mXWixo0DuKEoQMjVpkX0hrq
+      B9FxEVwCPZ9K/JuJgzMROq7T+7R3rcv+TPMdwk8rjIMeRiw2hFLwbrJ0w/v7/3wT
+      MESv3GfXbuT0huEedK7bLfqGMgtmqMeCNkoI7Rf3GO2xArGQ6Zc2rTd4L9+D5HHS
+      IPEixwFZS+Debc7pg3os0bKXEsqMtitvocClOAuPnXpCy04PK450UTr6ZVdirWhJ
+      Oq8SrSERQwqEJ4PMHybiDKwzSr6mcBURre3G71uTAp7h/DISLTpfVMadcB6eoLWr
+      /4fBqejAWg==
+      =wh5k
+      -----END PGP PUBLIC KEY BLOCK-----
+    # The source playbook's apt source, written by NodeSource's setup script.
+    nodejs_legacy_source: /etc/apt/sources.list.d/nodesource.list
+    # Yarn Classic (the source playbook's "Install Yarn Classic globally")
+    # and pnpm, both as real npm-global installs -- see the header comment.
+    yarn_version: "1.22.22"
+    pnpm_version: "11.21.0"
+    nodejs_smoke_home: /var/tmp/nodejs-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    nodejs_verify_uid: 65534    # nobody
+    nodejs_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 5. curl is kept
+      # for parity with the source playbook even though nothing here shells
+      # out to it directly.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No NodeSource apt architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to nodejs_arch_map.
+      when: nodejs_arch | length == 0
+
+    - name: 3. Remove the single-user playbook's apt source for this repository
+      # core/nodejs.yml's setup script wrote nodesource.list. Left beside the
+      # .sources file below, apt reads the repository twice and warns that
+      # the target is configured multiple times.
+      ansible.builtin.file:
+        path: "{{ nodejs_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the NodeSource apt repository
+      ansible.builtin.deb822_repository:
+        name: nodesource
+        types:
+          - deb
+        uris:
+          - "{{ nodejs_repo_uri }}"
+        suites:
+          - "{{ nodejs_suite }}"
+        components:
+          - main
+        architectures:
+          - "{{ nodejs_arch }}"
+        signed_by: "{{ nodejs_signing_key }}"
+        state: present
+        mode: '0644'
+      register: nodejs_repo
+
+    - name: 5. Read the fingerprints in the pinned signing key
+      # The key is read from the playbook variable, not a file on the target:
+      # with an INLINE armored key deb822_repository embeds the block in the
+      # .sources file and writes no separate keyring (container/docker.yml's
+      # task 5 explains the mechanics this mirrors).
+      ansible.builtin.command:
+        cmd: gpg --show-keys --with-colons
+        stdin: "{{ nodejs_signing_key }}"
+      register: nodejs_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Confirm the pinned key is NodeSource's signing key
+      ansible.builtin.fail:
+        msg: >-
+          The signing key pinned in this playbook is not NodeSource's key
+          {{ nodejs_key_fingerprint }}. Refusing to configure a repository
+          signed by an unknown key.
+      when: nodejs_key_fingerprint not in (nodejs_fpr.stdout | default(''))
+
+    - name: 7. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: nodejs_repo.changed
+
+    - name: 8. Check the currently installed Node.js version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' nodejs
+      register: nodejs_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether Node.js needs installing
+      ansible.builtin.set_fact:
+        nodejs_install_needed: >-
+          {{ nodejs_installed.rc != 0 or nodejs_installed.stdout != nodejs_version }}
+        nodejs_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (nodejs_installed.rc != 0
+                       or nodejs_installed.stdout != nodejs_version)) }}
+
+    - name: 9a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install Node.js {{ nodejs_version }}, so the
+          version check, Yarn/pnpm and the unprivileged smoke tests below are
+          skipped rather than failed. Re-run without --check.
+      when: not (nodejs_can_verify | bool)
+
+    - name: 10. Install Node.js via apt
+      # allow_downgrade so that moving the pin backwards actually applies --
+      # though confirmed at run time that this is necessary but not always
+      # sufficient. python3-apt 3.1.0ubuntu1 on this host synthesizes a
+      # priority-1001 version pin internally (the same mechanism a real
+      # /etc/apt/preferences.d entry uses) to resolve an exact "=version"
+      # request, and that synthesized pin does not reliably beat an
+      # ALREADY-INSTALLED newer version's own implicit priority -- reproduced
+      # directly against apt_pkg.Policy.get_candidate_ver(), independently of
+      # this module, while plain `apt-get install nodejs=<older> --allow-
+      # downgrades` resolves the identical request correctly. This is a
+      # limitation of allow_downgrade's candidate-pinning approach on this
+      # apt/python3-apt combination, not particular to this playbook -- every
+      # other _multi-user/ playbook that pins an apt package the same way
+      # carries the same exposure for a genuine downgrade of an
+      # already-newer-installed package. It does not affect the normal case
+      # this playbook is written for: installing the pinned version onto a
+      # host that has an older or no nodejs at all, which is what was
+      # actually verified.
+      ansible.builtin.apt:
+        name: "nodejs={{ nodejs_version }}"
+        state: present
+        allow_downgrade: true
+      when:
+        - nodejs_install_needed | bool
+        - not (ansible_check_mode and nodejs_repo.changed)
+
+    - name: 11. Verify the installed Node.js package version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' nodejs
+      register: nodejs_dpkg
+      changed_when: false
+      failed_when: nodejs_dpkg.stdout != nodejs_version
+      when: nodejs_can_verify | bool
+
+    - name: 12. Resolve npm's global install prefix
+      # Read at run time, not assumed: a NodeSource install defaults it to
+      # /usr, an apt-only nodejs package would default it to /usr/local
+      # (tools/markdownlint.yml's finding). Both are root-owned system paths.
+      ansible.builtin.command: npm config get prefix
+      register: nodejs_npm_prefix
+      changed_when: false
+      when: nodejs_can_verify | bool
+
+    - name: 13. Resolve the yarn and pnpm binary paths
+      ansible.builtin.set_fact:
+        nodejs_yarn_bin: "{{ nodejs_npm_prefix.stdout }}/bin/yarn"
+        nodejs_pnpm_bin: "{{ nodejs_npm_prefix.stdout }}/bin/pnpm"
+      when: nodejs_can_verify | bool
+
+    - name: 14. Check whether yarn/pnpm are still Corepack's dispatcher shims
+      # readlink -f follows the symlink chain to its real target. Corepack's
+      # shims resolve into its own package tree
+      # (.../lib/node_modules/corepack/dist/{yarn,pnpm}.js); a real npm
+      # global install resolves into a yarn/pnpm package tree instead. This
+      # never executes yarn or pnpm themselves -- only Corepack's shim would
+      # trigger a version download, and this check exists specifically to
+      # avoid running it while that shim might still be present.
+      ansible.builtin.shell:
+        cmd: >-
+          for b in {{ nodejs_yarn_bin }} {{ nodejs_pnpm_bin }}; do
+            readlink -f "$b" 2>/dev/null || true;
+          done
+      register: nodejs_corepack_check
+      changed_when: false
+      when: nodejs_can_verify | bool
+
+    - name: 15. Check whether npm already has yarn and pnpm at the pinned versions
+      # npm ls inspects install metadata; it does not execute the package's
+      # binary, so this is safe to run even while a Corepack shim occupies
+      # the same path.
+      ansible.builtin.command:
+        cmd: "npm ls -g yarn@{{ yarn_version }} pnpm@{{ pnpm_version }} --depth=0"
+      register: nodejs_npm_ls
+      changed_when: false
+      failed_when: false
+      when: nodejs_can_verify | bool
+
+    - name: 16. Decide whether Yarn/pnpm need (re)installing
+      ansible.builtin.set_fact:
+        nodejs_yarn_pnpm_install_needed: >-
+          {{ 'corepack' in (nodejs_corepack_check.stdout | default(''))
+             or nodejs_npm_ls.rc | default(1) != 0 }}
+      when: nodejs_can_verify | bool
+
+    - name: 17. Disable Corepack's dispatcher shims
+      # Removes /usr/bin/yarn, /usr/bin/pnpm and the rest of Corepack's
+      # managed shims. Safe to run even when they are already gone or were
+      # never Corepack's in the first place -- corepack disable is a no-op
+      # in that case.
+      ansible.builtin.command: corepack disable
+      when:
+        - nodejs_can_verify | bool
+        - nodejs_yarn_pnpm_install_needed | bool
+
+    - name: 18. Install pinned Yarn and pnpm via npm as root
+      # The mechanism tools/markdownlint.yml already established for a
+      # root-owned global npm install (decision-order mechanism 6).
+      ansible.builtin.command: "npm install -g yarn@{{ yarn_version }} pnpm@{{ pnpm_version }}"
+      when:
+        - nodejs_can_verify | bool
+        - nodejs_yarn_pnpm_install_needed | bool
+
+    - name: 19. Verify yarn and pnpm are real npm-managed packages, not Corepack shims
+      ansible.builtin.command:
+        cmd: "npm ls -g yarn@{{ yarn_version }} pnpm@{{ pnpm_version }} --depth=0"
+      register: nodejs_npm_ls_verify
+      changed_when: false
+      failed_when: nodejs_npm_ls_verify.rc != 0
+      when: nodejs_can_verify | bool
+
+    - name: 20. Ensure the installed npm packages are world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ nodejs_npm_prefix.stdout }}/lib/node_modules/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      loop:
+        - yarn
+        - pnpm
+      when: nodejs_can_verify | bool
+
+    - name: 21. Create a scratch HOME for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ nodejs_smoke_home }}"
+        state: directory
+        owner: "{{ nodejs_verify_uid }}"
+        group: "{{ nodejs_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 22. Report versions as an unprivileged user
+      # Now safe to invoke yarn/pnpm directly: task 19 already confirmed they
+      # are real npm-managed packages, not Corepack shims that would try to
+      # download anything.
+      #
+      # chdir into the scratch HOME, not ansible's own working directory:
+      # confirmed at run time that uid 65534 cannot even stat this playbook's
+      # checkout path (Ubuntu's default ~ mode denies "other" traversal), and
+      # both yarn (walking up from cwd looking for a .yarnrc) and pnpm
+      # (scanning cwd outright) fail on that before they get anywhere near
+      # printing a version.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ nodejs_verify_uid }} --regid={{ nodejs_verify_gid }} --clear-groups
+          env HOME={{ nodejs_smoke_home }} {{ item.bin }} --version
+        chdir: "{{ nodejs_smoke_home }}"
+      register: nodejs_smoke_versions
+      loop:
+        - { name: node, bin: node, expect: "{{ nodejs_version.split('-')[0] }}" }
+        - { name: yarn, bin: "{{ nodejs_yarn_bin }}", expect: "{{ yarn_version }}" }
+        - { name: pnpm, bin: "{{ nodejs_pnpm_bin }}", expect: "{{ pnpm_version }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: item.expect not in nodejs_smoke_versions.stdout
+      when: nodejs_can_verify | bool
+
+    - name: 23. Install a package with npm as an unprivileged user
+      # B4-style real work: resolves and writes a package into a scratch
+      # project directory, proving the whole npm toolchain (registry access,
+      # the global install this playbook just made, PATH resolution) works
+      # end to end for an arbitrary account, not just that binaries exist.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ nodejs_verify_uid }} --regid={{ nodejs_verify_gid }} --clear-groups
+          env HOME={{ nodejs_smoke_home }} npm install --no-save --prefix {{ nodejs_smoke_home }} left-pad
+        chdir: "{{ nodejs_smoke_home }}"
+      register: nodejs_smoke_npm_install
+      changed_when: false
+      failed_when: nodejs_smoke_npm_install.rc != 0
+      when: nodejs_can_verify | bool
+
+    - name: 24. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ nodejs_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 25. Display installation summary
+      # A real Jinja list handed to msg, not a string joined on a literal
+      # '\n' -- confirmed at run time that '\n' inside a >- folded scalar
+      # never reaches Jinja as an escape, so a join('\n') here would have
+      # printed one line with literal backslash-n text instead of newlines.
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               'Node.js ' ~ nodejs_version ~ ' (' ~ nodejs_arch ~ ') '
+               ~ (nodejs_can_verify | bool
+                  | ternary('is installed system-wide.', 'would be installed system-wide.')),
+               '',
+               '  /usr/bin/node, /usr/bin/npm, /usr/bin/npx',
+             ]
+             + (nodejs_can_verify | bool
+                | ternary(['  ' ~ nodejs_yarn_bin ~ '   Yarn ' ~ yarn_version
+                           ~ ' (real npm package, not a Corepack shim)',
+                           '  ' ~ nodejs_pnpm_bin ~ '   pnpm ' ~ pnpm_version
+                           ~ ' (real npm package, not a Corepack shim)'],
+                          ['  <npm prefix>/bin/yarn   Yarn ' ~ yarn_version ~ ' (not verified)',
+                           '  <npm prefix>/bin/pnpm   pnpm ' ~ pnpm_version ~ ' (not verified)']))
+             + ['  /etc/apt/sources.list.d/nodesource.sources   (signing key inline)',
+                '']
+             + (nodejs_can_verify | bool
+                | ternary(['Verified runnable by an unprivileged user (uid ' ~ nodejs_verify_uid
+                           ~ '), including a real npm install of a package from the registry.'],
+                          ['Not verified: this was a --check run against a host without this version.']))
+          ) }}
