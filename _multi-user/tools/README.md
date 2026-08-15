@@ -1,8 +1,8 @@
 # Tool Installation Playbooks (multi-user workstations)
 
-Standalone playbooks that install developer tooling on a **shared** Ubuntu workstation.
-They are the multi-user successors to `tool/`, which installs into a single user's
-Homebrew prefix and `~/.bashrc` and therefore only serves the account that ran it.
+Standalone playbooks that install developer tooling on a **shared** Ubuntu workstation, to
+root-owned system paths usable by every account on the host rather than into one account's
+home directory.
 
 Run from `_multi-user/`:
 
@@ -68,12 +68,8 @@ Installs [gomplate](https://github.com/hairyhenderson/gomplate) as a single stat
 at `/usr/local/bin/gomplate`, root-owned, mode `0755`. There is no per-user state and
 nothing to add to a shell profile.
 
-The source playbook already installed system-wide, so the changes here are correctness
-rather than multi-user reach:
-
-- **Version-aware idempotency.** The original guarded the download with
-  `when: not gomplate_check.stat.exists`, so once the binary existed, bumping
-  `gomplate_version` did nothing. The installed version is now compared instead.
+- **Version-aware idempotency.** The installed version is compared against the pin before
+  re-downloading.
 - **Checksum verification.** The SHA-256 is read from the release's published
   `checksums-v<version>_sha256.txt` at run time, so changing the version stays a one-flag
   change instead of also requiring a hardcoded hash update.
@@ -94,9 +90,9 @@ Installs [grype](https://github.com/anchore/grype) (vulnerability scanner) and
 `/usr/local/bin/grype` and `/usr/local/bin/syft`, root-owned, mode `0755`. There is no
 per-user state and nothing to add to a shell profile.
 
-The source playbook installed both via Homebrew, which only the account that ran the
-since-retired `core/homebrew.yml` could use. This migration instead uses each project's own
-`install.sh`:
+Installed via each project's own `install.sh` rather than Homebrew — a Homebrew install
+would only be usable by whichever single account owned that prefix, defeating the point of
+a shared workstation:
 
 - **Pinned to the release tag, not `main`.** The script is fetched from
   `raw.githubusercontent.com/anchore/<repo>/v<version>/install.sh`, so its content is fixed
@@ -128,9 +124,8 @@ Installs [ShellCheck](https://github.com/koalaman/shellcheck) from the Ubuntu ap
 package, `/usr/bin/shellcheck`, root-owned. There is no per-user state and nothing to
 add to a shell profile.
 
-The source playbook installed it via Homebrew, which only the account that ran the
-since-retired `core/homebrew.yml` could use. The apt package is current enough to use directly
-instead:
+Installed from the Ubuntu apt package rather than Homebrew — apt is current enough to use
+directly, and unlike Homebrew, it's usable by every account on the host:
 
 - **Pinned by exact dpkg version**, not just the semantic version. `shellcheck_version`
   is compared against `dpkg-query -W -f='${Version}' shellcheck`, which includes the
@@ -155,8 +150,7 @@ Installs [Trivy](https://github.com/aquasecurity/trivy) (vulnerability scanner) 
 Aqua Security's own apt repository, `/usr/bin/trivy`, root-owned. There is no per-user
 state and nothing to add to a shell profile.
 
-The source playbook installed it via Homebrew. Ubuntu carries no `trivy` package at
-all, so this adds the vendor's apt repository instead:
+Ubuntu carries no `trivy` package at all, so this adds the vendor's apt repository:
 
 | Path | Contents |
 | --- | --- |
@@ -194,9 +188,8 @@ Installs [hadolint](https://github.com/hadolint/hadolint) as a single static bin
 `/usr/local/bin/hadolint`, root-owned, mode `0755`. There is no per-user state and
 nothing to add to a shell profile.
 
-The source playbook installed it via Homebrew. hadolint has no apt package or vendor
-repository, so this migration uses the upstream release binary directly, following the
-same pattern as `gomplate.yml`:
+hadolint has no apt package or vendor repository, so this installs the upstream release
+binary directly, following the same pattern as `gomplate.yml`:
 
 - **Checksum verification** from the release's published `checksums.sha256`, resolved at
   run time so that changing `hadolint_version` stays a one-flag change.
@@ -222,12 +215,11 @@ Installs [mikefarah/yq](https://github.com/mikefarah/yq) as a single static bina
 `/usr/local/bin/yq`, root-owned, mode `0755`. There is no per-user state and nothing to add
 to a shell profile.
 
-Split out from `core/modern-tools.yml` rather than bundled with it, since it is the one tool
-in that source playbook that is not a plain apt install: per the decision-order gotcha in
-`MIGRATION.md`, Ubuntu's apt `yq` is `kislyuk/yq`, a Python wrapper around `jq` with entirely
-different syntax from mikefarah's Go `yq` that Homebrew's `yq` formula installs. Silently
-swapping one for the other under the same command name would break any script written
-against the Go one, so this installs the real thing as a release binary instead.
+This is a release binary rather than a plain apt install, deliberately: per the
+decision-order gotcha in `MIGRATION.md`, Ubuntu's apt `yq` is `kislyuk/yq`, a Python
+wrapper around `jq` with entirely different syntax from mikefarah's Go `yq` that this
+playbook installs. Silently swapping one for the other under the same command name would
+break any script written against the Go one.
 
 - **Checksum verification, but not from a checksums file.** yq's own published checksums file
   uses a bespoke multi-algorithm rhash table (`checksums_hashes_order` /
@@ -254,9 +246,7 @@ ansible-playbook tools/yq.yml -e host=ws01 -e yq_version=4.53.3
 Installs [jq](https://github.com/jqlang/jq) from the Ubuntu apt package, `/usr/bin/jq`,
 root-owned. There is no per-user state and nothing to add to a shell profile.
 
-Split out from `core/modern-tools.yml` (along with `jsonnet.yml`) so it can be pinned and
-verified on its own, independent of the other tools bundled there. It is otherwise a plain
-apt install, pinned by exact dpkg version the same way `shellcheck.yml` is.
+A plain apt install, pinned by exact dpkg version the same way `shellcheck.yml` is.
 
 The unprivileged verification step pipes `{"a": 1}` into `jq '.a'` as `nobody` and checks
 the output.
@@ -273,9 +263,7 @@ Installs [jsonnet](https://github.com/google/jsonnet) from the Ubuntu apt packag
 `/usr/bin/jsonnet`, root-owned. There is no per-user state and nothing to add to a shell
 profile.
 
-Split out from `core/modern-tools.yml` (along with `jq.yml`) so it can be pinned and verified
-on its own, independent of the other tools bundled there. It is otherwise a plain apt
-install, pinned by exact dpkg version the same way `shellcheck.yml` is.
+A plain apt install, pinned by exact dpkg version the same way `shellcheck.yml` is.
 
 The unprivileged verification step pipes the expression `1 + 1` into `jsonnet -` as `nobody`
 and checks that the output is `2`.
@@ -295,11 +283,10 @@ Installs [junit2html](https://gitlab.com/inorton/junit2html) via `pipx`, root-ow
 | `/opt/pipx` | `PIPX_HOME` — the pipx-managed virtualenv holding junit2html |
 | `/usr/local/bin/junit2html` | `PIPX_BIN_DIR` — the app symlink pipx creates |
 
-The source playbook ran `pipx install` as the connecting user, which lands in that user's
-own `~/.local/bin` and `~/.local/pipx`; only that account can then run `junit2html`. This
-migration instead runs `pipx` as `root` with `PIPX_HOME`/`PIPX_BIN_DIR` redirected to the
-root-owned paths above, following the pipx-as-root pattern from `MIGRATION.md`'s install
-mechanism decision order. There is nothing to add to a shell profile: junit2html is a
+Runs `pipx` as `root` with `PIPX_HOME`/`PIPX_BIN_DIR` redirected to the root-owned paths
+above — the pipx-as-root pattern from `MIGRATION.md`'s install mechanism decision order —
+rather than the per-user `~/.local/bin` / `~/.local/pipx` that a plain `pipx install` as
+the connecting user would use. There is nothing to add to a shell profile: junit2html is a
 plain CLI with no per-user configuration.
 
 - **No `--version` flag.** junit2html has no way to report its own version, so both the
@@ -329,17 +316,13 @@ Installs [kube-score](https://github.com/zegl/kube-score) as a single static bin
 `/usr/local/bin/kube-score`, root-owned, mode `0755`. There is no per-user state and
 nothing to add to a shell profile.
 
-The source playbook already installed to this same root-owned path — like `gomplate.yml`,
-this migration is correctness work rather than reach work:
-
 - **Checksum verification** from the release's published `checksums.txt`, resolved at run
   time so that changing `kube_score_version` stays a one-flag change.
 - **Architecture from facts.** `ansible_architecture` is mapped to the release asset
   suffix (`x86_64` → `amd64`, `aarch64` → `arm64`). Unmapped architectures fail with a
   clear message.
-- **Version-aware idempotency.** The original guarded the download with
-  `stat.exists`, so once the binary existed, bumping `kube_score_version` did nothing. The
-  installed version (parsed from `kube-score version` output) is now compared instead.
+- **Version-aware idempotency.** The installed version (parsed from `kube-score version`
+  output) is compared against the pin before re-downloading.
 
 The unprivileged verification step scores a Deployment manifest that deliberately has a
 floating `:latest` image tag, no resource limits, and no security context, and checks the
@@ -359,22 +342,18 @@ Installs [markdownlint-cli](https://github.com/igorshubovych/markdownlint-cli) v
 `npm install -g`, root-owned. Node.js itself is a prerequisite provisioned elsewhere; this
 playbook only checks for it, and fails loudly with setup instructions if it is missing.
 
-The source playbook already installed via `npm install -g` with `become`, so nothing
-needed to move — this migration is correctness work, not reach work:
-
-- **Pinned version.** The source playbook installed `markdownlint-cli@latest`.
-- **Version-aware idempotency.** The source playbook only checked for the binary's
-  presence (`which markdownlint`); the installed version is now compared instead.
+- **Pinned version, not `@latest`.**
+- **Version-aware idempotency.** The installed version is compared against the pin, not
+  just the binary's presence.
 - **npm's global prefix is read at run time, not assumed.** `npm config get prefix`
-  turned out to disagree between the two hosts this was verified against: a
-  NodeSource-installed Node.js defaults it to `/usr` (`/usr/lib/node_modules`,
-  `/usr/bin/markdownlint`), while Ubuntu's own `nodejs` apt package defaults it to
-  `/usr/local` (`/usr/local/lib/node_modules`, `/usr/local/bin/markdownlint`). Both are
-  root-owned system paths, so either is fine — but hardcoding one breaks the other.
-- **Node-in-PATH guard kept from the source playbook**, broadened to accept either system
-  prefix: fails if `which node` resolves outside `/usr/bin/node` or `/usr/local/bin/node`,
-  which would indicate a per-user version manager (nvm, fnm, ...) shadowing the system
-  Node.js for the connecting account.
+  differs depending on how Node.js was installed: a NodeSource-installed Node.js defaults
+  it to `/usr` (`/usr/lib/node_modules`, `/usr/bin/markdownlint`), while Ubuntu's own
+  `nodejs` apt package defaults it to `/usr/local` (`/usr/local/lib/node_modules`,
+  `/usr/local/bin/markdownlint`). Both are root-owned system paths, so either is fine —
+  but hardcoding one breaks the other.
+- **Node-in-PATH guard**, accepting either system prefix: fails if `which node` resolves
+  outside `/usr/bin/node` or `/usr/local/bin/node`, which would indicate a per-user
+  version manager (nvm, fnm, ...) shadowing the system Node.js for the connecting account.
 
 The unprivileged verification step lints a Markdown file with a deliberate heading-space
 issue and checks the output for that specific rule (`MD018`). markdownlint writes its

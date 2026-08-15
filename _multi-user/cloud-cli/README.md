@@ -36,10 +36,9 @@ directory carries an identity:
 
 **No playbook here sets a single environment variable, and none reads one.** Endpoint
 configuration comes from `vars:` overridable with `-e`; identity comes from each account's
-own `$HOME`. This section is the documentation that replaces `cloud-cli/env-tmpl.sh`, the
-shared template the old playbooks read from — deleted rather than migrated, because a
-tracked file that looks like the place to write tokens is a file someone eventually commits
-with tokens in it.
+own `$HOME`. There is deliberately no shared env template file to fill in: a tracked file
+that looks like the place to write tokens is a file someone eventually commits with tokens
+in it.
 
 ### Where each kind belongs
 
@@ -72,9 +71,9 @@ default way to configure a workstation account.
 
 ### Which names the tools actually read
 
-Checked against the binaries on the target, because **a name that appeared in the old
-template is not evidence the tool reads it** — three of them turned out to be the old
-playbooks' own inputs, used only to interpolate an instruction into a message.
+Checked against the actual binaries on the target — **a name that looks like
+configuration is not evidence a tool reads it**; some names below turned out to only ever
+be used to interpolate an instruction into a closing message.
 
 | Variable | Tool | Kind | Status |
 | --- | --- | --- | --- |
@@ -104,15 +103,8 @@ and are not written anywhere — both are read by the wrapper from your own envi
 
 ---
 
-Each section below has a **"What changed versus `cloud-cli/<tool>.yml`"** paragraph. Those
-source playbooks no longer exist: all thirteen were retired on 2026-08-10 once their
-successors here were verified, and `cloud-cli/` is gone with them — this directory is the
-only generation left. Read the comparison as history; `git log --diff-filter=D -- cloud-cli/`
-brings any of them back.
-
 The `ansible-playbook cloud-cli/<tool>.yml` commands in this file are relative to
-`_multi-user/`, which is where they must be run from, so they refer to the playbooks here and
-not to the retired ones.
+`_multi-user/`, which is where they must be run from.
 
 ## aws-cli.yml
 
@@ -129,23 +121,8 @@ official installer.
 Everything is root-owned and explicitly `u=rwX,go=rX`; the installer applies root's umask
 rather than an explicit mode, so the playbook sets it afterwards.
 
-**What changed versus `cloud-cli/aws-cli.yml`.** The mechanism is unchanged — AWS's
-installer already targets root-owned system paths, so this was correctness work:
-
-- **The version is pinned** (`aws_cli_version`) and fetched from a versioned URL. The
-  source playbook downloaded whatever `awscli-exe-linux-x86_64.zip` currently resolved to.
-- **The installer's GPG signature is verified** against AWS's published signing key,
-  which is pinned in the playbook. The source playbook verified nothing.
-- **The architecture comes from `ansible_architecture`.** The source playbook hardcoded
-  `x86_64`, so an arm64 host installed an x86_64 CLI.
-- **The install guard compares versions.** The source playbook used
-  `creates: /usr/local/bin/aws`, which made its own `--update` flag unreachable: once the
-  CLI existed, no later version could ever replace it.
-- **Staging happens under `/var/tmp`**, not `/tmp`, which is a size-capped tmpfs on these
-  hosts. The installer zip is ~70MiB and unpacks larger.
-
-**No consumer in this repo pins an AWS CLI version**, so the pin is upstream's current
-release rather than the unpinned-but-older version the source playbook happened to fetch.
+**No consumer in this repo pins an AWS CLI version**, so the pin tracks upstream's current
+release.
 
 Version override:
 
@@ -204,50 +181,24 @@ The package already installs to root-owned paths and its completions are already
 system-wide drop-in, so this playbook has no dependency on the `/etc/profile.d` bootstrap
 that `core/modern-tools.yml` provides.
 
-**What changed versus `cloud-cli/azure-cli.yml`.** The mechanism is unchanged — same
-package, same repository, same paths — so this was correctness work:
-
-- **The version is pinned** (`azure_cli_version`), with `allow_downgrade` so that moving
-  the pin backwards actually applies instead of being silently satisfied by a newer
-  install. The source playbook took `state: present`, i.e. whatever was newest that day.
-- **The repository is declared with `ansible.builtin.deb822_repository`** and the signing
-  key is embedded in its `Signed-By` field. The source playbook's `get_url` +
-  `shell: gpg --dearmor` + `apt_repository` reported `changed` on every single run; this
-  reports `changed` only when the definition actually moves.
-- **The signing key is pinned in the playbook** rather than downloaded at run time, so a
-  rotated key is a reviewed edit rather than something a run picks up silently.
-- **The architecture comes from facts.** The source playbook hardcoded `arch=amd64`; the
-  repository publishes `arm64` too.
-- **The suite map is kept** (`resolute`/`plucky` → `noble`) and is still required:
-  `packages.microsoft.com/repos/azure-cli/dists/` has `noble` but returns 404 for both
-  `resolute` and `plucky`. The suite is also part of the package version
-  (`2.89.0-1~noble`), so the pin is composed from the two rather than written out.
-- **The prerequisite list shrank** to `ca-certificates` and `python3-debian` (which
-  `deb822_repository` needs). `apt-transport-https`, `curl`, `gnupg` and `lsb-release` are
-  gone: apt has spoken https natively since 1.5, the codename comes from facts, and
-  nothing dearmors a key any more.
-- **The smoke test runs `az` as uid 65534** with a scratch `HOME` under `/var/tmp`.
-
 Version override:
 
 ```bash
 ansible-playbook cloud-cli/azure-cli.yml -e host=ws01 -e azure_cli_version=2.89.0
 ```
 
-### It supersedes the single-user apt source
+### Cleans up a stale apt source
 
-Task 3 removes `/etc/apt/sources.list.d/azure-cli.list`, which
-`cloud-cli/azure-cli.yml` and `cloud-cli/azure-devops-cli.yml` both wrote for this same
-repository. Left in place beside the new `.sources` file, apt reads the repository twice
-and warns that the target is configured multiple times. The old keyring
-(`/etc/apt/keyrings/microsoft.gpg`) is deliberately left alone — no other playbook in this
-repo references it, and an unused keyring is inert.
+This playbook removes `/etc/apt/sources.list.d/azure-cli.list` if present — left in place
+beside the new `.sources` file, apt reads the repository twice and warns that the target is
+configured multiple times. An old keyring at `/etc/apt/keyrings/microsoft.gpg` is
+deliberately left alone: nothing in this repo references it, and an unused keyring is
+inert.
 
-`gui-tools/vscode.yml` also added a `packages.microsoft.com` repository, but a different one
-(`/repos/code`) under its own filename and keyring, so the two never collided. That playbook was
-retired on 2026-08-14 (`git log --diff-filter=D -- gui-tools/` has the history); a host that ran
-it keeps the `vscode.list` source and the `/usr/share/keyrings/packages.microsoft.gpg` keyring,
-which are still none of this playbook's business.
+A host may also carry a separate `packages.microsoft.com` repository under `vscode.list` (a
+different path, `/repos/code`, with its own keyring at
+`/usr/share/keyrings/packages.microsoft.gpg`) — the two never collide and are not this
+playbook's business.
 
 ### Per-user setup
 
@@ -276,26 +227,6 @@ Installs the Azure CLI exactly as `azure-cli.yml` does, then adds the
 The azure-cli half duplicates `azure-cli.yml` on purpose — self-contained playbooks are
 policy — using the same repository name, suite, key and pin, so **running both is safe and
 installs one package**.
-
-**What changed versus `cloud-cli/azure-devops-cli.yml`.** This is the one genuinely broken
-install in `cloud-cli/`, so unlike the others this is reach work, not just correctness:
-
-- **`az extension add --system`, as root.** The source playbook ran `az extension add`
-  with `become: no`, which installs into the invoking account's
-  `~/.azure/cliextensions` — so `az devops` worked for exactly the person who ran the
-  playbook and was invisible to every other account, even though the `az` underneath it
-  was a system-wide apt package.
-- **The extension version is pinned** (`az_devops_ext_version`) and guarded on the version
-  the CLI reports, not on the directory existing.
-- **`az devops configure --defaults` is gone** (source tasks 8 and 9). It wrote one
-  account's config, from the *installer's* environment via `lookup('env', ...)`. Defaults
-  are now either per-user (each account runs the command itself) or genuinely shared (a
-  play var, below).
-- **The extension tree gets explicit world-readable modes**, since pip applies root's
-  umask rather than a mode of its own.
-- **The verification is the point of the playbook**: uid 65534, with an empty `HOME` and no
-  extension of its own, must both discover the system extension *and* load the `az devops`
-  command group. That is precisely the regression the source playbook has.
 
 Version overrides:
 
@@ -353,8 +284,8 @@ value is a manual edit.
 prefix `AZURE_DEVOPS_EXT_`, and knack appends another `_` before `<SECTION>_<OPTION>`, so
 the override for `defaults.organization` is `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION`.
 Verified on the target: with that name, `az devops project list` gets past organization
-resolution and fails on credentials; with `AZURE_DEVOPS_ORG` (the name the source playbook
-used) or `AZURE_DEFAULTS_ORGANIZATION` (the azure-cli *core* spelling) it still fails with
+resolution and fails on credentials; with the plausible-looking `AZURE_DEVOPS_ORG` or
+`AZURE_DEFAULTS_ORGANIZATION` (the azure-cli *core* spelling) it still fails with
 `--organization must be specified`. Task 20a asserts this whenever a shared org is set —
 a shared default under an unread name is invisible, since the variable is set,
 `/etc/environment` looks right, and every user still gets an error.
@@ -371,20 +302,6 @@ repository.
 | `/usr/lib/google-cloud-sdk/` | the SDK itself |
 | `/usr/bin/gcloud`, `/usr/bin/gsutil`, `/usr/bin/bq` | wrappers |
 | `/etc/apt/sources.list.d/google-cloud-sdk.sources` | repository definition, key inline |
-
-**What changed versus `cloud-cli/gcloud-cli.yml`.** Same package, same repository; the
-work was correctness plus removing two environment lookups:
-
-- **A5 cleanup** — `deb822_repository` with Google's armored key embedded in `Signed-By`,
-  replacing `get_url` + `shell: gpg --dearmor` + `apt_repository`.
-- **Pinned** (`gcloud_cli_version`) with `allow_downgrade`. The package version carries a
-  Debian revision (`579.0.0-0`) while the CLI reports `579.0.0`, so the two are composed
-  from one pin rather than written out separately.
-- **Architecture from facts.** The source playbook set none at all.
-- **`GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` are gone.** The source playbook read
-  them from the *installer's* environment with `lookup('env', ...)` and printed them back
-  as instructions, so the advice each user saw depended on whoever ran the playbook. A
-  project and a region are per-identity (A3), so they are not set system-wide at all.
 
 ### Per-user setup
 
@@ -407,21 +324,15 @@ tarball.
 | `/usr/local/bin/gcx` | the binary, root-owned, mode 0755 |
 | `/etc/bash_completion.d/gcx` | completions, generated at install time |
 
-**What changed versus `cloud-cli/gcx-cli.yml`.** This is reach work, not correctness work:
-the source playbook ran `brew tap grafana/grafana` and `brew install` as
-`lookup('env', 'USER')`, so the binary lived under `/home/linuxbrew` owned by whoever ran
-the play — one account's install that everyone else inherited by accident of `PATH`, and
-that account could rewrite.
+The upstream release tarball is pinned (`gcx_cli_version`) and verified against the sha256
+in `gcx_<version>_checksums.txt`, installed to a root-owned path. Architecture comes from
+facts, with an explicit map so an unmapped architecture fails loudly instead of silently
+taking amd64.
 
-- **No Homebrew.** The upstream release tarball, pinned (`gcx_cli_version`) and verified
-  against the sha256 in `gcx_<version>_checksums.txt`, installed to a root-owned path.
-- **Architecture from facts**, with an explicit map so an unmapped architecture fails
-  loudly instead of silently taking amd64.
-- **The `GRAFANA_SERVER` lookup is gone** (A2/A3). Unlike jira-cli's `JIRA_URL`, this
-  *is* a name gcx reads — verified on the target — but it names a site's Grafana instance,
-  which this repo does not have, so it is set nowhere. If you ever want a site default,
-  put it in `/etc/environment` from a play var. Never `GRAFANA_TOKEN`, which is a secret.
-- **Completions go to `/etc/bash_completion.d`**, generated by `gcx completion bash`.
+`GRAFANA_SERVER` is a name `gcx` genuinely reads (verified on the target) — it names a
+site's Grafana instance, which this repo does not have, so it is set nowhere. If you ever
+want a site default, put it in `/etc/environment` from a play var. Never `GRAFANA_TOKEN`,
+which is a secret.
 
 Version override:
 
@@ -462,11 +373,6 @@ Installs the [GitHub CLI](https://cli.github.com/) from GitHub's apt repository.
 | `/etc/apt/sources.list.d/github-cli.sources` | repository definition |
 | `/etc/apt/keyrings/github-cli.gpg` | repository signing keyring |
 
-**What changed versus `cloud-cli/github-cli.yml`.** Same package, same repository:
-A5 cleanup, a version pin with `allow_downgrade`, architecture from facts (the source
-hardcoded `arch=amd64`), and the keyring no longer re-downloaded with `force: true` on
-every run.
-
 ### The signing key is fetched, not pinned — deliberately
 
 Unlike `azure-cli.yml`, `opentofu.yml` and `gcloud-cli.yml`, which embed an armored key
@@ -502,18 +408,10 @@ Installs the [GitLab CLI](https://gitlab.com/gitlab-org/cli) from the upstream `
 | --- | --- |
 | `/usr/bin/glab` | the CLI |
 
-**What changed versus `cloud-cli/gitlab-cli.yml`.** This one was doing more than cosmetic
-damage:
-
-- **The version is pinned.** The source playbook queried GitLab's release API for whatever
-  was newest *at that moment*, so two hosts provisioned a week apart silently got
-  different versions and no run record said which.
-- **The download is verified** against the sha256 in the release's own `checksums.txt`,
-  resolved at run time so a version override stays a one-flag change. The source playbook
-  verified nothing.
-- **Architecture from facts.** The source matched `glab_.*_linux_amd64\.deb` with a regex
-  and would have installed an amd64 package on an arm64 host.
-- **Staging moved to `/var/tmp`**, which is disk-backed; `/tmp` is a size-capped tmpfs.
+The version is pinned and the download verified against the sha256 in the release's own
+`checksums.txt`, resolved at run time so a version override stays a one-flag change.
+Architecture comes from facts. Staging happens under `/var/tmp`, which is disk-backed;
+`/tmp` is a size-capped tmpfs on these hosts.
 
 Why not apt: Ubuntu `resolute/universe` carries `glab 1.53.0-1build1`, far behind
 upstream, and there is no vendor apt repository.
@@ -541,10 +439,6 @@ from InfluxData's release archive.
 | `/usr/local/lib/influx-cli/<version>/influx` | the binary, root-owned |
 | `/usr/local/bin/influx` | symlink to the active version |
 | `/etc/bash_completion.d/influx` | completions, generated at install time |
-
-**What changed versus `cloud-cli/influx-cli.yml`.** Reach work: the source playbook ran
-`brew install influxdb-cli` as `lookup('env', 'USER')`. Two details make this one unlike
-the other de-brew playbooks.
 
 ### The release does not live on GitHub
 
@@ -603,22 +497,11 @@ project's own Maven repository.
 No architecture map, unlike everything else here: a jar is a jar. The JRE
 (`default-jre-headless`) is the only native dependency and comes from apt.
 
-**What changed versus `cloud-cli/jenkins-cli.yml`.** MIGRATION2.md filed this playbook under
-one defect — the invoking shell's `$JENKINS_URL` baked into a file every account executes —
-but the bigger one is where the jar came from:
-
-- **The jar is no longer downloaded from a running Jenkins.** The source playbook fetched
-  `{{ jenkins_url }}/jnlpJars/jenkins-cli.jar`, so a host with no reachable Jenkins **could
-  not install the CLI at all** — fatal when provisioning a fresh workstation — and the
-  version installed was whatever server happened to be up, unpinned and unverified. This
-  workstation had `2.541.3` by that route.
-- **Pinned and checksum-verified** (`jenkins_cli_version`) from
-  `repo.jenkins-ci.org/releases/org/jenkins-ci/main/cli/<version>/`, where each release
-  publishes the jar with a `.sha256` sibling.
-- **`jenkins_url` is a play var** (A2), rendered into both the wrapper's fallback and the
-  `/etc/profile.d` default in the same run, so the two cannot drift.
-- **The smoke test is real**, where the source playbook ran `jenkins-cli help` with
-  `failed_when: false` — which asserts nothing at all.
+The jar is pinned and checksum-verified (`jenkins_cli_version`) from
+`repo.jenkins-ci.org/releases/org/jenkins-ci/main/cli/<version>/`, where each release
+publishes the jar with a `.sha256` sibling. `jenkins_url` is a play var, rendered into both
+the wrapper's fallback and the `/etc/profile.d` default in the same run, so the two cannot
+drift.
 
 Overrides:
 
@@ -653,12 +536,11 @@ Two mechanics worth knowing if you touch this playbook:
 ### The smoke test aims at a closed port
 
 Every `jenkins-cli` subcommand is executed by the server, and the command list itself is
-fetched from it, so there is no offline code path to exercise — A4's tiers 1 and 2 do not
-exist for this tool. What the check asserts instead is that an arbitrary uid gets all the way
-to the network boundary: JVM starts, jar loads, the shaded websocket client initialises,
-arguments parse, a connection is attempted, and it fails **only** because nothing is
-listening on `127.0.0.1:1`. A missing JRE, an unreadable jar or a truncated download all fail
-earlier and differently, which is exactly what this distinguishes.
+fetched from it, so there is no offline code path to exercise. What the check asserts instead
+is that an arbitrary uid gets all the way to the network boundary: JVM starts, jar loads, the
+shaded websocket client initialises, arguments parse, a connection is attempted, and it fails
+**only** because nothing is listening on `127.0.0.1:1`. A missing JRE, an unreadable jar or a
+truncated download all fail earlier and differently, which is exactly what this distinguishes.
 
 **Do not build a smoke test on `-help`: it hangs.** It does not print usage and exit, so any
 check using it blocks the play indefinitely. Every invocation in this playbook is wrapped in
@@ -689,17 +571,10 @@ tarball.
 | `/usr/local/bin/jira` | the binary, root-owned, mode 0755 |
 | `/etc/bash_completion.d/jira` | completions, generated at install time |
 
-**What changed versus `cloud-cli/jira-cli.yml`.** Reach work: the source playbook ran
-`brew tap ankitpokhrel/jira-cli` and `brew install` as `lookup('env', 'USER')`.
-
-- **No Homebrew, no tap.** The upstream release tarball, pinned (`jira_cli_version`) and
-  verified against the sha256 in the release's `checksums.txt`.
-- **Architecture from facts** — and note the asset arch strings here are `x86_64` /
-  `arm64`, not the `amd64` / `arm64` the other playbooks map to. A map copied from
-  `gcx-cli.yml` would 404 on every host.
-- **`JIRA_URL` and `JIRA_LOGIN` are gone** (A2/A3) — and unlike `GRAFANA_SERVER`, they were
-  never variables the tool read. See below.
-- **Completions go to `/etc/bash_completion.d`**, generated by `jira completion bash`.
+The upstream release tarball is pinned (`jira_cli_version`) and verified against the
+sha256 in the release's `checksums.txt`. Note the asset arch strings here are `x86_64` /
+`arm64`, not the `amd64` / `arm64` that other playbooks in this directory map to — a map
+copied from `gcx-cli.yml` would 404 on every host.
 
 Version override:
 
@@ -709,14 +584,11 @@ ansible-playbook cloud-cli/jira-cli.yml -e host=ws01 -e jira_cli_version=1.7.0
 
 ### jira-cli does not read `JIRA_URL` or `JIRA_LOGIN`
 
-The source playbook read both with `lookup('env', ...)` and interpolated them into its
-closing message, which made them look like configuration the tool honours. They are not:
-with both set, `jira issue list` still exits 1 with *"The tool needs a Jira API token to
-function"*, and the binary's only `JIRA_*` variables are `JIRA_API_TOKEN`,
-`JIRA_AUTH_TYPE`, `JIRA_BROWSER`, `JIRA_CONFIG_FILE` and `JIRA_EDITOR`. Server and login
-come from `~/.config/.jira/.config.yml`, written by `jira init`.
-
-This is the second instance of the same trap as `AZURE_DEVOPS_ORG` — see MIGRATION2.md.
+`JIRA_URL` and `JIRA_LOGIN` look like configuration but are not read by the tool: with both
+set, `jira issue list` still exits 1 with *"The tool needs a Jira API token to function"*,
+and the binary's only `JIRA_*` variables are `JIRA_API_TOKEN`, `JIRA_AUTH_TYPE`,
+`JIRA_BROWSER`, `JIRA_CONFIG_FILE` and `JIRA_EDITOR`. Server and login come from
+`~/.config/.jira/.config.yml`, written by `jira init`.
 
 ### Per-user setup
 
@@ -736,20 +608,14 @@ Installs [OpenTofu](https://opentofu.org/) from the packagecloud-hosted vendor r
 | `/usr/bin/tofu` | the CLI |
 | `/etc/apt/sources.list.d/opentofu.sources` | repository definition, key inline |
 
-**What changed versus `cloud-cli/opentofu.yml`.** A5 cleanup (which here removes *two*
-`shell: gpg --dearmor` tasks and two downloads), a version pin with `allow_downgrade`, and
-architecture from facts.
-
 ### One signing key, not two
 
-The source playbook put two keys in `signed-by`:
-`https://get.opentofu.org/opentofu.gpg` and the packagecloud repository key. Only the
-second is dropped-in-anger material — the repository's `InRelease` is signed by subkey
+Only one key belongs in `Signed-By` here: the repository's `InRelease` is signed by subkey
 `59D41234F9F7AFD007143F6A70DF59811A8B9109` of the packagecloud key
 (`F4AF70F66EAC4337EEECC97407D3DFCD4C61499F`), verified directly against the published
-`InRelease`. The other key's own user ID says it signs OpenTofu **providers**, not the apt
-repository. A key that signs nothing apt reads does not belong in `Signed-By`, so it is
-dropped.
+`InRelease`. `https://get.opentofu.org/opentofu.gpg` is a tempting addition, but that key's
+own user ID says it signs OpenTofu **providers**, not the apt repository — a key that signs
+nothing apt reads does not belong in `Signed-By`.
 
 ### The smoke test formats a deliberately broken file
 
@@ -769,13 +635,11 @@ Installs `promtool` and `amtool` from the Ubuntu archive.
 | `/usr/bin/amtool` | from the `prometheus-alertmanager` package |
 
 This installs **clients only**. `prometheus-alertmanager` is here purely because it is
-what ships `amtool`; its daemon is stopped and disabled, as the source playbook also did.
-Deploying an actual Alertmanager is out of scope.
+what ships `amtool`; its daemon is stopped and disabled. Deploying an actual Alertmanager
+is out of scope.
 
-**What changed versus `cloud-cli/prometheus-cli.yml`.** Both packages are pinned with
-`allow_downgrade`, the versions are verified after install, and both tools now validate a
-real config file as uid 65534. The source playbook installed two packages unpinned and
-checked nothing.
+Both packages are pinned with `allow_downgrade`, the versions are verified after install,
+and both tools validate a real config file as uid 65534.
 
 Unlike the vendor-repo playbooks, these pins are **release-specific**: apt candidates
 differ between 24.04 and 26.04, and an install fails outright when the pin is not what the
@@ -801,12 +665,9 @@ HashiCorp's apt repository.
 | `/etc/apt/sources.list.d/hashicorp.sources` | repository definition |
 | `/etc/apt/keyrings/hashicorp.asc` | repository signing key |
 
-**What changed versus `cloud-cli/vault-cli.yml`.** Reach work plus an A5 cleanup: the
-source playbook ran `brew tap hashicorp/tap` and `brew install` as
-`lookup('env', 'USER')`. HashiCorp publishes an apt repository, so the migrated playbook
-is an ordinary vendor-repo one — pinned (`vault_cli_version`) with `allow_downgrade`,
-architecture from facts, `deb822_repository`, and no `VAULT_ADDR` written into anyone's
-`~/.bashrc`.
+Installed the standard vendor-repo way: pinned (`vault_cli_version`) with
+`allow_downgrade`, architecture from facts, `deb822_repository`, and no `VAULT_ADDR`
+written into anyone's `~/.bashrc`.
 
 Version override:
 
@@ -820,9 +681,9 @@ ansible-playbook cloud-cli/vault-cli.yml -e host=ws01 -e vault_cli_version=2.0.4
 host that also runs a Vault server:
 
 - Bumping `vault_cli_version` upgrades the server's binary too. The running process keeps
-  executing the old code — during this migration, `dpkg-query` reported `2.0.4-1` while the
-  running server still reported `2.0.0` on its status endpoint. The new binary takes effect
-  at the next `vault.service` restart, which for file storage means unsealing again.
+  executing the old code until `vault.service` restarts — `dpkg-query` and the server's own
+  status endpoint can report different versions in the meantime — and for file storage,
+  restarting means unsealing again.
 - `/etc/vault.d/vault.hcl` is a dpkg conffile. An upgrade keeps a locally modified copy
   (ansible's `apt` module passes `force-confold`), so a server's configuration survives.
 - **The unit is left alone.** Unlike `promtool.yml`, which must disable the
@@ -831,46 +692,38 @@ host that also runs a Vault server:
   there by something else on the host, and turning off a server this playbook did not start
   is not a CLI installer's business. Task 19 reports the state instead of changing it.
 
-This repo ships no Vault server playbook: `services/vault.yml` was deleted rather than
-migrated, along with the local server it had deployed. The rest of `services/` followed it
-(`git log --diff-filter=D -- services/` has the history).
+This repo ships no Vault server playbook — only the client, here.
 
 A "client-only" install still lays down server scaffolding, because the package does:
 a `vault` system user, a self-signed cert under `/opt/vault/tls`, `/opt/vault/data`, a
 `vault.service` unit, and `setcap cap_ipc_lock=+ep` on the binary. All of it is inert until
 something enables the unit.
 
-### It supersedes the deleted `services/vault.yml`'s apt source
+### Cleans up a stale apt source
 
-Task 3 removes `/etc/apt/sources.list.d/apt_releases_hashicorp_com.list`, which
-`services/vault.yml` wrote for this same repository. Left beside the new `.sources` file,
-apt reads the repository twice and warns that the target is configured multiple times. The
-old keyring (`/etc/apt/keyrings/hashicorp-archive-keyring.asc`) is left alone — it holds
-the same key, byte for byte, and an unused keyring is inert.
+This playbook removes `/etc/apt/sources.list.d/apt_releases_hashicorp_com.list` if
+present — left beside the new `.sources` file, apt reads the repository twice and warns
+the target is configured multiple times. An old keyring at
+`/etc/apt/keyrings/hashicorp-archive-keyring.asc` is left alone: it holds the same key,
+byte for byte, and an unused keyring is inert.
 
-The task stays although the playbook that wrote the file is gone: every host it ran on
-still has the file, and nothing else will remove it. Same shape as `github-cli.yml` and
-`azure-cli.yml` clearing their own predecessors' `.list` files.
-
-The suite is mapped to `noble` for the same reason. HashiCorp's Artifactory does publish
-`resolute` (contrary to what MIGRATION2.md originally recorded), with identical content,
-but the deleted playbook configured the repository with `noble`, and two entries for one
-URI under different suites are two repositories to apt — so `noble` keeps the two agreeing
-on hosts task 3 has not yet reached.
+The suite is mapped to `noble`: HashiCorp's Artifactory does also publish `resolute` with
+identical content, but two entries for one URI under different suites are two repositories
+to apt, so `noble` is what this playbook standardizes on.
 
 ### The signing key is fetched, not pinned
 
 HashiCorp's packaging key `798AEC654E5C15428C8E42EEAA16FCBCA621E701` **expires
-2028-01-09**, so per A5 it is fetched each run — `deb822_repository` compares by checksum,
+2028-01-09**, so it is fetched each run — `deb822_repository` compares by checksum,
 so that stays idempotent — and only its fingerprint is asserted. Pinning today's bytes
 would turn the eventual rotation into a signature failure on every host. Same form as
 `github-cli.yml`, opposite form to `azure-cli.yml`, whose key does not expire.
 
 ### The smoke test formats a policy file
 
-`vault policy fmt` parses and rewrites HCL without contacting a server, so it is A4's
-strongest tier — real offline work — where every other `vault` subcommand needs an address
-and a token. `VAULT_ADDR` is deliberately left unset. The check also proves the package's
+`vault policy fmt` parses and rewrites HCL without contacting a server, so it exercises real
+offline work, where every other `vault` subcommand needs an address and a token.
+`VAULT_ADDR` is deliberately left unset. The check also proves the package's
 `setcap cap_ipc_lock=+ep` does not stop an arbitrary uid from executing the binary.
 
 ### Per-user setup
@@ -882,15 +735,13 @@ vault token lookup           # confirm which identity is active
 ```
 
 `VAULT_ADDR` is shared, non-secret configuration and the CLI does read it, but no playbook
-sets it: the deleted `services/vault.yml`'s habit of appending it to one account's
-`~/.bashrc` is exactly the single-user breakage this migration removes. `VAULT_TOKEN` is a secret and must
-never go in `/etc/environment`.
+sets it — that stays a per-account or per-site decision. `VAULT_TOKEN` is a secret and
+must never go in `/etc/environment`.
 
 ## Replacing the Homebrew installs
 
-`jira`, `gcx`, `influx` and `vault` were previously installed with `brew` as
-`lookup('env', 'USER')`. After running the migrated playbooks, the system-wide copies exist
-but the Homebrew ones may still shadow them:
+If `jira`, `gcx`, `influx` or `vault` were ever installed with Homebrew on this host, the
+Homebrew copies may still shadow the system-wide ones these playbooks install:
 
 ```bash
 brew uninstall jira-cli
@@ -910,9 +761,5 @@ hand:
 grep -l linuxbrew /home/*/.bashrc
 ```
 
-On `localhost` this was done on 2026-08-11 and went further than the four formulae above: every
-formula and tap was removed, then `/home/linuxbrew` and `~/.cache/Homebrew` deleted outright and
-the `brew shellenv` block dropped from `~/.bashrc`. The steps here still apply to any other host
-provisioned before `core/homebrew.yml` was retired. If you go as far as deleting the prefix,
-list its `bin` and `lib` first — that run found a hand-built binary and an orphaned
-`node_modules` under `/home/linuxbrew/.linuxbrew` that belonged to no formula.
+If you remove the Homebrew prefix entirely, list its `bin` and `lib` first — formula
+removal does not always catch hand-built binaries or orphaned directories underneath it.
