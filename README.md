@@ -38,6 +38,23 @@ Docker socket unless you name them in `docker_users` — membership of that grou
 passwordless root, so it's typed out per account, per run. See
 [Grants](_multi-user/container/README.md#grants). `podman_linger_users` works the same way.
 
+## Pinned versions and `apt upgrade` drift
+
+Every playbook here pins an exact package version and asserts it still matches after install. A
+plain `apt upgrade` (or unattended-upgrades) on a target host moves installed versions away from
+those pins — that's expected, not a bug: the next playbook run, or a plain `apt-cache policy <pkg>`
+/ `dpkg-query -W -f='${Version}' <pkg>`, surfaces the mismatch immediately instead of it drifting
+silently.
+
+Resolving it means advancing the pin, not reverting the host: apt archives generally don't keep
+superseded `.deb`s around, so reinstalling the old pinned version usually isn't possible. Check
+`apt-cache policy <pkg>` on the target, update that package's `*_version` var — and any version
+string baked into its `verify_cmd` — to match, then re-run the playbook to reinstall and re-verify.
+
+`container/kubectl.yml` is the one exception: it also pins the apt origin itself via
+`/etc/apt/preferences.d/kubectl`, so `apt upgrade` can't swap it for a different vendor's package.
+Even there, a version bump within that same origin still needs the pin update above.
+
 ## History
 
 This repo was migrated from an earlier single-user layout to the multi-user one above across
