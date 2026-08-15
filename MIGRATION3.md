@@ -818,9 +818,12 @@ which is exactly the staleness this warning is about. The current readings are i
   their successors actively clean up after them: `docker.yml`, `kubectl.yml` and `helm.yml` each
   delete their predecessor's source file (and `helm.yml` two generations of keyring) before
   writing their own `.sources`. So a host that runs the successors is cleaned; a host that
-  ran only the originals and is never provisioned again keeps them. What stays open is
-  `core/`, the last directory adding repositories under no shared convention. B5 adds the
-  package-name dimension to that cleanup.
+  ran only the originals and is never provisioned again keeps them. **Closed 2026-08-16:**
+  `core/` — the last directory adding repositories under no shared convention — was
+  [retired](MIGRATION4.md#known-follow-ups) the same way, its two vendor-repo playbooks migrated
+  to A5-compliant successors that delete the predecessor's source before writing their own. No
+  directory left in the repo adds an apt repository outside the shared convention. B5 added the
+  package-name dimension to that cleanup while it was still open.
 - **Bare `ansible_architecture` is deprecated** — carried from
   [MIGRATION2](MIGRATION2.md#known-follow-ups). All seven playbooks here are to be written with
   `ansible_facts['architecture']` from the start, so the outstanding repo-wide pass still has

@@ -44,27 +44,29 @@ nothing except an Ansible dependency for the one step you run before Ansible is 
 
 ## Playbooks (old)
 
-What is left of the original single-user tree, which is now `core/` and nothing else. Five
-directories no longer exist: `tool/` (see [MIGRATION.md](MIGRATION.md)), `cloud-cli/` (see
-[MIGRATION2.md](MIGRATION2.md)) and `container/` (see [MIGRATION3.md](MIGRATION3.md))
-graduated into the multi-user tree in the next table, and `services/` and `gui-tools/` were
-deleted outright as out of scope — see [Retired: `services/`](#retired-services) and
-[Retired: `gui-tools/`](#retired-gui-tools). `core/` looked like the harder problem —
-`agent-base.yml` mixed desktop-session setup into hostname, network and package tasks, which
-read as per-identity in a way no relocation could fix — but the desktop half turned out to be
-separable rather than structural. `x11vnc.yml` and `disable-rsyslog.yml` were retired outright
-(see
+Nothing is left of the original single-user tree. All four directories that once lived here
+graduated into the multi-user tree below — `tool/` (see [MIGRATION.md](MIGRATION.md)),
+`cloud-cli/` (see [MIGRATION2.md](MIGRATION2.md)), `container/` (see
+[MIGRATION3.md](MIGRATION3.md)) and, last, `core/` (see [MIGRATION4.md](MIGRATION4.md)) —
+while `services/` and `gui-tools/` were deleted outright as out of scope instead — see
+[Retired: `services/`](#retired-services) and [Retired: `gui-tools/`](#retired-gui-tools).
+`core/` looked like the harder problem — `agent-base.yml` mixed desktop-session setup into
+hostname, network and package tasks, which read as per-identity in a way no relocation could
+fix — but the desktop half turned out to be separable rather than structural. `x11vnc.yml` and
+`disable-rsyslog.yml` were retired outright (see
 [Retired: `core/disable-rsyslog.yml` and `core/x11vnc.yml`](#retired-coredisable-rsyslogyml-and-corex11vncyml)),
 `samba.yml` followed the same way (see [Retired: `core/samba.yml`](#retired-coresambayml)), and
 `agent-base.yml` itself lost its SSH, Avahi, logind, journald, hostname and IPv6 tasks one at a
-time until only package installation was left — renamed `core/core-tools.yml` (2026-08-14; see
-[core/README.md](core/README.md#core-toolsyml)). What remains of `core/` is straightforwardly
-multi-user-compatible, with `mise.yml`'s `mise activate` line the one personal tail still
-standing.
-
-| Directory | Description |
-|-----------|-------------|
-| [core/](core/README.md) | Core system setup (tools, runtimes) |
+time until only package installation was left — renamed `core/core-tools.yml` (2026-08-14). What
+remained — `core-tools.yml`, `nodejs.yml` and `mise.yml` — was straightforwardly multi-user
+compatible and migrated to [`_multi-user/core/`](_multi-user/core/README.md) per
+[MIGRATION4.md](MIGRATION4.md); the three originals and `core/README.md` were deleted on
+2026-08-16 once every successor was verified, the same gate `tool/`, `cloud-cli/` and
+`container/` passed before it. Nothing named `core/`, `tool/`, `cloud-cli/`, `container/`,
+`services/` or `gui-tools/` remains anywhere in the repo — only
+[`_multi-user/`](#playbooks-multi-user) below and [`_personal/`](#playbooks-personal). Every
+deleted playbook is recoverable from git history (`git log --diff-filter=D -- core/` for the
+last of them).
 
 ## Playbooks (multi-user)
 
@@ -78,7 +80,7 @@ per-user Homebrew and `~/.bashrc`, so a tool installed once is usable by every a
 | [_multi-user/tools/](_multi-user/tools/README.md) | Developer tools (bats, gomplate, shellcheck, trivy, hadolint, grype-syft, modern-cli-tools, yq, junit2html, markdownlint, kube-score) |
 | [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, tofu, promtool/amtool, vault — the [MIGRATION2.md](MIGRATION2.md) migration is complete) |
 | [_multi-user/container/](_multi-user/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers — the [MIGRATION3.md](MIGRATION3.md) migration is complete) |
-| [_multi-user/core/](_multi-user/core/README.md) | Core CLI tools, Node.js/Yarn/pnpm, mise (the [MIGRATION4.md](MIGRATION4.md) playbooks are written and verified; `core/` itself is not yet retired) |
+| [_multi-user/core/](_multi-user/core/README.md) | Core CLI tools, Node.js/Yarn/pnpm, mise (the [MIGRATION4.md](MIGRATION4.md) migration is complete) |
 
 One difference to know before running `container/docker.yml`, because it reads as a regression
 and is not one: it grants **no** account access to the Docker socket unless you name them in
@@ -157,9 +159,12 @@ playbooks went (2026-08-10) — retired for **scope**, not for defect. Neither w
 rustup, which is the correct way to install Rust. They were simply a version pin to keep
 current, a `~/.bashrc` block to own and a tarball to fetch on behalf of nobody.
 
-What replaces them, if a runtime is genuinely needed, is [`core/mise.yml`](core/README.md#miseyml)
-— already in `core/`, already the polyglot answer, and per-account on demand
-(`mise use --global go@1.23`) rather than a system-wide install nobody asked for. For Rust
+What replaces them, if a runtime is genuinely needed, is
+[`_multi-user/core/mise.yml`](_multi-user/core/README.md#miseyml) — the polyglot answer, and
+per-account on demand (`mise use --global go@1.23`) rather than a system-wide install nobody
+asked for. It lived at `core/mise.yml` when this section was written; it migrated to
+`_multi-user/core/` per [MIGRATION4.md](MIGRATION4.md) and `core/` itself is now retired — see
+[Playbooks (old)](#playbooks-old). For Rust
 specifically the upstream one-liner the retired playbook wrapped is still the recommended
 path: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
 
@@ -311,26 +316,30 @@ history (`git log --diff-filter=D -- core/samba.yml`), as is the original
 Which playbooks install for **every** account on the box, and which install for only the one
 that runs them. Classified against the [MIGRATION.md](MIGRATION.md) policy points and the
 [MIGRATION2.md](MIGRATION2.md), [MIGRATION3.md](MIGRATION3.md) and [MIGRATION4.md](MIGRATION4.md)
-amendments. 40 playbooks:
+amendments. 37 playbooks, now that the legacy tree is fully retired:
 
 | Category | Count | Meaning |
 |----------|-------|---------|
 | [Multi-user](#multi-user-34) | 34 | Root-owned paths, `/etc` drop-ins, verified as an unprivileged uid |
-| [Effectively shared](#effectively-shared-2) | 2 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
-| [Mixed](#mixed--shared-install-personal-tail-1) | 1 | Shared install plus a tail that benefits only the invoker |
+| [Effectively shared](#effectively-shared-0) | 0 | Legacy, but apt/system paths only — nothing lands in a `$HOME` |
+| [Mixed](#mixed--shared-install-personal-tail-0) | 0 | Shared install plus a tail that benefits only the invoker |
 | [Personal only](#personal-only-3) | 3 | The whole install lands in one `$HOME` or one account |
 
-Most of the repo is now multi-user, and the balance moved in steps rather than gradually: a
-migrated playbook is a *new* file, so during a migration both generations are counted, and the
-total drops back when the originals are retired. That has now happened three times, and three
-migrations are finished: `tool/` after MIGRATION.md, all thirteen of `cloud-cli/` after
-MIGRATION2.md, and all seven of `container/` after MIGRATION3.md. None of the three directories
-still exists. The total held at 40 across the last of them because seven successors replaced
+The repo is now entirely multi-user or personal-by-design, and the balance moved in steps rather
+than gradually: a migrated playbook is a *new* file, so during a migration both generations are
+counted, and the total drops back when the originals are retired. That has now happened four
+times, and all four migrations are finished: `tool/` after MIGRATION.md, all thirteen of
+`cloud-cli/` after MIGRATION2.md, all seven of `container/` after MIGRATION3.md, and all three
+of `core/` after MIGRATION4.md. None of the four directories still exists — nothing named
+`core/`, `tool/`, `cloud-cli/`, `container/`, `services/` or `gui-tools/` remains anywhere in the
+repo. The total held at 40 across `container/`'s retirement because seven successors replaced
 exactly seven originals, then dropped to 37 when three more `core/` playbooks were deleted
 outright with no successor at all (see below), then rose back to 40 as MIGRATION4.md's three
 `_multi-user/core/` successors were written and verified against `localhost` — with their
-`core/` originals **not yet retired**, so for now both generations are counted, the same way the
-first three migrations were counted mid-flight. Twelve playbooks in total
+`core/` originals not yet retired, so for a time both generations were counted, the same way the
+first three migrations were counted mid-flight. It is back to 37 now that those three originals
+were retired (2026-08-16): three successors replaced exactly three originals, the same 1:1
+arithmetic every migration here has held to. Twelve playbooks in total
 have gone the deleted-rather-than-migrated way: `services/vault.yml`, `services/n8n.yml`,
 `services/jellyfin.yml` and `services/freshrss.yml` (see
 [Retired: `services/`](#retired-services)); `core/homebrew.yml`, which was
@@ -349,19 +358,23 @@ and `services/samba.yml` → `core/samba.yml`, which moved once (2026-08-10) on 
 exception to the `services/` retirement and was deleted anyway once that exception stopped
 holding (2026-08-14) — see [Retired: `core/samba.yml`](#retired-coresambayml).
 
-The 3 playbooks left in the legacy tree — all of `core/`, which is all the legacy tree is now —
-are `hosts: localhost` with `connection: local`, so even
-the "effectively shared" ones among them are personal in *execution model* — run on the box, by
-one person. They are shared only in *outcome*. Both underscore trees use the push model instead,
-for opposite reasons: `_multi-user/` because the install belongs to no one account, `_personal/`
-because it belongs to accounts named explicitly rather than to whoever is logged in.
+The legacy tree is empty now — there are no more `hosts: localhost`, `connection: local`
+playbooks left to classify as personal in *execution model* but shared in *outcome*. Both
+underscore trees use the push model instead, for opposite reasons: `_multi-user/` because the
+install belongs to no one account, `_personal/` because it belongs to accounts named explicitly
+rather than to whoever is logged in. `_multi-user/`'s leading underscore has meant "staging,
+sorts apart from the live single-user directories it will replace" since MIGRATION.md; now that
+none of those directories exist, the distinction it marks is gone too — renaming it is a
+deliberate, separate decision this document leaves open rather than folds in here, per
+[MIGRATION4.md's known follow-ups](MIGRATION4.md#known-follow-ups).
 
 ### Multi-user (34)
 
 All of `_multi-user/tools/` (11), all of `_multi-user/cloud-cli/` (13), all of
 `_multi-user/container/` (7) and all of `_multi-user/core/` (3 — `core-tools.yml`, `nodejs.yml`,
 `mise.yml`, written and verified against `localhost` by MIGRATION4.md; their `core/` originals
-are counted separately below, since they are not yet retired). Each uses
+were deleted on 2026-08-16 once every successor was verified, the same gate `tool/`,
+`cloud-cli/` and `container/` passed before them). Each uses
 `hosts: "{{ host }}"`, installs to root-owned system paths, puts shell configuration in
 `/etc/profile.d`, `/etc/bash_completion.d` or `/etc/environment`, pins its version in
 `vars:`, and ends with a `setpriv --reuid=65534` task that proves the tool works for an
@@ -381,51 +394,41 @@ discovering: `kind` and `minikube` are multi-user exactly as far as the `docker`
 reaches. Every account can execute the binary, and no account outside `docker_users` can do
 anything with it.
 
-### Effectively shared (2)
+### Effectively shared (0)
 
-This category used to be mostly `cloud-cli/`; those seven playbooks were migrated and their
-originals deleted, `services/jellyfin.yml` left with the rest of `services/`,
-`gui-tools/vscode.yml` left with [its directory](#retired-gui-tools), and
-`container/devcontainers.yml` — the third row here until 2026-08-14 — was migrated to
+Empty now. `core/nodejs.yml` and `core/core-tools.yml` were the last two rows, and both left on
+2026-08-16 once [MIGRATION4.md](MIGRATION4.md) retired `core/`. Before them, this category was
+mostly `cloud-cli/`; those seven playbooks were migrated and their originals deleted,
+`services/jellyfin.yml` left with the rest of `services/`, `gui-tools/vscode.yml` left with
+[its directory](#retired-gui-tools), and `container/devcontainers.yml` was migrated to
 [`_multi-user/container/devcontainers.yml`](_multi-user/container/README.md#devcontainersyml)
-and deleted with the rest of `container/`. `core/disable-rsyslog.yml` was the other row here
-until 2026-08-14, when it was
-[retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) rather than migrated — out of
-scope, not unsafe. `core/agent-base.yml` joined the same day from the opposite direction:
+and deleted with the rest of `container/`. `core/disable-rsyslog.yml` left the category the same
+day by a different route —
+[retired](#retired-coredisable-rsyslogyml-and-corex11vncyml) rather than migrated, out of scope
+rather than unsafe — and `core/agent-base.yml` joined from the opposite direction that same day:
 renamed `core/core-tools.yml` and cut down to its one `apt install` task once SSH, Avahi,
-logind, journald, hostname and IPv6 handling were all peeled off — see
-[core/README.md](core/README.md#core-toolsyml). What is left is the tail.
+logind, journald, hostname and IPv6 handling were all peeled off. Both `core/nodejs.yml` and
+`core/core-tools.yml` had already gained verified `_multi-user/core/` successors
+([MIGRATION4.md](MIGRATION4.md)), counted under [Multi-user](#multi-user-34) above, before their
+originals were retired — the same order every other row that ever left this category by
+migration has followed.
 
-| Playbook | Why it is already safe |
-|----------|------------------------|
-| `core/nodejs.yml` | apt only |
-| `core/core-tools.yml` | apt only |
+### Mixed — shared install, personal tail (0)
 
-Both now have `_multi-user/core/` successors ([MIGRATION4.md](MIGRATION4.md)), counted separately
-under [Multi-user](#multi-user-34) above; these two rows are the originals, kept here until
-`core/` is deliberately retired.
-
-### Mixed — shared install, personal tail (1)
-
-This category was three quarters `container/` until 2026-08-14: `docker`, `podman`, `kubectl`,
-`helm`, `kind` and `minikube` were six of its eight rows, each a shared install with a
-`~/.bashrc` block or a `$USER` group add on the end, and all six left the category by being
-[migrated](MIGRATION3.md) — the completions moved to `/etc/bash_completion.d` and the group
-add became `docker_users`. `core/golang.yml` was a ninth row before that, and left the other
-way: [retired](#retired-coregolangyml-and-corerustyml) rather than fixed, since a toolchain
-nobody here compiles with is not worth un-mixing. `core/samba.yml` was the tenth, sharing
-`smb.conf` and the service but tying `smbpasswd -a` to the invoker; it also left the other way,
-[retired](#retired-coresambayml) on 2026-08-14 rather than fixed, since a service scoped out of
-the repo entirely is not worth un-mixing either. What is left is `core/mise.yml` alone.
-
-| Playbook | Shared part | Personal part |
-|----------|-------------|---------------|
-| `core/mise.yml` | apt | `mise activate` in `~/.bashrc` |
-
-`core/mise.yml` now has an unmixed `_multi-user/core/mise.yml` successor
-([MIGRATION4.md](MIGRATION4.md)) that moves the activation line to `/etc/profile.d/mise.sh`,
-counted separately under [Multi-user](#multi-user-34) above — this row is the original, kept
-here until `core/` is deliberately retired.
+Empty now. `core/mise.yml` was the last row, and it left on 2026-08-16 once
+[MIGRATION4.md](MIGRATION4.md) retired `core/`, the same way `container/` had already emptied
+three quarters of this category on 2026-08-14: `docker`, `podman`, `kubectl`, `helm`, `kind` and
+`minikube` were six of its eight rows, each a shared install with a `~/.bashrc` block or a
+`$USER` group add on the end, and all six left by being [migrated](MIGRATION3.md) — the
+completions moved to `/etc/bash_completion.d` and the group add became `docker_users`.
+`core/golang.yml` left earlier the other way: [retired](#retired-coregolangyml-and-corerustyml)
+rather than fixed, since a toolchain nobody here compiles with was not worth un-mixing.
+`core/samba.yml` [retired](#retired-coresambayml) the same way on 2026-08-14, a service scoped
+out of the repo entirely being no more worth un-mixing. `core/mise.yml` had already gained an
+unmixed `_multi-user/core/mise.yml` successor ([MIGRATION4.md](MIGRATION4.md)) that moves the
+activation line to `/etc/profile.d/mise.sh`, counted under [Multi-user](#multi-user-34) above,
+before the original was retired — the same order every other row in this category's history has
+followed.
 
 ### Personal only (3)
 
@@ -445,7 +448,8 @@ work arrives over SSH, and `core/agent-base.yml` left the category the one way n
 did: neither retired nor given an explicit user list, but stripped of the tasks that made it
 personal in the first place. Renamed `core/core-tools.yml` (2026-08-14), it kept only the `apt
 install` task and lost the `~/.xprofile`, `~/.xsessionrc` and three `~/.bashrc` blocks along with
-it — see [core/README.md](core/README.md#core-toolsyml).
+it — the removed tasks are recoverable from git history
+(`git log --all --full-history -- core/agent-base.yml core/core-tools.yml`).
 
 | Playbook | Cause |
 |----------|-------|

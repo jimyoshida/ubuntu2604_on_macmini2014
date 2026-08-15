@@ -103,7 +103,7 @@ ansible-playbook ai-agent/vertex-ai-proxy.yml -e host=ws01 -e target_users=alice
 ```
 
 **Prerequisites:**
-- System-wide Node.js installed via `core/nodejs.yml`
+- System-wide Node.js installed via `_multi-user/core/nodejs.yml`
   - version manager-managed Node.js will cause the playbook to fail
 
 This playbook:

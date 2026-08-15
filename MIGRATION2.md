@@ -895,8 +895,12 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   though the `vscode.list` file it wrote stays on any host that ran it. `container/`'s
   repositories are closed a third way, by migration: it was
   [retired](MIGRATION3.md#known-follow-ups) on 2026-08-14 and its successors both follow A5
-  and delete the source files their predecessors wrote. That leaves `core/` as the only
-  directory still adding repositories under no shared convention.
+  and delete the source files their predecessors wrote. **Closed 2026-08-16:** `core/` — the
+  only directory still adding repositories under no shared convention — was
+  [retired](MIGRATION4.md#known-follow-ups) the same way `container/` was: both of its
+  vendor-repo playbooks migrated to A5-compliant `_multi-user/core/` successors that delete the
+  predecessor's source (`nodesource.list`, `mise.list`) before writing their own, so no directory
+  left in the repo adds an apt repository outside the shared convention.
 - **Bare `ansible_architecture` is deprecated.** ansible-core 2.20 warns on every run that
   reads it (`Use ansible_facts["fact_name"] (no ansible_ prefix) instead`), and every playbook
   in `_multi-user/` maps it onto upstream asset names. Currently a warning, not an error.

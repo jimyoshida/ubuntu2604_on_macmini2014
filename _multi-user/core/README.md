@@ -1,9 +1,10 @@
 # Core Playbooks (multi-user workstations)
 
 Standalone playbooks that install the base CLI toolset, Node.js and mise on a **shared** Ubuntu
-workstation. They are the multi-user successors to `core/`, the last directory left of the
-original single-user tree — see [MIGRATION4.md](../../MIGRATION4.md) for the policy and the
-per-tool plan.
+workstation. They are the multi-user successors to `core/`, which was retired on 2026-08-16 once
+all three were verified — the last directory of the original single-user tree, so its retirement
+retired the entire legacy tree with it. See [MIGRATION4.md](../../MIGRATION4.md) for the policy
+and the per-tool plan.
 
 Run from `_multi-user/`:
 
@@ -159,9 +160,11 @@ ansible-playbook core/mise.yml -e host=ws01 -e mise_version=2026.8.6
 ## What is *not* here
 
 `core/README.md`'s chrony section was never a playbook (Ubuntu 26.04 ships chrony pre-configured)
-and needs no multi-user successor. The Go and Rust toolchains that used to live in this directory
-(`core/golang.yml`, `core/rust.yml`) were retired outright on 2026-08-10 as out of scope for a
-workstation that runs AI coding agents rather than compiling with either — see the root
+and got no multi-user successor; it is recoverable from git history
+(`git log --diff-filter=D -- core/README.md`) along with the rest of that file. The Go and Rust
+toolchains that used to live in this directory (`core/golang.yml`, `core/rust.yml`) were retired
+outright on 2026-08-10 as out of scope for a workstation that runs AI coding agents rather than
+compiling with either — see the root
 [README.md](../../README.md#retired-coregolangyml-and-corerustyml). `mise.yml` above is the
 general-purpose replacement for a per-account runtime, same as it was in `core/`.
 
@@ -173,11 +176,13 @@ general-purpose replacement for a per-account runtime, same as it was in `core/`
 | `nodejs.yml` | `core/nodejs.yml` | nodejs 24.19.0-1nodesource1, yarn 1.22.22, pnpm 11.21.0 | Verified (localhost) |
 | `mise.yml` | `core/mise.yml` | 2026.8.6 | Verified (localhost) |
 
+All three are migrated, and these are now the only generation: `core/` was deleted on 2026-08-16
+once every successor was verified, so the "Successor to" column names files that exist only in
+git history (`git log --diff-filter=D -- core/`). What the retirement gate did *not* cover is
+below, and it is worth reading: the successors were verified against a real host, but never
+against a *remote* one — see [MIGRATION4.md](../../MIGRATION4.md#known-follow-ups).
+
 "Verified (localhost)" carries the same two caveats as everything else in `_multi-user/`: the
 runs were made under ansible-core 2.20 with `ansible_connection=local`, so they exercise neither
 the 24.04 control node nor the SSH path. `ws01`/`ws02` have never been provisioned by either
-generation. `core/` itself is not yet retired — unlike `tool/`, `cloud-cli/` and `container/`
-before it, its three originals stay in place until a deliberate decision to remove them, because
-retiring `core/` retires the entire legacy tree (nothing named `core/`, `tool/`, `cloud-cli/`,
-`container/`, `services/` or `gui-tools/` would remain) and reopens two follow-up questions
-MIGRATION3.md left open — see [MIGRATION4.md's known follow-ups](../../MIGRATION4.md#known-follow-ups).
+generation.

@@ -1,13 +1,16 @@
 # Physical Host Setup (Non-EC2)
 
 Manual steps for a host these playbooks no longer configure. Most sections below were removed
-from `core/agent-base.yml` on 2026-08-14 (see [core/README.md](core/README.md#core-toolsyml) and
-`git log --diff-filter=D -- core/agent-base.yml`) on the assumption that the target already
-satisfies them or doesn't need them. That assumption holds for an AWS EC2 instance — cloud-init
-sets the hostname, the AMI ships `sshd` enabled, there is no lid or suspend to fight on a VM, and
-there is no desktop session to blank or lock. None of it holds for a fresh physical-PC Ubuntu
-install, so if that's the target, work through whichever sections below apply after
-`core/core-tools.yml` and before treating the box as ready. The [Samba](#samba-file-sharing-optional)
+from `core/agent-base.yml` on 2026-08-14 (see
+[_multi-user/core/README.md](_multi-user/core/README.md#core-toolsyml) and
+`git log --all --full-history -- core/agent-base.yml core/core-tools.yml`) on the assumption that
+the target already satisfies them or doesn't need them. That assumption holds for an AWS EC2
+instance — cloud-init sets the hostname, the AMI ships `sshd` enabled, there is no lid or suspend
+to fight on a VM, and there is no desktop session to blank or lock. None of it holds for a fresh
+physical-PC Ubuntu install, so if that's the target, work through whichever sections below apply
+after `_multi-user/core/core-tools.yml` (`core/core-tools.yml` until it was retired on
+2026-08-16 per [MIGRATION4.md](MIGRATION4.md)) and before treating the box as ready. The
+[Samba](#samba-file-sharing-optional)
 section is different: `core/samba.yml` wasn't removed for being EC2-redundant, it was retired
 outright as out of scope (see
 [Retired: `core/samba.yml`](README.md#retired-coresambayml)) — it's here because sharing a home

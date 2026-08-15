@@ -3,23 +3,26 @@
 Policy and procedure for migrating the last three playbooks — `core/core-tools.yml`,
 `core/mise.yml`, `core/nodejs.yml` — from `core/` to `_multi-user/core/`.
 
-**Status: all three playbooks written and verified (localhost).** `_multi-user/core/` now holds
+**Status: complete.** All three playbooks are migrated, verified against `localhost`, and
+retired — the originals and `core/README.md` were deleted on 2026-08-16 and `core/` is gone with
+them, the same as `tool/`, `cloud-cli/` and `container/` before it. `_multi-user/core/` now holds
 `core-tools.yml`, `nodejs.yml` and `mise.yml`, each run to `failed=0` against `localhost`, re-run
-idempotently, and checked clean under `--check` — see [Migration status](#migration-status). What
-is still open, unlike [MIGRATION.md](MIGRATION.md), [MIGRATION2.md](MIGRATION2.md) and
-[MIGRATION3.md](MIGRATION3.md)'s "complete": `core/` itself is not yet retired. Retiring it is a
-deliberate, separate decision this document deferred from the start — see [Known
-follow-ups](#known-follow-ups) — not a gap in the playbooks themselves.
+idempotently, and checked clean under `--check` — see [Migration status](#migration-status).
+**Read [what the retirement gate did and did not cover](#known-follow-ups) before relying on the
+deletion**: it is the same `localhost`-only, ansible-core 2.20-only evidence `container/` was
+retired on, and the 24.04-control-node-over-SSH run this plan called for was never performed.
 
-This document is the fourth in the series and, if it closes, the last: `core/` is the whole of
-what remains of the original single-user tree (`tool/`, `cloud-cli/` and `container/` are gone —
-see the three documents above). Everything in them still applies: the
+This document is the fourth in the series and the last: `core/` was the whole of what remained
+of the original single-user tree (`tool/`, `cloud-cli/` and `container/` were already gone — see
+the three documents above), and retiring it retires the entire legacy tree — nothing named
+`core/`, `tool/`, `cloud-cli/`, `container/`, `services/` or `gui-tools/` remains anywhere in the
+repo. Everything in the three documents above still applies: the
 [prerequisites](MIGRATION.md#prerequisites), the ten [policy](MIGRATION.md#policy) points, the
 [playbook skeleton](MIGRATION.md#playbook-skeleton), the [install mechanism decision
 order](MIGRATION.md#install-mechanism-decision-order), MIGRATION2's five
 [amendments](MIGRATION2.md#policy-amendments) A1–A5, and MIGRATION3's five
 [amendments](MIGRATION3.md#policy-amendments) B1–B5. This document records only what is
-*different* about `core/`, plus the per-tool plan — and, unlike the three before it, it needs
+*different* about `core/`, plus the per-tool plan — and, unlike the three before it, it needed
 **no new lettered amendments**. See [Policy](#policy).
 
 ## Background
@@ -94,10 +97,14 @@ needed. The directory already exists, empty; nothing has been written into it.
 
 **Out of scope:**
 
-- `core/README.md`'s "chrony" section — not a playbook, needs no migration.
+- `core/README.md`'s "chrony" section — not a playbook, and never migrated; it is recoverable
+  from git history (`git log --diff-filter=D -- core/README.md`) along with the rest of the file.
 - ~~`core/*` itself stays in place until its successors are verified~~, the same way the three
-  before it did. Retirement is the last step, not the first; see
-  [Known follow-ups](#known-follow-ups) for what retiring `core/` would mean this time.
+  before it did. ~~Retirement is the last step, not the first.~~ **Retired 2026-08-16.** All
+  three originals and the directory's README were deleted once every successor was verified, and
+  `core/` no longer exists. What "verified" covers is narrower than the word suggests — see the
+  [follow-up](#known-follow-ups) — and the originals are recoverable from git history
+  (`git log --diff-filter=D -- core/`).
 
 ## Policy
 
@@ -346,6 +353,17 @@ additions apply unchanged, with one more specific to this directory:
 | `nodejs.yml` | NodeSource setup script, unpinned; Corepack shims mistaken for Yarn/pnpm | `deb822_repository`, pinned; Yarn/pnpm via `npm install -g` per decision (a) | nodejs 24.19.0-1nodesource1, yarn 1.22.22, pnpm 11.21.0 | Verified (localhost) |
 | `mise.yml` | vendor apt repo (`.list` + shell dearmor), unpinned; `mise activate` in `~/.bashrc` | `deb822_repository` (URL key form), pinned; activation in `/etc/profile.d/mise.sh` | 2026.8.6 | Verified (localhost) |
 
+Every row is also **retired**: none of the source playbooks named in the first column still
+exists, each having been deleted on 2026-08-16 once its successor was verified, and `core/` was
+removed with the last of them. The column is kept because it is what each migrated playbook is a
+successor *to*, and every playbook's header comment still refers to it by name — as do the tasks
+that clean up after it, which are the one part of this migration that outlives the source:
+`nodejs.yml` and `mise.yml` each remove the apt source their predecessor wrote
+(`nodesource.list`, `mise.list`) on hosts where the predecessor ran; `core-tools.yml` has no such
+task because its predecessor left no state beyond the apt packages themselves, which the
+successor's own pinned install already supersedes. `git log --diff-filter=D -- core/` recovers
+any of them.
+
 All three were run to `failed=0` against `localhost`, re-run a second time to confirm
 `changed=` only the scratch-`HOME` create/remove every other `_multi-user/` playbook shows on a
 re-run, and checked clean under `--check`. Same two caveats as every prior migration: ansible-core
@@ -398,30 +416,42 @@ summary text affects `failed=`, so this was never going to surface as a run fail
 
 ## Known follow-ups
 
-- **Retiring `core/`.** Now that all three playbooks are written and verified, `core/` can be
-  retired the same way `tool/`, `cloud-cli/` and `container/` were — a deliberate decision this
-  document has left open rather than taken. Unlike the three before it, retiring `core/` retires
-  *the entire legacy tree*: nothing named `core/`, `tool/`, `cloud-cli/`, `container/`,
-  `services/` or `gui-tools/` would remain, only `_multi-user/` and `_personal/`. That is the
-  point at which the two follow-ups MIGRATION3.md left open stop being hypothetical:
-  - **Renaming `_multi-user/`.** The leading underscore has meant "staging, sorts apart from the
-    live single-user directories it will replace" since MIGRATION.md. Once `core/` is gone there
-    are no live single-user directories left to sort apart from, on any of the (then) 34
-    playbooks. `_personal/`'s underscore means something different (per-identity by design, not
-    staging) and can keep it regardless.
-  - **The retirement gate itself.** MIGRATION3.md's known follow-ups already flagged that every
-    verification claim across all three prior migrations rests on `localhost` alone, under
-    ansible-core 2.20 alone, with no SSH/`remote_user` path ever exercised against `ws01`/`ws02`.
-    This migration inherits that gap rather than closing it; closing it is still one playbook,
-    one 24.04 control node, one remote host — cheaper the longer it is deferred, not more
-    expensive.
+- ~~**Retiring `core/`.**~~ **Done 2026-08-16.** All three originals and the directory's README
+  were deleted, on the gate `tool/`, `cloud-cli/` and `container/` passed: every successor
+  verified against a real host. Retiring `core/` retired *the entire legacy tree* along with it —
+  nothing named `core/`, `tool/`, `cloud-cli/`, `container/`, `services/` or `gui-tools/` remains
+  anywhere in the repo, only `_multi-user/` and `_personal/`. That is the point at which the two
+  follow-ups below, left open by MIGRATION3.md as hypothetical, stop being hypothetical.
+- **The retirement gate is weaker than the word "verified" suggests, and this migration
+  inherited it rather than fixing it.** All three playbooks here were verified on `localhost`
+  alone, under ansible-core 2.20 alone, with no SSH path and no `remote_user` exercised — exactly
+  the evidence `container/` was retired on. `ws01`/`ws02` have still never been provisioned by
+  either generation. This plan called for fixing it (run at least one of the three from a 24.04
+  control node over SSH, the check [MIGRATION2's scope note](MIGRATION2.md#scope) asked for),
+  **and that run was never performed** — not before the deletion, and not since. So the item does
+  not close with the directory; it moves forward. It now applies to all 34 `_multi-user/`
+  playbooks (all of `_multi-user/tools/`, `_multi-user/cloud-cli/`, `_multi-user/container/` and
+  `_multi-user/core/` — see [the count](README.md#multi-user-34)), and the cheapest way to
+  discharge it is still one playbook, one 24.04 control node, one remote host.
+- **Renaming `_multi-user/`.** The underscore has meant *staging*, sorting the tree apart from
+  the live single-user directories it would replace, since MIGRATION.md. Those directories are
+  gone now — the legacy tree does not exist at all — so the prefix marks a distinction that no
+  longer exists, on 34 of the repo's 37 playbooks. Dropping it is cheaper than it looks —
+  `ansible.cfg`'s `inventory` is relative and does not move — but it rewrites the `cd _multi-user`
+  line in every documented command, in five `README.md` files (the root one plus `tools/`,
+  `cloud-cli/`, `container/` and `core/` under `_multi-user/`) and in `ansible.cfg`'s own header
+  comment, and `_personal/` would want the same treatment or a stated reason not to (its
+  underscore means something different — per-identity by design, not staging — so it may earn
+  that reason rather than need the rename). Worth doing as its own change rather than as the tail
+  of this migration.
 - **`~/.bashrc`'s `mise` block, left behind on any host that ran the source playbook.** Same
   shape as MIGRATION3's `kubectl`/`helm`/`kind`/`minikube` completion blocks and `xhost` lines:
-  deleting or replacing `core/mise.yml` removes nothing already written into an account's
-  `~/.bashrc`. On `localhost` today that block is at `~/.bashrc:133-135`. Whether the migrated
-  playbook should remove it (a `blockinfile` with `state: absent` against an explicit user list)
-  is the same open question MIGRATION3 left open for its own six blocks, for the same reason: it
-  is the opposite of B2, and only argued for by nothing else in the repo ever taking it out.
+  deleting `core/mise.yml` removed nothing already written into an account's `~/.bashrc`. On
+  `localhost` that block is still at `~/.bashrc:133-135` as of the retirement. Whether the
+  migrated playbook should remove it (a `blockinfile` with `state: absent` against an explicit
+  user list) is the same open question MIGRATION3 left open for its own six blocks, for the same
+  reason: it is the opposite of B2, and only argued for by nothing else in the repo ever taking
+  it out.
 - ~~**Bare `ansible_architecture`.**~~ **Done.** `nodejs.yml` and `mise.yml` were written using
   `ansible_facts['architecture']` from the start, per MIGRATION2's and MIGRATION3's follow-up
   note, so neither adds to the outstanding repo-wide pass, which still has only `aws-cli.yml` and
