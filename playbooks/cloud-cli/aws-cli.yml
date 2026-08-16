@@ -40,13 +40,14 @@
     aws_cli_bin_dir: /usr/local/bin
     aws_cli_bin: /usr/local/bin/aws
     aws_cli_base_url: "https://awscli.amazonaws.com"
-    # ansible_architecture -> upstream installer asset name. AWS happens to
-    # use the same strings uname does, but the map is kept explicit so an
-    # unmapped architecture fails loudly instead of silently taking amd64.
+    # ansible_facts['architecture'] -> upstream installer asset name. AWS
+    # happens to use the same strings uname does, but the map is kept
+    # explicit so an unmapped architecture fails loudly instead of silently
+    # taking amd64.
     aws_cli_arch_map:
       x86_64: x86_64
       aarch64: aarch64
-    aws_cli_arch: "{{ aws_cli_arch_map[ansible_architecture] | default('') }}"
+    aws_cli_arch: "{{ aws_cli_arch_map[ansible_facts['architecture']] | default('') }}"
     aws_cli_zip: "awscli-exe-linux-{{ aws_cli_arch }}-{{ aws_cli_version }}.zip"
     # Disk-backed, not /tmp: the installer zip is ~70MiB and unpacks larger,
     # and /tmp is a size-capped tmpfs on these hosts (see MIGRATION.md).
@@ -111,7 +112,7 @@
       ansible.builtin.fail:
         msg: >-
           No AWS CLI installer is mapped for architecture
-          '{{ ansible_architecture }}'. Add it to aws_cli_arch_map.
+          '{{ ansible_facts['architecture'] }}'. Add it to aws_cli_arch_map.
       when: aws_cli_arch | length == 0
 
     - name: 3. Check the currently installed AWS CLI version

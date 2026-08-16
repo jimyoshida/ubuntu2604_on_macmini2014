@@ -28,11 +28,11 @@
     kube_score_version: "1.20.0"
     kube_score_bin: /usr/local/bin/kube-score
     kube_score_release_url: "https://github.com/zegl/kube-score/releases/download/v{{ kube_score_version }}"
-    # ansible_architecture -> upstream release asset suffix
+    # ansible_facts['architecture'] -> upstream release asset suffix
     kube_score_arch_map:
       x86_64: amd64
       aarch64: arm64
-    kube_score_arch: "{{ kube_score_arch_map[ansible_architecture] | default('') }}"
+    kube_score_arch: "{{ kube_score_arch_map[ansible_facts['architecture']] | default('') }}"
     # uid/gid used to prove the install is usable by an arbitrary user
     kube_score_verify_uid: 65534    # nobody
     kube_score_verify_gid: 65534    # nogroup
@@ -50,7 +50,7 @@
       ansible.builtin.fail:
         msg: >-
           No kube-score release asset is mapped for architecture
-          '{{ ansible_architecture }}'. Add it to kube_score_arch_map.
+          '{{ ansible_facts['architecture'] }}'. Add it to kube_score_arch_map.
       when: kube_score_arch | length == 0
 
     - name: 3. Check the currently installed kube-score version

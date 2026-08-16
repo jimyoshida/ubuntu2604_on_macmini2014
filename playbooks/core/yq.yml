@@ -26,11 +26,11 @@
   vars:
     yq_version: "4.53.3"
     yq_bin: /usr/local/bin/yq
-    # ansible_architecture -> upstream release asset suffix
+    # ansible_facts['architecture'] -> upstream release asset suffix
     yq_arch_map:
       x86_64: amd64
       aarch64: arm64
-    yq_arch: "{{ yq_arch_map[ansible_architecture] | default('') }}"
+    yq_arch: "{{ yq_arch_map[ansible_facts['architecture']] | default('') }}"
     # uid/gid used to prove the install is usable by an arbitrary user
     yq_verify_uid: 65534    # nobody
     yq_verify_gid: 65534    # nogroup
@@ -48,7 +48,7 @@
       ansible.builtin.fail:
         msg: >-
           No yq release asset is mapped for architecture
-          '{{ ansible_architecture }}'. Add it to yq_arch_map.
+          '{{ ansible_facts['architecture'] }}'. Add it to yq_arch_map.
       when: yq_arch | length == 0
 
     - name: 3. Check the currently installed yq version

@@ -23,11 +23,11 @@
     hadolint_version: "2.15.1"
     hadolint_bin: /usr/local/bin/hadolint
     hadolint_release_url: "https://github.com/hadolint/hadolint/releases/download/v{{ hadolint_version }}"
-    # ansible_architecture -> upstream release asset suffix
+    # ansible_facts['architecture'] -> upstream release asset suffix
     hadolint_arch_map:
       x86_64: x86_64
       aarch64: arm64
-    hadolint_arch: "{{ hadolint_arch_map[ansible_architecture] | default('') }}"
+    hadolint_arch: "{{ hadolint_arch_map[ansible_facts['architecture']] | default('') }}"
     # uid/gid used to prove the install is usable by an arbitrary user
     hadolint_verify_uid: 65534    # nobody
     hadolint_verify_gid: 65534    # nogroup
@@ -45,7 +45,7 @@
       ansible.builtin.fail:
         msg: >-
           No hadolint release asset is mapped for architecture
-          '{{ ansible_architecture }}'. Add it to hadolint_arch_map.
+          '{{ ansible_facts['architecture'] }}'. Add it to hadolint_arch_map.
       when: hadolint_arch | length == 0
 
     - name: 3. Check the currently installed hadolint version
