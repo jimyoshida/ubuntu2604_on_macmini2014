@@ -12,7 +12,7 @@ ansible-playbook core/<tool>.yml -e host=<inventory host or group>
 
 ## Conventions
 
-These playbooks follow the same rules as [`tools/`](../tools/README.md),
+These playbooks follow the same rules as [`misc/`](../misc/README.md),
 [`cloud-cli/`](../cloud-cli/README.md) and [`container/`](../container/README.md) — root-owned
 system paths, pinned versions, no writes to any `$HOME`, and a closing check that runs the tool
 as an arbitrary uid (`setpriv --reuid=65534`) rather than as the connecting account. Unlike
@@ -71,7 +71,7 @@ across accounts and across time, into that account's own cache.
 
 The fix: `corepack disable` removes Corepack's shims, then
 `npm install -g yarn@<version> pnpm@<version>` — the same mechanism
-`tools/markdownlint.yml` uses for a root-owned global npm install — puts real, pinned
+`markdownlint.yml` (below) uses for a root-owned global npm install — puts real, pinned
 packages at the same paths. The idempotency check never runs `yarn`/`pnpm` directly while a
 Corepack shim might still be at that path, since doing so would trigger the exact
 non-deterministic download this playbook exists to prevent; it resolves the binary with
@@ -120,7 +120,7 @@ destination and the same shape (a live `eval`, not a captured snapshot) as
 MIGRATION3.md's B3 on why a `PATH`/env-rewriting hook belongs there and not among
 completions or static aliases). `/etc/bash.bashrc` needs the `/etc/profile.d` bootstrap for
 non-login interactive shells to read it, which this playbook lays down defensively in case
-it runs on a host neither `tools/` nor `container/` has touched yet.
+it runs on a host neither `misc/` nor `container/` has touched yet.
 
 **mise writes to `$HOME` on a plain `--version`, so this playbook never runs mise itself as
 root.** Confirmed live: `HOME=<scratch> mise --version` creates
@@ -165,9 +165,9 @@ Also lays down:
 | --- | --- |
 | `/etc/profile.d/fzf.sh` | `eval "$(fzf --bash)"` — fzf key bindings and completion |
 
-`yq.yml`, `jq.yml` and `jsonnet.yml` live as their own playbooks in
-[`tools/`](../tools/README.md) rather than bundled here, each pinned and verified
-independently.
+`yq.yml` and `jq.yml` live as their own playbooks in this directory (below) rather than
+bundled here, and `jsonnet.yml` lives in [`misc/`](../misc/README.md) — each pinned and
+verified independently.
 
 **No vendor apt repo needed for `gum` and `glow`.** Ubuntu 26.04 ("resolute") carries apt
 packages for both directly (`gum` 0.17.0-1, `glow` 2.1.1-1), so a single apt install covers
@@ -187,9 +187,113 @@ opens a non-login interactive `bash -i` shell as the same user and checks that f
 `__fzf_select__` function is defined — proving the `/etc/profile.d` → `/etc/bash.bashrc` chain
 actually works end-to-end for a real interactive session, not just that the binaries exist.
 
-apt package pins are release-specific (see `tools/shellcheck.yml`'s note on the same issue);
-to override one, edit `modern_tools_packages` with `-e` as a JSON list, the same pattern
-`tools/grype-syft.yml` uses for its tool list.
+apt package pins are release-specific (see `shellcheck.yml`'s note on the same issue,
+below); to override one, edit `modern_tools_packages` with `-e` as a JSON list, the same
+pattern [`misc/grype-syft.yml`](../misc/README.md) uses for its tool list.
+
+## jq.yml
+
+Installs [jq](https://github.com/jqlang/jq) from the Ubuntu apt package, `/usr/bin/jq`,
+root-owned. There is no per-user state and nothing to add to a shell profile.
+
+A plain apt install, pinned by exact dpkg version the same way `shellcheck.yml` (below) is.
+
+The unprivileged verification step pipes `{"a": 1}` into `jq '.a'` as `nobody` and checks
+the output.
+
+Version overrides:
+
+```bash
+ansible-playbook core/jq.yml -e host=ws01 -e jq_version=1.8.1-4ubuntu2
+```
+
+## markdownlint.yml
+
+Installs [markdownlint-cli](https://github.com/igorshubovych/markdownlint-cli) via
+`npm install -g`, root-owned. Node.js itself is a prerequisite provisioned elsewhere; this
+playbook only checks for it, and fails loudly with setup instructions if it is missing.
+
+- **Pinned version, not `@latest`.**
+- **Version-aware idempotency.** The installed version is compared against the pin, not
+  just the binary's presence.
+- **npm's global prefix is read at run time, not assumed.** `npm config get prefix`
+  differs depending on how Node.js was installed: a NodeSource-installed Node.js defaults
+  it to `/usr` (`/usr/lib/node_modules`, `/usr/bin/markdownlint`), while Ubuntu's own
+  `nodejs` apt package defaults it to `/usr/local` (`/usr/local/lib/node_modules`,
+  `/usr/local/bin/markdownlint`). Both are root-owned system paths, so either is fine —
+  but hardcoding one breaks the other.
+- **Node-in-PATH guard**, accepting either system prefix: fails if `which node` resolves
+  outside `/usr/bin/node` or `/usr/local/bin/node`, which would indicate a per-user
+  version manager (nvm, fnm, ...) shadowing the system Node.js for the connecting account.
+
+The unprivileged verification step lints a Markdown file with a deliberate heading-space
+issue and checks the output for that specific rule (`MD018`). markdownlint writes its
+findings to **stderr**, not stdout, and exits non-zero when it finds issues — both are the
+expected, successful outcome of this check, not a failure of the playbook run.
+
+Version overrides:
+
+```bash
+ansible-playbook core/markdownlint.yml -e host=ws01 -e markdownlint_cli_version=0.49.1
+```
+
+## shellcheck.yml
+
+Installs [ShellCheck](https://github.com/koalaman/shellcheck) from the Ubuntu apt
+package, `/usr/bin/shellcheck`, root-owned. There is no per-user state and nothing to
+add to a shell profile.
+
+Installed from the Ubuntu apt package rather than Homebrew — apt is current enough to use
+directly, and unlike Homebrew, it's usable by every account on the host:
+
+- **Pinned by exact dpkg version**, not just the semantic version. `shellcheck_version`
+  is compared against `dpkg-query -W -f='${Version}' shellcheck`, which includes the
+  Debian revision suffix (e.g. `-2`), so the idempotency check is exact.
+- **The pin is Ubuntu-release-specific.** apt's candidate version for `shellcheck`
+  differs between Ubuntu releases (`0.11.0-2` on 26.04 "resolute", `0.9.0-1` on 24.04
+  "noble"). Overriding `shellcheck_version` only helps if that exact dpkg version is
+  available from the target's configured apt sources.
+
+The unprivileged verification step writes a throwaway script with a known issue
+(unquoted `$1`) to `/tmp`, lints it as `nobody`, and checks for `SC2086` in the output.
+
+Version overrides:
+
+```bash
+ansible-playbook core/shellcheck.yml -e host=ws01 -e shellcheck_version=0.9.0-1
+```
+
+## yq.yml
+
+Installs [mikefarah/yq](https://github.com/mikefarah/yq) as a single static binary at
+`/usr/local/bin/yq`, root-owned, mode `0755`. There is no per-user state and nothing to add
+to a shell profile.
+
+This is a release binary rather than a plain apt install, deliberately: per the
+decision-order gotcha in `MIGRATION.md`, Ubuntu's apt `yq` is `kislyuk/yq`, a Python
+wrapper around `jq` with entirely different syntax from mikefarah's Go `yq` that this
+playbook installs. Silently swapping one for the other under the same command name would
+break any script written against the Go one.
+
+- **Checksum verification, but not from a checksums file.** yq's own published checksums file
+  uses a bespoke multi-algorithm rhash table (`checksums_hashes_order` /
+  `extract-checksum.sh` in the release), not the plain `hash  filename` format
+  `gomplate.yml`/`hadolint.yml` (in [`misc/`](../misc/README.md)) parse. Instead, the
+  playbook reads the SHA-256 `digest` GitHub computes and serves per release asset via its
+  own releases API — simpler to consume and just as authoritative.
+- **Architecture from facts.** `ansible_architecture` is mapped to the release asset suffix
+  (`x86_64` → `amd64`, `aarch64` → `arm64`). Unmapped architectures fail with a clear message.
+- **Version-aware idempotency.** The installed version (parsed from `yq --version` output) is
+  compared against the pinned version before re-downloading.
+
+The unprivileged verification step pipes `a: 1` into `yq e '.a' -` (reading from stdin) as
+`nobody` and checks the output, proving yq's zero-configuration path.
+
+Version overrides:
+
+```bash
+ansible-playbook core/yq.yml -e host=ws01 -e yq_version=4.53.3
+```
 
 ## What is *not* here
 

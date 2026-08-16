@@ -1,4 +1,4 @@
-# Tool Installation Playbooks (multi-user workstations)
+# Misc Playbooks (multi-user workstations)
 
 Standalone playbooks that install developer tooling on a **shared** Ubuntu workstation, to
 root-owned system paths usable by every account on the host rather than into one account's
@@ -7,7 +7,7 @@ home directory.
 Run from `_multi-user/`:
 
 ```bash
-ansible-playbook tools/<tool>.yml -e host=<inventory host or group>
+ansible-playbook misc/<tool>.yml -e host=<inventory host or group>
 ```
 
 ## Conventions
@@ -59,7 +59,7 @@ explicit and to survive an upstream change of that default.
 Version overrides:
 
 ```bash
-ansible-playbook tools/bats.yml -e host=ws01 -e bats_core_version=1.13.0
+ansible-playbook misc/bats.yml -e host=ws01 -e bats_core_version=1.13.0
 ```
 
 ## gomplate.yml
@@ -80,7 +80,7 @@ nothing to add to a shell profile.
 Version overrides:
 
 ```bash
-ansible-playbook tools/gomplate.yml -e host=ws01 -e gomplate_version=4.3.3
+ansible-playbook misc/gomplate.yml -e host=ws01 -e gomplate_version=4.3.3
 ```
 
 ## grype-syft.yml
@@ -114,34 +114,8 @@ network egress and can take a little while on the first run.
 Version overrides:
 
 ```bash
-ansible-playbook tools/grype-syft.yml -e host=ws01 \
+ansible-playbook misc/grype-syft.yml -e host=ws01 \
   -e grype_syft_tools='[{"name":"grype","version":"0.116.1","repo":"anchore/grype"},{"name":"syft","version":"1.50.0","repo":"anchore/syft"}]'
-```
-
-## shellcheck.yml
-
-Installs [ShellCheck](https://github.com/koalaman/shellcheck) from the Ubuntu apt
-package, `/usr/bin/shellcheck`, root-owned. There is no per-user state and nothing to
-add to a shell profile.
-
-Installed from the Ubuntu apt package rather than Homebrew — apt is current enough to use
-directly, and unlike Homebrew, it's usable by every account on the host:
-
-- **Pinned by exact dpkg version**, not just the semantic version. `shellcheck_version`
-  is compared against `dpkg-query -W -f='${Version}' shellcheck`, which includes the
-  Debian revision suffix (e.g. `-2`), so the idempotency check is exact.
-- **The pin is Ubuntu-release-specific.** apt's candidate version for `shellcheck`
-  differs between Ubuntu releases (`0.11.0-2` on 26.04 "resolute", `0.9.0-1` on 24.04
-  "noble"). Overriding `shellcheck_version` only helps if that exact dpkg version is
-  available from the target's configured apt sources.
-
-The unprivileged verification step writes a throwaway script with a known issue
-(unquoted `$1`) to `/tmp`, lints it as `nobody`, and checks for `SC2086` in the output.
-
-Version overrides:
-
-```bash
-ansible-playbook tools/shellcheck.yml -e host=ws01 -e shellcheck_version=0.9.0-1
 ```
 
 ## trivy.yml
@@ -179,7 +153,7 @@ first run.
 Version overrides:
 
 ```bash
-ansible-playbook tools/trivy.yml -e host=ws01 -e trivy_version=0.73.0
+ansible-playbook misc/trivy.yml -e host=ws01 -e trivy_version=0.73.0
 ```
 
 ## hadolint.yml
@@ -206,55 +180,7 @@ zero-configuration path: no `.hadolint.yaml` is discovered or required.
 Version overrides:
 
 ```bash
-ansible-playbook tools/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
-```
-
-## yq.yml
-
-Installs [mikefarah/yq](https://github.com/mikefarah/yq) as a single static binary at
-`/usr/local/bin/yq`, root-owned, mode `0755`. There is no per-user state and nothing to add
-to a shell profile.
-
-This is a release binary rather than a plain apt install, deliberately: per the
-decision-order gotcha in `MIGRATION.md`, Ubuntu's apt `yq` is `kislyuk/yq`, a Python
-wrapper around `jq` with entirely different syntax from mikefarah's Go `yq` that this
-playbook installs. Silently swapping one for the other under the same command name would
-break any script written against the Go one.
-
-- **Checksum verification, but not from a checksums file.** yq's own published checksums file
-  uses a bespoke multi-algorithm rhash table (`checksums_hashes_order` /
-  `extract-checksum.sh` in the release), not the plain `hash  filename` format
-  `gomplate.yml`/`hadolint.yml` parse. Instead, the playbook reads the SHA-256 `digest`
-  GitHub computes and serves per release asset via its own releases API — simpler to consume
-  and just as authoritative.
-- **Architecture from facts.** `ansible_architecture` is mapped to the release asset suffix
-  (`x86_64` → `amd64`, `aarch64` → `arm64`). Unmapped architectures fail with a clear message.
-- **Version-aware idempotency.** The installed version (parsed from `yq --version` output) is
-  compared against the pinned version before re-downloading.
-
-The unprivileged verification step pipes `a: 1` into `yq e '.a' -` (reading from stdin) as
-`nobody` and checks the output, proving yq's zero-configuration path.
-
-Version overrides:
-
-```bash
-ansible-playbook tools/yq.yml -e host=ws01 -e yq_version=4.53.3
-```
-
-## jq.yml
-
-Installs [jq](https://github.com/jqlang/jq) from the Ubuntu apt package, `/usr/bin/jq`,
-root-owned. There is no per-user state and nothing to add to a shell profile.
-
-A plain apt install, pinned by exact dpkg version the same way `shellcheck.yml` is.
-
-The unprivileged verification step pipes `{"a": 1}` into `jq '.a'` as `nobody` and checks
-the output.
-
-Version overrides:
-
-```bash
-ansible-playbook tools/jq.yml -e host=ws01 -e jq_version=1.8.1-4ubuntu2
+ansible-playbook misc/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
 ```
 
 ## jsonnet.yml
@@ -263,7 +189,8 @@ Installs [jsonnet](https://github.com/google/jsonnet) from the Ubuntu apt packag
 `/usr/bin/jsonnet`, root-owned. There is no per-user state and nothing to add to a shell
 profile.
 
-A plain apt install, pinned by exact dpkg version the same way `shellcheck.yml` is.
+A plain apt install, pinned by exact dpkg version the same way
+[`core/shellcheck.yml`](../core/README.md) is.
 
 The unprivileged verification step pipes the expression `1 + 1` into `jsonnet -` as `nobody`
 and checks that the output is `2`.
@@ -271,7 +198,7 @@ and checks that the output is `2`.
 Version overrides:
 
 ```bash
-ansible-playbook tools/jsonnet.yml -e host=ws01 -e jsonnet_version=0.20.0+ds-3.3build1
+ansible-playbook misc/jsonnet.yml -e host=ws01 -e jsonnet_version=0.20.0+ds-3.3build1
 ```
 
 ## junit2html.yml
@@ -307,7 +234,7 @@ confirms the output file exists.
 Version overrides:
 
 ```bash
-ansible-playbook tools/junit2html.yml -e host=ws01 -e junit2html_version=31.1.4
+ansible-playbook misc/junit2html.yml -e host=ws01 -e junit2html_version=31.1.4
 ```
 
 ## kube-score.yml
@@ -333,35 +260,5 @@ successful outcome of the check, not a failure of the playbook run.
 Version overrides:
 
 ```bash
-ansible-playbook tools/kube-score.yml -e host=ws01 -e kube_score_version=1.20.0
-```
-
-## markdownlint.yml
-
-Installs [markdownlint-cli](https://github.com/igorshubovych/markdownlint-cli) via
-`npm install -g`, root-owned. Node.js itself is a prerequisite provisioned elsewhere; this
-playbook only checks for it, and fails loudly with setup instructions if it is missing.
-
-- **Pinned version, not `@latest`.**
-- **Version-aware idempotency.** The installed version is compared against the pin, not
-  just the binary's presence.
-- **npm's global prefix is read at run time, not assumed.** `npm config get prefix`
-  differs depending on how Node.js was installed: a NodeSource-installed Node.js defaults
-  it to `/usr` (`/usr/lib/node_modules`, `/usr/bin/markdownlint`), while Ubuntu's own
-  `nodejs` apt package defaults it to `/usr/local` (`/usr/local/lib/node_modules`,
-  `/usr/local/bin/markdownlint`). Both are root-owned system paths, so either is fine —
-  but hardcoding one breaks the other.
-- **Node-in-PATH guard**, accepting either system prefix: fails if `which node` resolves
-  outside `/usr/bin/node` or `/usr/local/bin/node`, which would indicate a per-user
-  version manager (nvm, fnm, ...) shadowing the system Node.js for the connecting account.
-
-The unprivileged verification step lints a Markdown file with a deliberate heading-space
-issue and checks the output for that specific rule (`MD018`). markdownlint writes its
-findings to **stderr**, not stdout, and exits non-zero when it finds issues — both are the
-expected, successful outcome of this check, not a failure of the playbook run.
-
-Version overrides:
-
-```bash
-ansible-playbook tools/markdownlint.yml -e host=ws01 -e markdownlint_cli_version=0.49.1
+ansible-playbook misc/kube-score.yml -e host=ws01 -e kube_score_version=1.20.0
 ```

@@ -12,7 +12,7 @@ ansible-playbook cloud-cli/<tool>.yml -e host=<inventory host or group>
 
 ## Conventions
 
-These playbooks follow the same rules as [`tools/`](../tools/README.md) — root-owned
+These playbooks follow the same rules as [`misc/`](../misc/README.md) — root-owned
 system paths, no Homebrew, no writes to any `$HOME`, pinned versions, and a closing check
 that runs the tool as an arbitrary uid (`setpriv --reuid=65534`) rather than as the
 connecting user. Three rules matter specifically here, because every tool in this
