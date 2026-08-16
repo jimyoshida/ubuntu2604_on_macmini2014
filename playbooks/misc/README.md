@@ -318,3 +318,49 @@ Version overrides:
 ```bash
 ansible-playbook misc/k6.yml -e host=ws01 -e k6_version=2.2.0
 ```
+
+## playwright.yml
+
+Installs [Playwright](https://playwright.dev/) via `npm install -g`, root-owned, the same
+mechanism `core/markdownlint.yml` uses for a global npm install. Node.js itself is a
+prerequisite provisioned elsewhere; this playbook only checks for it, following
+`markdownlint.yml`'s Node-in-PATH guard.
+
+| Path | Contents |
+| --- | --- |
+| `<npm prefix>/bin/playwright` | npm's bin symlink |
+| `<npm prefix>/lib/node_modules/playwright` | the npm package |
+| `/opt/playwright-browsers` | shared browser binaries (Chromium by default) |
+
+**Browser binaries are the part a plain npm install doesn't solve.** By default
+`playwright install` caches browsers under the invoking account's own
+`$HOME/.cache/ms-playwright` — per-user, so every account on the host would separately
+re-download several hundred MiB the first time it ran a test. `PLAYWRIGHT_BROWSERS_PATH`
+redirects that cache to the shared `/opt` path instead:
+
+- **Published to `/etc/environment`** for real login/SSH sessions, the same
+  `lineinfile` pattern `bats.yml`'s `BATS_LIB_PATH` uses — and passed explicitly as task
+  `environment` wherever this playbook itself invokes `playwright`, since neither `become`
+  nor `setpriv` sources `/etc/environment`.
+- **Chromium only by default**, to keep the download and disk footprint reasonable
+  (~300MiB). Override `playwright_browsers` to add `firefox` and/or `webkit`.
+- **`install --with-deps`** apt-installs the OS libraries each browser needs to run
+  headless in the same command that downloads it. This needs to run as root on Linux —
+  satisfied here because the whole play already runs under `become`.
+- **The browser install step runs unconditionally**, not gated behind the npm package's
+  own version check: `playwright install` is already idempotent (it skips any revision
+  already present at `PLAYWRIGHT_BROWSERS_PATH`), and gating it on the npm package's
+  idempotency check alone would miss a browsers directory that was wiped or never
+  populated on an otherwise up-to-date host.
+
+The unprivileged verification step screenshots a `data:` URL — not a real website — as
+`nobody`, proving the installed browser and the shared `PLAYWRIGHT_BROWSERS_PATH` cache
+both work end to end without depending on outbound network access at verification time,
+the same offline-smoke-test approach `hadolint.yml` and `k6.yml` use.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/playwright.yml -e host=ws01 -e playwright_version=1.62.1
+ansible-playbook misc/playwright.yml -e host=ws01 -e playwright_browsers='["chromium","firefox","webkit"]'
+```

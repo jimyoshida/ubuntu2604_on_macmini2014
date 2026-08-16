@@ -1,0 +1,213 @@
+---
+# Install Playwright system-wide on a multi-user workstation.
+#
+#   /usr/bin/npm (or /usr/local/bin/npm's prefix)/lib/node_modules/playwright   npm package, root-owned
+#   <same prefix>/bin/playwright                                               npm's bin symlink
+#   /opt/playwright-browsers                                                   shared browser binaries
+#   /etc/apt/...                                                               OS libraries `--with-deps` pulls in
+#
+# Node.js itself is a prerequisite provisioned elsewhere (core/nodejs.yml);
+# this playbook only checks for it, following core/markdownlint.yml's
+# pattern for a root-owned global npm install.
+#
+# Browser binaries are the part a plain `npm install -g playwright` doesn't
+# solve: by default `playwright install` caches them under the invoking
+# account's own $HOME/.cache/ms-playwright, which is per-user and would
+# make every account on the host re-download several hundred MiB the first
+# time it runs a test. PLAYWRIGHT_BROWSERS_PATH redirects that cache to a
+# shared, world-readable /opt path instead -- published to /etc/environment
+# for real login/SSH sessions, and passed explicitly to every task below
+# that invokes playwright, since neither `become` nor `setpriv` sources
+# /etc/environment.
+#
+# Only Chromium is installed by default, to keep the download and disk
+# footprint reasonable (~300MiB); override playwright_browsers to add
+# firefox and/or webkit. `install --with-deps` also apt-installs the OS
+# libraries each browser needs to run headless -- safe here because the
+# whole play already runs as root via become, which is what Playwright
+# itself requires to invoke apt directly instead of trying to re-sudo.
+#
+# Usage:
+#   ansible-playbook misc/playwright.yml -e host=<inventory host or group>
+#   ansible-playbook misc/playwright.yml -e host=ws01 -e playwright_version=1.62.1
+#   ansible-playbook misc/playwright.yml -e host=ws01 -e playwright_browsers='["chromium","firefox","webkit"]'
+
+- name: Install Playwright system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    playwright_version: "1.62.1"
+    playwright_browsers:
+      - chromium
+    playwright_browsers_path: /opt/playwright-browsers
+    # uid/gid used to prove the install is usable by an arbitrary user
+    playwright_verify_uid: 65534    # nobody
+    playwright_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Check that Node.js is installed as a system package
+      ansible.builtin.command: dpkg -s nodejs
+      register: playwright_nodejs_dpkg
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Fail if Node.js is not installed as a system package
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Node.js is not installed. Provision it (core/nodejs.yml)
+          before running this playbook.
+      when: playwright_nodejs_dpkg.rc != 0
+
+    - name: 4. Resolve the active node binary path
+      ansible.builtin.command: which node
+      register: playwright_node_path
+      changed_when: false
+
+    - name: 5. Fail if node in PATH is not a system-wide install
+      # Guards against a per-user version manager (nvm, fnm, ...) shadowing
+      # the system node on PATH for the connecting account: a global npm
+      # install under become would then land wherever that shim points,
+      # which is per-user, not root-owned.
+      ansible.builtin.fail:
+        msg: >-
+          node resolved to '{{ playwright_node_path.stdout }}', which is not
+          under /usr/bin or /usr/local/bin. It looks like it is managed by a
+          per-user version manager rather than a system package.
+      when: playwright_node_path.stdout not in ['/usr/bin/node', '/usr/local/bin/node']
+
+    - name: 6. Resolve npm's global install prefix
+      ansible.builtin.command: npm config get prefix
+      register: playwright_npm_prefix
+      changed_when: false
+
+    - name: 7. Check the currently installed playwright version
+      ansible.builtin.command: "{{ playwright_npm_prefix.stdout }}/bin/playwright --version"
+      register: playwright_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 8. Decide whether playwright needs installing
+      # The version is compared, not merely the presence of the binary, so
+      # that bumping playwright_version actually replaces the package.
+      ansible.builtin.set_fact:
+        playwright_install_needed: >-
+          {{ playwright_version not in (playwright_installed.stdout | default('')) }}
+
+    - name: 9. Install playwright via npm as root
+      ansible.builtin.command: "npm install -g playwright@{{ playwright_version }}"
+      when: playwright_install_needed | bool
+
+    - name: 10. Ensure the installed npm package is world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ playwright_npm_prefix.stdout }}/lib/node_modules/playwright"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 11. Verify the installed playwright version
+      ansible.builtin.command: "{{ playwright_npm_prefix.stdout }}/bin/playwright --version"
+      register: playwright_version_out
+      changed_when: false
+      failed_when: playwright_version not in playwright_version_out.stdout
+
+    - name: 12. Create the shared browser binaries directory
+      ansible.builtin.file:
+        path: "{{ playwright_browsers_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+
+    - name: 13. Publish PLAYWRIGHT_BROWSERS_PATH to all login sessions
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^PLAYWRIGHT_BROWSERS_PATH='
+        line: 'PLAYWRIGHT_BROWSERS_PATH="{{ playwright_browsers_path }}"'
+        state: present
+
+    - name: 14. Install {{ playwright_browsers | join(', ') }} with OS dependencies
+      # playwright install is idempotent on its own -- it skips any browser
+      # revision already present at PLAYWRIGHT_BROWSERS_PATH -- so this runs
+      # unconditionally rather than behind playwright_install_needed, which
+      # only tracks the npm package and would miss a browsers directory that
+      # was wiped or never populated on an otherwise up-to-date host.
+      ansible.builtin.command:
+        cmd: >-
+          {{ playwright_npm_prefix.stdout }}/bin/playwright install --with-deps
+          {{ playwright_browsers | join(' ') }}
+      environment:
+        PLAYWRIGHT_BROWSERS_PATH: "{{ playwright_browsers_path }}"
+      register: playwright_browsers_install
+      changed_when: "'Downloading' in playwright_browsers_install.stdout"
+
+    - name: 15. Ensure the shared browser binaries are world-readable
+      ansible.builtin.file:
+        path: "{{ playwright_browsers_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 16. Take a screenshot of an offline page as an unprivileged user
+      # A data: URL, not a real website: proves the installed browser and the
+      # shared PLAYWRIGHT_BROWSERS_PATH cache both work end to end without
+      # depending on outbound network access at verification time, the same
+      # offline-smoke-test approach hadolint.yml and k6.yml use.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ playwright_verify_uid }} --regid={{ playwright_verify_gid }} --clear-groups
+          {{ playwright_npm_prefix.stdout }}/bin/playwright screenshot
+          "data:text/html,<title>playwright-smoke-ok</title><h1>hi</h1>"
+          /tmp/playwright-multiuser-smoke.png
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+        PLAYWRIGHT_BROWSERS_PATH: "{{ playwright_browsers_path }}"
+      register: playwright_smoke
+      changed_when: false
+
+    - name: 17. Confirm the screenshot was produced
+      ansible.builtin.stat:
+        path: /tmp/playwright-multiuser-smoke.png
+      register: playwright_smoke_file
+      failed_when: not playwright_smoke_file.stat.exists or playwright_smoke_file.stat.size == 0
+
+    - name: 18. Remove the smoke test screenshot
+      ansible.builtin.file:
+        path: /tmp/playwright-multiuser-smoke.png
+        state: absent
+
+    - name: 19. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ playwright_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ playwright_npm_prefix.stdout }}/bin/playwright"
+          - "  {{ playwright_npm_prefix.stdout }}/lib/node_modules/playwright"
+          - "  {{ playwright_browsers_path }} ({{ playwright_browsers | join(', ') }})"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ playwright_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  playwright screenshot https://example.com out.png   # Capture a page screenshot"
+          - "  playwright pdf https://example.com out.pdf          # Save a page as PDF"
+          - "  playwright codegen https://example.com              # Record actions and generate code"
