@@ -262,3 +262,23 @@ Version overrides:
 ```bash
 ansible-playbook misc/kube-score.yml -e host=ws01 -e kube_score_version=1.20.0
 ```
+
+## plantuml.yml
+
+Installs [PlantUML](https://plantuml.com/) from the Ubuntu apt package, `/usr/bin/plantuml`,
+root-owned. There is no per-user state and nothing to add to a shell profile.
+
+A plain apt install, pinned by exact dpkg version the same way [`jsonnet.yml`](#jsonnetyml)
+and [`core/shellcheck.yml`](../core/README.md) are — including the epoch prefix (`1:`) apt
+carries in this package's version string.
+
+The unprivileged verification step pipes a two-line sequence diagram into
+`plantuml -pipe -tsvg` as `nobody` and checks the output contains `<svg`. A sequence diagram
+only exercises the bundled Java renderer, not the `Recommends`-only `graphviz` dependency
+(needed for activity/state diagrams), so this proves the zero-configuration path.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/plantuml.yml -e host=ws01 -e plantuml_version=1:1.2020.2+ds-6build1
+```

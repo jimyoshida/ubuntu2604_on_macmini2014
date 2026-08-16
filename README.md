@@ -28,7 +28,7 @@ installed once is usable by every account on a **shared** workstation. Run again
 
 | Directory | Description |
 |-----------|-------------|
-| [_multi-user/misc/](_multi-user/misc/README.md) | Developer tools (bats, gomplate, grype-syft, hadolint, jsonnet, junit2html, kube-score, trivy) |
+| [_multi-user/misc/](_multi-user/misc/README.md) | Developer tools (bats, gomplate, grype-syft, hadolint, jsonnet, junit2html, kube-score, plantuml, trivy) |
 | [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, tofu, promtool/amtool, vault) |
 | [_multi-user/container/](_multi-user/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers) |
 | [_multi-user/core/](_multi-user/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise |

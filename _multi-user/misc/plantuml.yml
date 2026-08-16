@@ -1,0 +1,86 @@
+---
+# Install PlantUML system-wide on a multi-user workstation.
+#
+# PlantUML's Ubuntu apt package is current enough to use as-is, so the
+# multi-user story is simple:
+#
+#   /usr/bin/plantuml   installed by apt, root-owned
+#
+# There is no per-user state and nothing to add to a shell profile.
+#
+# Usage:
+#   ansible-playbook tools/plantuml.yml -e host=<inventory host or group>
+#   ansible-playbook tools/plantuml.yml -e host=ws01 -e plantuml_version=1:1.2020.2+ds-6build1
+
+- name: Install PlantUML system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # dpkg version, including the epoch prefix, so the comparison in task 2
+    # is exact. This is Ubuntu 26.04 (resolute)'s current candidate. apt is
+    # the chosen mechanism here, so overriding this only helps if that exact
+    # dpkg version is available from the target's configured apt sources.
+    plantuml_version: "1:1.2020.2+ds-6build1"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    plantuml_verify_uid: 65534    # nobody
+    plantuml_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed plantuml version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' plantuml
+      register: plantuml_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 2. Decide whether plantuml needs installing
+      ansible.builtin.set_fact:
+        plantuml_install_needed: >-
+          {{ plantuml_installed.rc != 0 or plantuml_installed.stdout != plantuml_version }}
+
+    - name: 3. Install plantuml via apt
+      ansible.builtin.apt:
+        name: "plantuml={{ plantuml_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: plantuml_install_needed | bool
+
+    - name: 4. Verify the installed plantuml version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' plantuml
+      register: plantuml_version_out
+      changed_when: false
+      failed_when: plantuml_version != plantuml_version_out.stdout
+
+    - name: 5. Render a sequence diagram as an unprivileged user
+      # A sequence diagram needs only the bundled Java renderer, not the
+      # Recommends-only graphviz dependency (that's for activity/state
+      # diagrams), so this proves the zero-configuration path.
+      ansible.builtin.shell:
+        cmd: >-
+          printf '@startuml\nAlice -> Bob: hello\n@enduml\n' |
+          setpriv --reuid={{ plantuml_verify_uid }} --regid={{ plantuml_verify_gid }} --clear-groups
+          plantuml -pipe -tsvg
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+      register: plantuml_smoke
+      changed_when: false
+      failed_when: "'<svg' not in plantuml_smoke.stdout"
+
+    - name: 6. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "plantuml {{ plantuml_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  /usr/bin/plantuml"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ plantuml_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  plantuml diagram.puml         # Render diagram.puml to diagram.png"
+          - "  plantuml -tsvg diagram.puml   # Render to SVG instead"
