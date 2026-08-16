@@ -22,11 +22,12 @@ as an arbitrary uid (`setpriv --reuid=65534`) rather than as the connecting acco
 
 ## core-tools.yml
 
-Installs nineteen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
-`lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `jq`, `zip`, `unzip`, `vim`,
+Installs eighteen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
+`lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `zip`, `unzip`, `vim`,
 `net-tools`, `ncat`, `figlet`, `dos2unix`, `make`, `ca-certificates`, `cowsay`, `aha` — all to
 `/usr/bin` (or, for `ca-certificates`, a data file with no binary at all). There is no per-user
-state and nothing added to a shell profile for any of them.
+state and nothing added to a shell profile for any of them. `jq` has its own dedicated
+playbook, [`jq.yml`](#jqyml).
 
 Every package is pinned and version-compared against what's installed, and every package is
 verified as an unprivileged user.

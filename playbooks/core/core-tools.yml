@@ -5,16 +5,16 @@
 #   /usr/bin/<tool>                    for every package that ships a binary
 #   /etc/ssl/certs/ca-certificates.crt the one package here with no binary
 #
-# All nineteen packages already come from Ubuntu's own apt archive, so unlike
+# All eighteen packages already come from Ubuntu's own apt archive, so unlike
 # most of _multi-user/tools/ this migration needed no reach work: the source
 # playbook (core/core-tools.yml, renamed from core/agent-base.yml on
 # 2026-08-14) already installs to root-owned /usr paths. What it does not do
-# is pin anything (plain `state: present` on all nineteen) or verify that any
+# is pin anything (plain `state: present` on all eighteen) or verify that any
 # of them actually work, so this is pure correctness work: version-aware
 # idempotency (policy point 6) and per-package unprivileged verification
 # (policy point 9).
 #
-# The verification list is heterogeneous on purpose, not sixteen copies of
+# The verification list is heterogeneous on purpose, not fifteen copies of
 # `--version`: three packages do not fit that shape at all.
 #   - ca-certificates ships no binary. Verified by checking the bundle file
 #     itself: present, non-empty, world-readable.
@@ -71,9 +71,6 @@
       - name: python3-pip
         version: "25.1.1+dfsg-1ubuntu2"
         verify_cmd: "python3 -m pip --version | grep -q 'pip 25.1.1'"
-      - name: jq
-        version: "1.8.1-4ubuntu2"
-        verify_cmd: "jq --version | grep -q '^jq-1.8.1'"
       - name: zip
         version: "3.0-15ubuntu3"
         verify_cmd: "zip -v | grep -q 'This is Zip 3.0'"
