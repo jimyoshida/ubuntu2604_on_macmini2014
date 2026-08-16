@@ -1,0 +1,193 @@
+---
+# Install Mocha (test runner) and Chai (assertion library) system-wide on a
+# multi-user workstation, via a root-owned global npm install -- the same
+# mechanism core/markdownlint.yml uses. Node.js itself is a prerequisite
+# provisioned elsewhere; this playbook only checks for it.
+#
+#   <npm prefix>/bin/mocha                     npm's bin symlink -- mocha has a CLI
+#   <npm prefix>/lib/node_modules/mocha         the npm package
+#   <npm prefix>/lib/node_modules/chai          the npm package -- chai has NO CLI
+#
+# Chai is a pure library: unlike every other misc/ playbook so far, there is
+# no binary to put on PATH for it. A test file anywhere on the system needs
+# `require('chai')` to resolve, and Node's module resolution does not search
+# the global npm prefix by default -- only NODE_PATH does. So NODE_PATH is
+# published to /etc/environment for real login/SSH sessions, the same
+# `lineinfile` shape misc/bats.yml uses for BATS_LIB_PATH, and passed
+# explicitly wherever this playbook itself invokes mocha, since neither
+# `become` nor `setpriv` sources /etc/environment. It points at the global
+# node_modules directory itself, which is shared infrastructure already
+# holding markdownlint-cli, playwright, yarn and pnpm -- not something
+# specific to mocha/chai -- so this is additive, not a per-tool special case.
+#
+# Chai 6.x ships as ESM-only (package.json "type": "module", no CommonJS
+# entry point at all), yet `require('chai')` from a plain .js test file still
+# works with no extra configuration: confirmed live on this host's Node.js
+# 24.19.0, which supports requiring an ESM module directly (Node 22.12+/
+# 20.19+). Older Node would need `import()` or a .mjs test file instead.
+#
+# Version-aware idempotency checks mocha and chai separately, one `npm ls -g
+# <name>@<version>` call each, rather than a single combined
+# `npm ls -g mocha@x chai@y`: confirmed live that npm ls's exit code is 0 as
+# soon as ANY one of several name@version arguments matches something
+# installed -- it is not an AND across arguments, so a single combined call
+# cannot tell "both pinned" apart from "only one of them is."
+#
+# Usage:
+#   ansible-playbook misc/mocha-chai.yml -e host=<inventory host or group>
+#   ansible-playbook misc/mocha-chai.yml -e host=ws01 -e mocha_chai_packages='[{"name":"mocha","version":"11.8.0"},{"name":"chai","version":"6.2.2"}]'
+
+- name: Install Mocha and Chai system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    mocha_chai_packages:
+      - name: mocha
+        version: "11.8.0"
+      - name: chai
+        version: "6.2.2"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    mocha_chai_verify_uid: 65534    # nobody
+    mocha_chai_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that Node.js is installed as a system package
+      ansible.builtin.command: dpkg -s nodejs
+      register: mocha_chai_nodejs_dpkg
+      changed_when: false
+      failed_when: false
+
+    - name: 2. Fail if Node.js is not installed as a system package
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Node.js is not installed. Provision it (core/nodejs.yml)
+          before running this playbook.
+      when: mocha_chai_nodejs_dpkg.rc != 0
+
+    - name: 3. Resolve the active node binary path
+      ansible.builtin.command: which node
+      register: mocha_chai_node_path
+      changed_when: false
+
+    - name: 4. Fail if node in PATH is not a system-wide install
+      # Guards against a per-user version manager (nvm, fnm, ...) shadowing
+      # the system node on PATH for the connecting account: a global npm
+      # install under become would then land wherever that shim points,
+      # which is per-user, not root-owned.
+      ansible.builtin.fail:
+        msg: >-
+          node resolved to '{{ mocha_chai_node_path.stdout }}', which is not
+          under /usr/bin or /usr/local/bin. It looks like it is managed by a
+          per-user version manager rather than a system package.
+      when: mocha_chai_node_path.stdout not in ['/usr/bin/node', '/usr/local/bin/node']
+
+    - name: 5. Resolve npm's global install prefix
+      ansible.builtin.command: npm config get prefix
+      register: mocha_chai_npm_prefix
+      changed_when: false
+
+    - name: 6. Check whether mocha and chai are already installed at the pinned versions
+      ansible.builtin.command: "npm ls -g {{ item.name }}@{{ item.version }} --depth=0"
+      register: mocha_chai_installed
+      loop: "{{ mocha_chai_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: false
+
+    - name: 7. Decide whether mocha/chai need installing
+      ansible.builtin.set_fact:
+        mocha_chai_install_needed: >-
+          {{ mocha_chai_installed.results | selectattr('rc', 'ne', 0) | list | length > 0 }}
+
+    - name: 8. Install mocha and chai via npm as root
+      ansible.builtin.command: >-
+        npm install -g
+        {{ mocha_chai_packages | map(attribute='name')
+           | zip(mocha_chai_packages | map(attribute='version'))
+           | map('join', '@') | join(' ') }}
+      when: mocha_chai_install_needed | bool
+
+    - name: 9. Ensure the installed npm packages are world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ mocha_chai_npm_prefix.stdout }}/lib/node_modules/{{ item.name }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      loop: "{{ mocha_chai_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: 10. Verify mocha and chai are installed at the pinned versions
+      ansible.builtin.command: "npm ls -g {{ item.name }}@{{ item.version }} --depth=0"
+      register: mocha_chai_verify
+      loop: "{{ mocha_chai_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: mocha_chai_verify.rc != 0
+
+    - name: 11. Publish NODE_PATH to all login sessions
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^NODE_PATH='
+        line: 'NODE_PATH="{{ mocha_chai_npm_prefix.stdout }}/lib/node_modules"'
+        state: present
+
+    - name: 12. Write a spec file for the unprivileged smoke test
+      ansible.builtin.copy:
+        dest: /tmp/mocha-chai-multiuser-smoke.spec.js
+        mode: '0644'
+        content: |
+          const { expect } = require('chai');
+
+          describe('multiuser smoke', function () {
+            it('chai assertions work', function () {
+              expect(1 + 1).to.equal(2);
+            });
+          });
+
+    - name: 13. Run the spec with mocha as an unprivileged user
+      # NODE_PATH is set explicitly here, not left to /etc/environment: a
+      # setpriv-spawned process is not a login session and never sources it.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ mocha_chai_verify_uid }} --regid={{ mocha_chai_verify_gid }} --clear-groups
+          {{ mocha_chai_npm_prefix.stdout }}/bin/mocha /tmp/mocha-chai-multiuser-smoke.spec.js
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+        NODE_PATH: "{{ mocha_chai_npm_prefix.stdout }}/lib/node_modules"
+      register: mocha_chai_smoke
+      changed_when: false
+      failed_when: "'1 passing' not in mocha_chai_smoke.stdout"
+
+    - name: 14. Remove the smoke test spec file
+      ansible.builtin.file:
+        path: /tmp/mocha-chai-multiuser-smoke.spec.js
+        state: absent
+
+    - name: 15. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "Mocha {{ (mocha_chai_packages | selectattr('name', 'eq', 'mocha') | first).version }} and Chai {{ (mocha_chai_packages | selectattr('name', 'eq', 'chai') | first).version }} installed system-wide."
+          - ""
+          - "  {{ mocha_chai_npm_prefix.stdout }}/bin/mocha"
+          - "  {{ mocha_chai_npm_prefix.stdout }}/lib/node_modules/mocha"
+          - "  {{ mocha_chai_npm_prefix.stdout }}/lib/node_modules/chai"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ mocha_chai_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  mocha test/*.spec.js               # Run test files"
+          - "  const { expect } = require('chai'); # Works from any account/directory (NODE_PATH)"

@@ -364,3 +364,56 @@ Version overrides:
 ansible-playbook misc/playwright.yml -e host=ws01 -e playwright_version=1.62.1
 ansible-playbook misc/playwright.yml -e host=ws01 -e playwright_browsers='["chromium","firefox","webkit"]'
 ```
+
+## mocha-chai.yml
+
+Installs [Mocha](https://mochajs.org/) (test runner) and [Chai](https://www.chaijs.com/)
+(assertion library) via `npm install -g`, root-owned — the same mechanism
+`core/markdownlint.yml` uses. Node.js itself is a prerequisite provisioned elsewhere; this
+playbook only checks for it.
+
+| Path | Contents |
+| --- | --- |
+| `<npm prefix>/bin/mocha` | npm's bin symlink — Mocha has a CLI |
+| `<npm prefix>/lib/node_modules/mocha` | the npm package |
+| `<npm prefix>/lib/node_modules/chai` | the npm package — Chai has **no** CLI |
+
+**Chai is a pure library, which is a new problem for this directory.** Every other
+`misc/` npm-based playbook installs a CLI binary onto `PATH` and stops there. Chai has no
+binary at all — a test file needs `require('chai')` to resolve, and Node's module
+resolution does not search the global npm prefix by default. The fix is `NODE_PATH`:
+
+- **Published to `/etc/environment`**, the same `lineinfile` shape `bats.yml`'s
+  `BATS_LIB_PATH` and `playwright.yml`'s `PLAYWRIGHT_BROWSERS_PATH` use, and passed
+  explicitly wherever this playbook itself invokes `mocha`, since neither `become` nor
+  `setpriv` sources `/etc/environment`.
+- **Points at the global `node_modules` directory itself**, not anything mocha/chai
+  specific — the same shared location already holding markdownlint-cli, playwright, yarn
+  and pnpm. Any other playbook that sets the same `NODE_PATH` line is a no-op, not a
+  conflict.
+
+**Chai 6.x ships as ESM-only** (`"type": "module"` in its `package.json`, no CommonJS
+entry point), yet plain `require('chai')` from a `.js` test file still works with no extra
+configuration — confirmed live on this host's Node.js 24.19.0, which supports requiring an
+ESM module directly (Node 22.12+/20.19+ — see `core/nodejs.yml`). Older Node would need
+`import()` or a `.mjs` test file instead.
+
+**Version-aware idempotency checks mocha and chai separately** — one `npm ls -g
+<name>@<version>` call per package — rather than a single combined
+`npm ls -g mocha@x chai@y`. Confirmed live: `npm ls -g`'s exit code is 0 as soon as *any
+one* of several `name@version` arguments matches something installed; it is not an AND
+across arguments, so a single combined call cannot tell "both pinned" apart from "only one
+of them is."
+
+The unprivileged verification step writes a spec file that asserts with Chai
+(`expect(1 + 1).to.equal(2)`) and runs it with `mocha` as `nobody`, checking for `1
+passing` in the output — proving the installed binary, the version pin, and the shared
+`NODE_PATH` resolution of Chai all work together for an account that did no setup of its
+own.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/mocha-chai.yml -e host=ws01 \
+  -e mocha_chai_packages='[{"name":"mocha","version":"11.8.0"},{"name":"chai","version":"6.2.2"}]'
+```
