@@ -4,7 +4,7 @@ Standalone playbooks that install container and Kubernetes tooling on a **shared
 workstation. They are the multi-user successors to `container/`. See
 [MIGRATION3.md](../../MIGRATION3.md) for the policy and the per-tool plan.
 
-Run from `_multi-user/`:
+Run from `playbooks/`:
 
 ```bash
 ansible-playbook container/<tool>.yml -e host=<inventory host or group>

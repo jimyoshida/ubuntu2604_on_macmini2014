@@ -28,15 +28,15 @@ installed once is usable by every account on a **shared** workstation. Run again
 
 | Directory | Description |
 |-----------|-------------|
-| [_multi-user/misc/](_multi-user/misc/README.md) | Developer tools (bats, gomplate, grype-syft, hadolint, jsonnet, junit2html, kube-score, plantuml, trivy) |
-| [_multi-user/cloud-cli/](_multi-user/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, tofu, promtool/amtool, vault) |
-| [_multi-user/container/](_multi-user/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers) |
-| [_multi-user/core/](_multi-user/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise |
+| [playbooks/misc/](playbooks/misc/README.md) | Developer tools (bats, gomplate, grype-syft, hadolint, jsonnet, junit2html, kube-score, plantuml, trivy) |
+| [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, tofu, promtool/amtool, vault) |
+| [playbooks/container/](playbooks/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers) |
+| [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise |
 
 One thing to know before running `container/docker.yml`: it grants **no** account access to the
 Docker socket unless you name them in `docker_users` — membership of that group is equivalent to
 passwordless root, so it's typed out per account, per run. See
-[Grants](_multi-user/container/README.md#grants). `podman_linger_users` works the same way.
+[Grants](playbooks/container/README.md#grants). `podman_linger_users` works the same way.
 
 ## Pinned versions and `apt upgrade` drift
 

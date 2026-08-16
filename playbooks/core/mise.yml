@@ -218,13 +218,13 @@
         group: root
         mode: '0644'
         content: |
-          # Managed by _multi-user/core/mise.yml
+          # Managed by playbooks/core/mise.yml
           eval "$(mise activate bash)"
 
     - name: 13. Ensure interactive non-login shells read /etc/profile.d
       # /etc/profile.d/*.sh is only sourced by login shells by default; a
       # non-login interactive shell (a plain SSH session, for instance) reads
-      # /etc/bash.bashrc instead. Idempotent no-op if another _multi-user/
+      # /etc/bash.bashrc instead. Idempotent no-op if another playbooks/
       # playbook already laid this down on the target.
       ansible.builtin.blockinfile:
         path: /etc/bash.bashrc

@@ -4,7 +4,7 @@ Standalone playbooks that install the base CLI toolset, Node.js and mise on a **
 workstation. They are the multi-user successors to `core/`. See
 [MIGRATION4.md](../../MIGRATION4.md) for the policy and the per-tool plan.
 
-Run from `_multi-user/`:
+Run from `playbooks/`:
 
 ```bash
 ansible-playbook core/<tool>.yml -e host=<inventory host or group>
@@ -90,7 +90,7 @@ architecture comes from facts.
 already-installed *different* version unless the requested version is also apt's current
 candidate — reproduced directly against `apt_pkg.Policy.get_candidate_ver()`, independently of
 Ansible, while plain `apt-get install nodejs=<version> --allow-downgrades` resolves the identical
-request correctly. This is not particular to `nodejs.yml` — every `_multi-user/` playbook that
+request correctly. This is not particular to `nodejs.yml` — every `playbooks/` playbook that
 pins an apt package the same way carries the same exposure — and it does not affect the normal
 case this playbook is written for (installing the pinned version onto a host with an older or no
 `nodejs` at all). It only bites when the pin lags what apt currently offers as the candidate;

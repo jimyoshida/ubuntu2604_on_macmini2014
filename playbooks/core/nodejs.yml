@@ -230,7 +230,7 @@
       # downgrades` resolves the identical request correctly. This is a
       # limitation of allow_downgrade's candidate-pinning approach on this
       # apt/python3-apt combination, not particular to this playbook -- every
-      # other _multi-user/ playbook that pins an apt package the same way
+      # other playbooks/ playbook that pins an apt package the same way
       # carries the same exposure for a genuine downgrade of an
       # already-newer-installed package. It does not affect the normal case
       # this playbook is written for: installing the pinned version onto a

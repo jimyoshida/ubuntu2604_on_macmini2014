@@ -6,7 +6,7 @@
 #
 # The source playbook (container/devcontainers.yml) already installed into a
 # root-owned npm prefix with `become`, so this migration is correctness work
-# rather than reach work -- the same shape as _multi-user/tools/markdownlint.yml,
+# rather than reach work -- the same shape as playbooks/tools/markdownlint.yml,
 # which this playbook follows closely because it is the same mechanism.
 #
 # What changed versus the source playbook:

@@ -4,7 +4,7 @@ Standalone playbooks that install cloud and service CLI tools on a **shared** Ub
 workstation. They are the multi-user successors to `cloud-cli/`. See
 [MIGRATION2.md](../../MIGRATION2.md) for the policy and the per-tool plan.
 
-Run from `_multi-user/`:
+Run from `playbooks/`:
 
 ```bash
 ansible-playbook cloud-cli/<tool>.yml -e host=<inventory host or group>
@@ -104,7 +104,7 @@ and are not written anywhere — both are read by the wrapper from your own envi
 ---
 
 The `ansible-playbook cloud-cli/<tool>.yml` commands in this file are relative to
-`_multi-user/`, which is where they must be run from.
+`playbooks/`, which is where they must be run from.
 
 ## aws-cli.yml
 

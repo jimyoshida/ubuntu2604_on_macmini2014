@@ -4,7 +4,7 @@ Standalone playbooks that install developer tooling on a **shared** Ubuntu works
 root-owned system paths usable by every account on the host rather than into one account's
 home directory.
 
-Run from `_multi-user/`:
+Run from `playbooks/`:
 
 ```bash
 ansible-playbook misc/<tool>.yml -e host=<inventory host or group>

@@ -235,7 +235,7 @@
         mode: '0755'
         content: |
           #!/bin/bash
-          # Managed by _multi-user/cloud-cli/jenkins-cli.yml -- do not edit by hand.
+          # Managed by playbooks/cloud-cli/jenkins-cli.yml -- do not edit by hand.
           # Default server: {{ jenkins_url }} (override per-account with $JENKINS_URL)
           AUTH_ARGS=()
           if [ -n "${JENKINS_USER_ID:-}" ] && [ -n "${JENKINS_API_TOKEN:-}" ]; then
@@ -260,7 +260,7 @@
         group: root
         mode: '0644'
         content: |
-          # Managed by _multi-user/cloud-cli/jenkins-cli.yml -- do not edit by hand.
+          # Managed by playbooks/cloud-cli/jenkins-cli.yml -- do not edit by hand.
           # Shared, non-secret default. JENKINS_USER_ID and JENKINS_API_TOKEN are
           # per-account secrets and must NOT be set here: this file is world-readable.
           : "${JENKINS_URL:={{ jenkins_url }}}"
