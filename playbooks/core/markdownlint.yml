@@ -18,8 +18,8 @@
 #     fine, but hardcoding one breaks the other.
 #
 # Usage:
-#   ansible-playbook tools/markdownlint.yml -e host=<inventory host or group>
-#   ansible-playbook tools/markdownlint.yml -e host=ws01 -e markdownlint_cli_version=0.49.1
+#   ansible-playbook core/markdownlint.yml -e host=<inventory host or group>
+#   ansible-playbook core/markdownlint.yml -e host=ws01 -e markdownlint_cli_version=0.49.1
 
 - name: Install markdownlint-cli system-wide
   hosts: "{{ host }}"

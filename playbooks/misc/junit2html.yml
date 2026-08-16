@@ -13,8 +13,8 @@
 # no per-user configuration.
 #
 # Usage:
-#   ansible-playbook tools/junit2html.yml -e host=<inventory host or group>
-#   ansible-playbook tools/junit2html.yml -e host=ws01 -e junit2html_version=31.1.4
+#   ansible-playbook misc/junit2html.yml -e host=<inventory host or group>
+#   ansible-playbook misc/junit2html.yml -e host=ws01 -e junit2html_version=31.1.4
 
 - name: Install junit2html system-wide
   hosts: "{{ host }}"

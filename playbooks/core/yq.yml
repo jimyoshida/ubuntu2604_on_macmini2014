@@ -12,8 +12,8 @@
 # There is no per-user state and nothing to add to a shell profile.
 #
 # Usage:
-#   ansible-playbook tools/yq.yml -e host=<inventory host or group>
-#   ansible-playbook tools/yq.yml -e host=ws01 -e yq_version=4.53.3
+#   ansible-playbook core/yq.yml -e host=<inventory host or group>
+#   ansible-playbook core/yq.yml -e host=ws01 -e yq_version=4.53.3
 
 - name: Install yq system-wide
   hosts: "{{ host }}"

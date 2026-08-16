@@ -13,8 +13,8 @@
 # is added to a shell profile.
 #
 # Usage:
-#   ansible-playbook tools/grype-syft.yml -e host=<inventory host or group>
-#   ansible-playbook tools/grype-syft.yml -e host=ws01 -e grype_syft_tools='[{"name":"grype","version":"0.116.1","repo":"anchore/grype"},{"name":"syft","version":"1.50.0","repo":"anchore/syft"}]'
+#   ansible-playbook misc/grype-syft.yml -e host=<inventory host or group>
+#   ansible-playbook misc/grype-syft.yml -e host=ws01 -e grype_syft_tools='[{"name":"grype","version":"0.116.1","repo":"anchore/grype"},{"name":"syft","version":"1.50.0","repo":"anchore/syft"}]'
 
 - name: Install grype and syft system-wide
   hosts: "{{ host }}"

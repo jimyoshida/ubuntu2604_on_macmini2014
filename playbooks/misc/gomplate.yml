@@ -8,8 +8,8 @@
 # There is no per-user state and nothing to add to a shell profile.
 #
 # Usage:
-#   ansible-playbook tools/gomplate.yml -e host=<inventory host or group>
-#   ansible-playbook tools/gomplate.yml -e host=ws01 -e gomplate_version=4.3.3
+#   ansible-playbook misc/gomplate.yml -e host=<inventory host or group>
+#   ansible-playbook misc/gomplate.yml -e host=ws01 -e gomplate_version=4.3.3
 
 - name: Install gomplate system-wide
   hosts: "{{ host }}"

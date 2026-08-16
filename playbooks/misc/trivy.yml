@@ -14,8 +14,8 @@
 # single-user install.
 #
 # Usage:
-#   ansible-playbook tools/trivy.yml -e host=<inventory host or group>
-#   ansible-playbook tools/trivy.yml -e host=ws01 -e trivy_version=0.73.0
+#   ansible-playbook misc/trivy.yml -e host=<inventory host or group>
+#   ansible-playbook misc/trivy.yml -e host=ws01 -e trivy_version=0.73.0
 
 - name: Install Trivy system-wide
   hosts: "{{ host }}"

@@ -12,8 +12,8 @@
 # and verified independently of the rest of that bundle.
 #
 # Usage:
-#   ansible-playbook tools/jq.yml -e host=<inventory host or group>
-#   ansible-playbook tools/jq.yml -e host=ws01 -e jq_version=1.8.1-4ubuntu2
+#   ansible-playbook core/jq.yml -e host=<inventory host or group>
+#   ansible-playbook core/jq.yml -e host=ws01 -e jq_version=1.8.1-4ubuntu2
 
 - name: Install jq system-wide
   hosts: "{{ host }}"

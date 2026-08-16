@@ -12,8 +12,8 @@
 # verified independently of the rest of that bundle.
 #
 # Usage:
-#   ansible-playbook tools/jsonnet.yml -e host=<inventory host or group>
-#   ansible-playbook tools/jsonnet.yml -e host=ws01 -e jsonnet_version=0.20.0+ds-3.3build1
+#   ansible-playbook misc/jsonnet.yml -e host=<inventory host or group>
+#   ansible-playbook misc/jsonnet.yml -e host=ws01 -e jsonnet_version=0.20.0+ds-3.3build1
 
 - name: Install jsonnet system-wide
   hosts: "{{ host }}"

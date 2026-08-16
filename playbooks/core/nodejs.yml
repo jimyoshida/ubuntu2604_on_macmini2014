@@ -30,7 +30,7 @@
 # The fix (MIGRATION4.md's decision (a)): `corepack disable` removes
 # Corepack's shims, then `npm install -g yarn@<version> pnpm@<version>` --
 # already this repo's trusted mechanism for a root-owned global npm install,
-# per tools/markdownlint.yml -- puts real, pinned packages at the same paths.
+# per core/markdownlint.yml -- puts real, pinned packages at the same paths.
 #
 # The idempotency check never invokes yarn/pnpm directly while a Corepack
 # shim might still be at that path: doing so would trigger exactly the
@@ -254,7 +254,7 @@
     - name: 12. Resolve npm's global install prefix
       # Read at run time, not assumed: a NodeSource install defaults it to
       # /usr, an apt-only nodejs package would default it to /usr/local
-      # (tools/markdownlint.yml's finding). Both are root-owned system paths.
+      # (core/markdownlint.yml's finding). Both are root-owned system paths.
       ansible.builtin.command: npm config get prefix
       register: nodejs_npm_prefix
       changed_when: false
@@ -312,7 +312,7 @@
         - nodejs_yarn_pnpm_install_needed | bool
 
     - name: 18. Install pinned Yarn and pnpm via npm as root
-      # The mechanism tools/markdownlint.yml already established for a
+      # The mechanism core/markdownlint.yml already established for a
       # root-owned global npm install (decision-order mechanism 6).
       ansible.builtin.command: "npm install -g yarn@{{ yarn_version }} pnpm@{{ pnpm_version }}"
       when:

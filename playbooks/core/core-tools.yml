@@ -6,7 +6,7 @@
 #   /etc/ssl/certs/ca-certificates.crt the one package here with no binary
 #
 # All nineteen packages already come from Ubuntu's own apt archive, so unlike
-# most of playbooks/tools/ this migration needed no reach work: the source
+# most of _multi-user/tools/ this migration needed no reach work: the source
 # playbook (core/core-tools.yml, renamed from core/agent-base.yml on
 # 2026-08-14) already installs to root-owned /usr paths. What it does not do
 # is pin anything (plain `state: present` on all nineteen) or verify that any

@@ -8,8 +8,8 @@
 # There is no per-user state and nothing to add to a shell profile.
 #
 # Usage:
-#   ansible-playbook tools/hadolint.yml -e host=<inventory host or group>
-#   ansible-playbook tools/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
+#   ansible-playbook misc/hadolint.yml -e host=<inventory host or group>
+#   ansible-playbook misc/hadolint.yml -e host=ws01 -e hadolint_version=2.15.1
 
 - name: Install hadolint system-wide
   hosts: "{{ host }}"

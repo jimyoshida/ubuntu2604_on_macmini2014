@@ -9,8 +9,8 @@
 # There is no per-user state and nothing to add to a shell profile.
 #
 # Usage:
-#   ansible-playbook tools/shellcheck.yml -e host=<inventory host or group>
-#   ansible-playbook tools/shellcheck.yml -e host=ws01 -e shellcheck_version=0.10.0-1
+#   ansible-playbook core/shellcheck.yml -e host=<inventory host or group>
+#   ansible-playbook core/shellcheck.yml -e host=ws01 -e shellcheck_version=0.10.0-1
 
 - name: Install ShellCheck system-wide
   hosts: "{{ host }}"

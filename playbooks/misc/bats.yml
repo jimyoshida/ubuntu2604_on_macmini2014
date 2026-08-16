@@ -15,8 +15,8 @@
 # `bats_load_library bats-support` resolves with no environment set up at all.
 #
 # Usage:
-#   ansible-playbook tools/bats.yml -e host=<inventory host or group>
-#   ansible-playbook tools/bats.yml -e host=ws01 -e bats_core_version=1.13.0
+#   ansible-playbook misc/bats.yml -e host=<inventory host or group>
+#   ansible-playbook misc/bats.yml -e host=ws01 -e bats_core_version=1.13.0
 
 - name: Install Bats testing framework system-wide
   hosts: "{{ host }}"
