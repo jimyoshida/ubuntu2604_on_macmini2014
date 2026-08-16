@@ -1,0 +1,157 @@
+---
+# Install k6 system-wide on a multi-user workstation.
+#
+# Ubuntu's own repos do not carry k6 at all, so this adds Grafana's official
+# apt repository instead of Homebrew:
+#
+#   /usr/share/keyrings/k6-archive-keyring.gpg   apt signing key, root-owned
+#   /etc/apt/sources.list.d/k6.list              apt repository definition
+#   /usr/bin/k6                                  installed by apt, root-owned
+#
+# Grafana's repository publishes amd64 packages only (no arm64 build), so
+# this playbook fails cleanly on other architectures instead of letting apt
+# report a confusing "no candidate" error. There is no per-user state and
+# nothing to add to a shell profile.
+#
+# Usage:
+#   ansible-playbook misc/k6.yml -e host=<inventory host or group>
+#   ansible-playbook misc/k6.yml -e host=ws01 -e k6_version=2.2.0
+
+- name: Install k6 system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    k6_version: "2.2.0"
+    k6_gpg_key_url: https://dl.k6.io/key.gpg
+    k6_keyring: /usr/share/keyrings/k6-archive-keyring.gpg
+    k6_repo_line: "deb [signed-by={{ k6_keyring }}] https://dl.k6.io/deb stable main"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    k6_verify_uid: 65534    # nobody
+    k6_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - gnupg
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          Grafana's k6 apt repository (https://dl.k6.io/deb) publishes amd64
+          packages only; there is no build for architecture
+          '{{ ansible_facts['architecture'] }}'.
+      when: ansible_facts['architecture'] != 'x86_64'
+
+    - name: 3. Check the currently installed k6 version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' k6
+      register: k6_installed
+      changed_when: false
+      failed_when: false
+
+    - name: 4. Decide whether k6 needs installing
+      ansible.builtin.set_fact:
+        k6_install_needed: >-
+          {{ k6_installed.rc != 0 or k6_installed.stdout != k6_version }}
+
+    - name: 5. Download the k6 apt signing key
+      ansible.builtin.get_url:
+        url: "{{ k6_gpg_key_url }}"
+        dest: /tmp/k6-public.key
+        mode: '0644'
+        force: true
+      when: k6_install_needed | bool
+
+    - name: 6. Dearmor the signing key into the apt keyring
+      ansible.builtin.command:
+        cmd: "gpg --batch --yes --dearmor --output {{ k6_keyring }} /tmp/k6-public.key"
+      when: k6_install_needed | bool
+
+    - name: 7. Ensure the apt keyring is world-readable
+      ansible.builtin.file:
+        path: "{{ k6_keyring }}"
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+      when: k6_install_needed | bool
+
+    - name: 8. Remove the downloaded key file
+      ansible.builtin.file:
+        path: /tmp/k6-public.key
+        state: absent
+      when: k6_install_needed | bool
+
+    - name: 9. Add the k6 apt repository
+      ansible.builtin.apt_repository:
+        repo: "{{ k6_repo_line }}"
+        filename: k6
+        state: present
+        update_cache: true
+      when: k6_install_needed | bool
+
+    - name: 10. Install k6 via apt
+      ansible.builtin.apt:
+        name: "k6={{ k6_version }}"
+        state: present
+      when: k6_install_needed | bool
+
+    - name: 11. Verify the installed k6 version
+      ansible.builtin.command: k6 version
+      register: k6_version_out
+      changed_when: false
+      failed_when: k6_version not in k6_version_out.stdout
+
+    - name: 12. Write a script for the unprivileged smoke test
+      ansible.builtin.copy:
+        dest: /tmp/k6-multiuser-smoke.js
+        mode: '0644'
+        content: |
+          import { check } from 'k6';
+
+          export default function () {
+            check(1 + 1, { 'math checks out': (v) => v === 2 });
+          }
+
+    - name: 13. Run the script as an unprivileged user
+      # K6_NO_USAGE_REPORT disables the anonymous usage ping k6 sends by
+      # default, keeping this verification step fully offline like the
+      # zero-configuration checks in hadolint.yml and plantuml.yml.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ k6_verify_uid }} --regid={{ k6_verify_gid }} --clear-groups
+          k6 run --no-color --vus 1 --iterations 1 /tmp/k6-multiuser-smoke.js
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+        K6_NO_USAGE_REPORT: "true"
+      register: k6_smoke
+      changed_when: false
+      failed_when: "'✓ math checks out' not in k6_smoke.stdout"
+
+    - name: 14. Remove the smoke test script
+      ansible.builtin.file:
+        path: /tmp/k6-multiuser-smoke.js
+        state: absent
+
+    - name: 15. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ k6_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  /usr/bin/k6"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ k6_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  k6 run script.js            # Run a load test script"
+          - "  k6 run --vus 10 --duration 30s script.js"

@@ -282,3 +282,39 @@ Version overrides:
 ```bash
 ansible-playbook misc/plantuml.yml -e host=ws01 -e plantuml_version=1:1.2020.2+ds-6build1
 ```
+
+## k6.yml
+
+Installs [k6](https://k6.io/) (load testing tool) from Grafana's own apt repository,
+`/usr/bin/k6`, root-owned. There is no per-user state and nothing to add to a shell profile.
+
+Ubuntu carries no `k6` package at all, so this adds the vendor's apt repository, the same
+pattern as [`trivy.yml`](#trivyyml):
+
+| Path | Contents |
+| --- | --- |
+| `/usr/share/keyrings/k6-archive-keyring.gpg` | apt signing key, dearmored from Grafana's published key |
+| `/etc/apt/sources.list.d/k6.list` | apt repository definition (`signed-by` pinned to the keyring above) |
+| `/usr/bin/k6` | installed by apt |
+
+- **Signing key and repository setup follow `trivy.yml`** exactly: the key is dearmored
+  into a dedicated keyring and referenced from the repo line with `signed-by`, and the
+  key/repo tasks only run when the pinned version isn't already present.
+- **amd64 only.** Grafana's apt repository publishes amd64 packages exclusively (no arm64
+  build), so this playbook fails with a clear message on any other architecture rather than
+  letting apt report a confusing "no candidate" error.
+- **Version-aware idempotency**, same as `trivy.yml`: the pin is compared against
+  `dpkg-query`'s exact version string, which k6's repo publishes without a Debian revision
+  suffix.
+
+The unprivileged verification step writes a trivial script (a single always-true `check()`,
+no HTTP calls) and runs it with `k6 run` as `nobody`, with `K6_NO_USAGE_REPORT=true` so the
+run stays fully offline — proving the zero-configuration path the same way
+`hadolint.yml`'s stdin check does, without needing a disk-backed scratch directory the way
+`trivy.yml` and `grype-syft.yml` do for their vulnerability databases.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/k6.yml -e host=ws01 -e k6_version=2.2.0
+```
