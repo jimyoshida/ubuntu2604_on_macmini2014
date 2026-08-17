@@ -1,0 +1,295 @@
+---
+# Install DVC (Data Version Control) system-wide on a multi-user workstation.
+#
+#   /usr/bin/dvc                          from Iterative's apt repository
+#   /etc/apt/sources.list.d/dvc.sources   repository definition
+#
+# The apt package is a self-contained bundle -- ~200 MB down, ~570 MB
+# installed, and `git` is its only declared dependency -- so nothing here has
+# to provide a Python for it.
+#
+# There is no per-user state to set up and nothing to add to a shell profile.
+# DVC writes ~/.config/dvc (its global config and the anonymous analytics id)
+# and ~/.cache/dvc for each account on first use, and a project's own data
+# lives in that project's .dvc directory. None of the three is created here.
+#
+# Analytics: DVC reports anonymous usage by default. This playbook does not
+# turn that off for anyone -- it is a per-account or per-site decision, and
+# the file it belongs in is not a file this repository owns. It does set
+# DVC_NO_ANALYTICS for its own verification, the same way azure-cli.yml keeps
+# its smoke tests from forking a telemetry uploader. To disable it for every
+# account, write `[core]\n    analytics = false` into /etc/xdg/dvc/config,
+# which DVC reads ahead of each account's own config.
+#
+# Usage:
+#   ansible-playbook misc/dvc.yml -e host=<inventory host or group>
+#   ansible-playbook misc/dvc.yml -e host=ws01 -e dvc_version=3.67.1
+
+- name: Install DVC system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Newest version in Iterative's apt repository as of 2026-08-17, which is
+    # also the current PyPI release:
+    #   curl -sSL https://dvc.org/deb/dists/stable/main/binary-amd64/Packages \
+    #     | awk '/^Package: dvc$/{f=1} f&&/^Version:/{print $2; f=0}' | sort -V | tail -1
+    dvc_version: "3.67.1"
+    dvc_repo_uri: "https://dvc.org/deb/"
+    dvc_suite: stable
+    dvc_component: main
+    # The Iterative signing key EXPIRES 2027-03-05, so MIGRATION2's rule puts
+    # this on the URL form -- fetch each run (the module compares by
+    # checksum, so it stays idempotent) and pin only the fingerprint. Same
+    # shape as mise.yml and github-cli.yml, not the inline-key form.
+    dvc_key_url: "https://dvc.org/deb/iterative.asc"
+    dvc_key_fingerprint: "8DD0849E7966349B1D59A866EFFAF4443CE9AD84"
+    # amd64 only, and deliberately not a map with an arm64 entry to fill in:
+    # the repository serves no arm64 index at all (403, checked 2026-08-17),
+    # so an aarch64 host has nothing to install rather than a missing
+    # mapping.
+    dvc_supported_architectures:
+      - x86_64
+    dvc_arch: amd64
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts.
+    dvc_smoke_dir: /var/tmp/dvc-smoke
+    # Content the smoke test tracks. DVC records the md5 of the file it adds,
+    # so the expected hash below is computed from this string rather than
+    # copied from a run -- which makes the check a real assertion about what
+    # DVC did, not a recording of it.
+    dvc_smoke_content: "dvc smoke test\n"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    dvc_verify_uid: 65534    # nobody
+    dvc_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 5. git is the
+      # dvc package's own dependency and apt pulls it in, so it is not
+      # repeated here.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          Iterative publishes no {{ ansible_facts['architecture'] }} index for
+          {{ dvc_repo_uri }} -- only amd64 -- so DVC cannot be installed from
+          it on this host.
+      when: ansible_facts['architecture'] not in dvc_supported_architectures
+
+    - name: 3. Add the DVC apt repository
+      ansible.builtin.deb822_repository:
+        name: dvc
+        types:
+          - deb
+        uris:
+          - "{{ dvc_repo_uri }}"
+        suites:
+          - "{{ dvc_suite }}"
+        components:
+          - "{{ dvc_component }}"
+        architectures:
+          - "{{ dvc_arch }}"
+        signed_by: "{{ dvc_key_url }}"
+        state: present
+        mode: '0644'
+      register: dvc_repo
+
+    - name: 4. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring, and
+      # this tolerates a miss (failed_when: false): on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ dvc_repo.key_filename | default('/etc/apt/keyrings/dvc.asc', true) }}
+      register: dvc_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Confirm the keyring holds Iterative's signing key
+      ansible.builtin.fail:
+        msg: >-
+          The keyring for {{ dvc_repo_uri }} does not contain Iterative's
+          signing key {{ dvc_key_fingerprint }}. It may have been rotated
+          (this key expires 2027-03-05). Verify the new key against
+          iterative.ai and update dvc_key_fingerprint deliberately -- do not
+          delete this check.
+      when:
+        - dvc_key_fingerprint not in (dvc_fpr.stdout | default(''))
+        - not (ansible_check_mode and dvc_fpr.rc | default(1) != 0)
+
+    - name: 6. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: dvc_repo.changed
+
+    - name: 7. Check the currently installed DVC version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' dvc
+      register: dvc_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 8. Decide whether DVC needs installing
+      ansible.builtin.set_fact:
+        dvc_install_needed: >-
+          {{ dvc_installed.rc != 0 or dvc_installed.stdout != dvc_version }}
+        dvc_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (dvc_installed.rc != 0
+                       or dvc_installed.stdout != dvc_version)) }}
+
+    - name: 8a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install DVC {{ dvc_version }}, so the version check
+          and the unprivileged repository below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (dvc_can_verify | bool)
+
+    - name: 9. Install DVC via apt
+      # ~200 MB down, ~570 MB installed. allow_downgrade so that moving the
+      # pin backwards actually applies: without it apt refuses, and the pin
+      # silently means "this version or anything newer already present".
+      ansible.builtin.apt:
+        name: "dvc={{ dvc_version }}"
+        state: present
+        allow_downgrade: true
+      when: dvc_install_needed | bool
+
+    - name: 10. Verify the installed DVC version
+      ansible.builtin.command: dpkg-query -W -f='${Version}' dvc
+      register: dvc_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: dvc_version != dvc_version_out.stdout
+      when: dvc_can_verify | bool
+
+    - name: 11. Create a scratch project for the unprivileged checks
+      # Owned by the verifying uid: DVC initialises a project, writes its
+      # cache and tracks a file below, all of which need a writable tree. It
+      # doubles as HOME, since DVC creates ~/.config/dvc and ~/.cache/dvc on
+      # first use and must not be allowed near a real account's.
+      ansible.builtin.file:
+        path: "{{ dvc_smoke_dir }}"
+        state: directory
+        owner: "{{ dvc_verify_uid }}"
+        group: "{{ dvc_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: dvc_can_verify | bool
+
+    - name: 12. Write the file the scratch project will track
+      ansible.builtin.copy:
+        dest: "{{ dvc_smoke_dir }}/data.txt"
+        owner: "{{ dvc_verify_uid }}"
+        group: "{{ dvc_verify_gid }}"
+        mode: '0644'
+        content: "{{ dvc_smoke_content }}"
+      check_mode: false
+      when: dvc_can_verify | bool
+
+    - name: 13. Initialise a DVC project as an unprivileged user
+      # --no-scm because this is a bare directory rather than a git
+      # repository; DVC otherwise refuses to initialise. DVC_NO_ANALYTICS
+      # keeps the check from reporting usage to Iterative -- the same reason
+      # azure-cli.yml sets AZURE_CORE_COLLECT_TELEMETRY for its smoke tests.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ dvc_verify_uid }} --regid={{ dvc_verify_gid }} --clear-groups
+          env HOME={{ dvc_smoke_dir }} DVC_NO_ANALYTICS=1
+          dvc init --no-scm
+        chdir: "{{ dvc_smoke_dir }}"
+      register: dvc_smoke_init
+      changed_when: false
+      check_mode: false
+      when: dvc_can_verify | bool
+
+    - name: 14. Track a file with DVC as an unprivileged user
+      # Real work, entirely offline: dvc add hashes the file, moves it into
+      # the project cache and writes the .dvc pointer beside it. Nothing here
+      # contacts a remote.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ dvc_verify_uid }} --regid={{ dvc_verify_gid }} --clear-groups
+          env HOME={{ dvc_smoke_dir }} DVC_NO_ANALYTICS=1
+          dvc add data.txt
+        chdir: "{{ dvc_smoke_dir }}"
+      register: dvc_smoke_add
+      changed_when: false
+      check_mode: false
+      when: dvc_can_verify | bool
+
+    - name: 15. Read the pointer file DVC wrote
+      ansible.builtin.slurp:
+        src: "{{ dvc_smoke_dir }}/data.txt.dvc"
+      register: dvc_smoke_pointer
+      when: dvc_can_verify | bool
+
+    - name: 16. Confirm DVC hashed the file it tracked
+      # The md5 is computed here from the same string the file was written
+      # from, so this asserts what DVC produced rather than recording it. A
+      # dvc that wrote a pointer without hashing anything cannot pass.
+      ansible.builtin.assert:
+        that:
+          - dvc_pointer.outs | length == 1
+          - dvc_pointer.outs[0].path == 'data.txt'
+          - dvc_pointer.outs[0].md5 == (dvc_smoke_content | hash('md5'))
+          - dvc_pointer.outs[0].size == (dvc_smoke_content | length)
+        fail_msg: >-
+          data.txt.dvc does not describe the tracked file as expected:
+          {{ dvc_pointer | to_json }}
+        success_msg: >-
+          DVC tracked data.txt as md5 {{ dvc_pointer.outs[0].md5 }}
+      vars:
+        dvc_pointer: "{{ dvc_smoke_pointer.content | b64decode | from_yaml }}"
+      when: dvc_can_verify | bool
+
+    - name: 17. Remove the scratch project
+      ansible.builtin.file:
+        path: "{{ dvc_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 18. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "DVC {{ dvc_version }} installed system-wide."
+          - ""
+          - "  /usr/bin/dvc"
+          - ""
+          - >-
+            {{ dvc_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ dvc_verify_uid
+            ~ '): a scratch project was initialised and a file tracked, and the'
+            ~ ' pointer DVC wrote carries the md5 the content really has.',
+            'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "Each account gets its own ~/.config/dvc and ~/.cache/dvc on first"
+          - "use; a project's data and cache live in that project's .dvc."
+          - ""
+          - "DVC reports anonymous usage by default. Per account:"
+          - "  dvc config --global core.analytics false"
+          - "For every account, write core.analytics=false into /etc/xdg/dvc/config."
+          - ""
+          - "Usage:"
+          - "  dvc init                      # in a git repository"
+          - "  dvc add data/big.csv          # track a file, write data/big.csv.dvc"
+          - "  dvc remote add -d s3 s3://bucket/path   # where the data lives"
+          - "  dvc push | dvc pull           # move data to and from that remote"
+          - "  dvc repro                     # rerun a pipeline stage"
+      when: dvc_can_verify | bool

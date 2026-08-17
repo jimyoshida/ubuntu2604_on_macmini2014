@@ -757,3 +757,61 @@ Version overrides — plugins track `certbot_version` unless pinned individually
 ```bash
 ansible-playbook misc/certbot.yml -e host=ws01 -e certbot_version=5.7.0
 ```
+
+## dvc.yml
+
+Installs [DVC](https://dvc.org/) (Data Version Control) from Iterative's own apt repository.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/dvc` | the CLI — a self-contained bundle, ~200 MB down and ~570 MB installed |
+| `/etc/apt/sources.list.d/dvc.sources` | repository definition, key by URL, fingerprint pinned |
+
+`git` is the package's only declared dependency, so nothing here has to provide a Python for
+it. No per-user setup and nothing added to a shell profile: DVC writes `~/.config/dvc` (its
+global config and the anonymous analytics id) and `~/.cache/dvc` for each account on first use,
+and a project's own data lives in that project's `.dvc` directory.
+
+**Version pin.** The repository's newest build, `3.67.1`, is also the current PyPI release, so
+apt and upstream agree here:
+
+```bash
+curl -sSL https://dvc.org/deb/dists/stable/main/binary-amd64/Packages \
+  | awk '/^Package: dvc$/{f=1} f&&/^Version:/{print $2; f=0}' | sort -V | tail -1
+```
+
+**The signing key expires 2027-03-05**, so per MIGRATION2's rule it is fetched by URL each run
+(the module compares by checksum, so that stays idempotent) with only the fingerprint pinned —
+the `mise.yml`/`github-cli.yml` form rather than an inline key.
+
+**amd64 only, and said so explicitly.** Iterative serves no arm64 index at all — `binary-arm64`
+is a 403, not an empty index — so instead of an architecture map with a missing entry, the
+playbook carries a list of architectures it can serve and fails on anything else with the
+reason.
+
+### Analytics is left to each account
+
+DVC reports anonymous usage by default, and this playbook turns that off for nobody: it is a
+per-account or per-site decision, and the file it belongs in is not one this repository owns.
+The closing summary prints both the per-account command and the system-wide file
+(`/etc/xdg/dvc/config`, which DVC reads ahead of each account's own config). The verification
+does set `DVC_NO_ANALYTICS`, the same way [`cloud-cli/azure-cli.yml`](../cloud-cli/README.md#azure-cliyml)
+keeps its smoke tests from forking a telemetry uploader.
+
+### The smoke test tracks a file and checks the hash
+
+As uid 65534, in a scratch directory that doubles as `HOME`: `dvc init --no-scm` (the directory
+is not a git repository, and DVC otherwise refuses), then `dvc add` on a file whose content the
+playbook wrote. DVC hashes the file, moves it into the project cache and writes a `.dvc`
+pointer beside it — all offline, nothing contacts a remote.
+
+The assertion then reads that pointer and compares its `md5` against the hash **computed from
+the same string the file was written from**, not against a value recorded from an earlier run.
+Size and tracked path are checked too. A DVC that wrote a plausible pointer without hashing
+anything cannot pass.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/dvc.yml -e host=ws01 -e dvc_version=3.67.1
+```
