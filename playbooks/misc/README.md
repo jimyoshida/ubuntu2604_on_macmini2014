@@ -534,3 +534,63 @@ Version overrides — bump the tag and the commit together:
 git ls-remote https://github.com/testssl/testssl.sh.git 'refs/tags/v3.2.4^{}'
 ansible-playbook misc/testssl.yml -e host=ws01 -e testssl_version=3.2.4 -e testssl_commit=<sha>
 ```
+
+## zap.yml
+
+Installs [OWASP ZAP](https://www.zaproxy.org/) from the upstream release tarball into a
+versioned tree with a symlink, the same shape as [`maven.yml`](#mavenyml) and
+[`testssl.yml`](#testsslyml).
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/zap/<version>/` | the distribution — jars, add-ons, language packs (~270 MB) |
+| `/usr/local/bin/zap.sh` | symlink to that version's launcher |
+
+ZAP is a tree, not a binary: `zap.sh` resolves everything else relative to its own location, so
+the whole distribution is installed and only the launcher goes on `PATH` — confirmed that
+invoking it through the symlink works, which is why nothing here touches `PATH` in
+`/etc/environment`. `default-jre` is a prerequisite rather than the `-headless` variant every
+other Java playbook here installs: ZAP with no arguments *is* its desktop UI, which throws
+`HeadlessException` on a headless JRE, and on these desktop workstations that is a real use.
+
+### ZAP's "home" is per-user state, and this playbook creates none of it
+
+ZAP keeps configuration, its session database, downloaded add-ons and `zap.log` in `~/.ZAP` —
+one directory per account, created on first run. That is exactly the state a shared workstation
+must not share: a single world-writable copy would put one account's session history, and any
+credentials captured in it, within everyone else's reach.
+
+That makes verification a trap twice over, and both halves were reproduced on a target:
+
+- **The JVM reads `user.home` from the passwd database, not `$HOME`**, so for uid 65534 ZAP
+  resolves its home to `/nonexistent` and dies with `Unable to create home directory:
+  /nonexistent/.ZAP/` no matter how `$HOME` is set. The scan passes an explicit `-dir`. Same
+  trap [`maven.yml`](#mavenyml) documents, but fatal here rather than a fallback.
+- **Running `zap.sh` as root without `-dir` creates `/root/.ZAP`**, which MIGRATION3's B2
+  forbids. So ZAP is never run as root at all: the install check is filesystem state, and the
+  single ZAP invocation in the play is the unprivileged scan.
+
+### One invocation, which is also the version check
+
+`zap.sh -version` costs about 35 seconds — it starts the JVM and initialises every add-on — so
+running it as a separate step would only make the play slower. Instead the scan's own JSON
+report carries `"@version"`, and that is what the pin is asserted against.
+
+The scan itself is the tool doing its job: a static page is served on `127.0.0.1` by
+`python3 -m http.server`, and ZAP crawls and passively scans it as uid 65534 through the
+published symlink, writing a JSON report (~25 seconds). Two things are asserted — the report's
+version matches the pin, and its site list names the loopback URL, proving ZAP actually reached
+and crawled the server rather than reporting on nothing. `-silent` disables ZAP's optional
+outbound calls (telemetry, add-on update checks) so the scan talks to nothing but the local
+server, and the server is killed by PID from a trap — a pattern kill would match the task's own
+command line.
+
+Integrity comes from the SHA-256 GitHub computes per release asset (the
+[`core/yq.yml`](../core/README.md#yqyml) source), since ZAP publishes no checksums file beside
+the tarball.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/zap.yml -e host=ws01 -e zap_version=2.17.0
+```
