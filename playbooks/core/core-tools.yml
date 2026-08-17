@@ -29,6 +29,15 @@
 # note that several of its guesses were only "medium" or "low" confidence
 # before that check.
 #
+# A verify_cmd must FAIL when the binary is absent, which is not automatic:
+# `<tool> --version 2>&1 | grep -qi '<tool>'` passes with the tool uninstalled,
+# because the shell's own "bash: <tool>: command not found" contains the tool's
+# name and 2>&1 feeds it straight into the grep. Three commands here had that
+# shape (ncat, figlet, dos2unix) and were vacuous until it was found on ws02.
+# So: only redirect stderr when the tool actually writes its version there
+# (ncat does; figlet and dos2unix do not), and always grep for a version-
+# bearing string rather than the tool's own name.
+#
 # There is no shell configuration here and no per-user state: every package
 # in this list is a plain CLI tool or a system-wide data file, so there is
 # nothing for B2/B3 to say and nothing to add to a shell profile.
@@ -83,15 +92,18 @@
       - name: net-tools
         version: "2.10-2ubuntu1"
         verify_cmd: "netstat --version | grep -q 'net-tools 2.10'"
+      # ncat is the one of these three that really does print its version to
+      # stderr, so it keeps 2>&1 -- but greps for the version line, which
+      # "command not found" cannot match.
       - name: ncat
         version: "7.98+dfsg-1"
-        verify_cmd: "ncat --version 2>&1 | grep -qi 'Ncat'"
+        verify_cmd: "ncat --version 2>&1 | grep -q 'Ncat: Version 7.98'"
       - name: figlet
         version: "2.2.5-3.1"
-        verify_cmd: "figlet -v 2>&1 | grep -qi 'FIGlet'"
+        verify_cmd: "figlet -v | grep -q 'Version: 2.2.5'"
       - name: dos2unix
         version: "7.5.4-1"
-        verify_cmd: "dos2unix -V 2>&1 | grep -qi 'dos2unix'"
+        verify_cmd: "dos2unix -V | grep -q '^dos2unix 7.5.4'"
       - name: make
         version: "4.4.1-3"
         verify_cmd: "make --version | grep -q 'GNU Make 4.4.1'"
@@ -107,7 +119,13 @@
 
   tasks:
     - name: 1. Check the currently installed version of each package
-      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.name }}"
+      # ${Status} as well as ${Version}: dpkg-query reports a version for a
+      # package in `deinstall ok config-files` state -- removed, binary gone,
+      # only conffiles retained -- so a ${Version}-only guard reads that as
+      # "already at the pin" and never reinstalls it. Found on ws02, where a
+      # removed figlet was skipped here and then reported as installed by
+      # task 4, which had the identical blindness.
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ item.name }}"
       register: core_tools_installed
       loop: >-
         {{ core_tools_packages
@@ -128,7 +146,7 @@
       loop: "{{ core_tools_installed.results }}"
       loop_control:
         label: "{{ item.item.name }}"
-      when: item.item.version != (item.stdout | default(''))
+      when: (item.stdout | default('')) != ('install ok installed|' ~ item.item.version)
 
     - name: 3. Install the packages that need installing
       ansible.builtin.apt:
@@ -140,7 +158,10 @@
       when: (core_tools_pending | default([])) | length > 0
 
     - name: 4. Verify the installed version of each package
-      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ item.name }}"
+      # Same ${Status} reasoning as task 1: without it this reports a
+      # config-files leftover as a satisfied pin and the summary prints a
+      # version for a package whose binary is not on the host.
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ item.name }}"
       register: core_tools_version_out
       loop: >-
         {{ core_tools_packages
@@ -150,7 +171,7 @@
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
-      failed_when: item.version != core_tools_version_out.stdout
+      failed_when: core_tools_version_out.stdout != ('install ok installed|' ~ item.version)
 
     - name: 5. Verify the ca-certificates bundle
       # ca-certificates ships no binary -- policy point 9's "exercise the
