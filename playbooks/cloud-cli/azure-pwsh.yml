@@ -1,0 +1,345 @@
+---
+# Install the Azure PowerShell (Az) modules system-wide on a multi-user
+# workstation.
+#
+#   /usr/local/share/powershell/Modules/Az.*   the modules, root-owned
+#
+# PowerShell itself is a prerequisite, provisioned by core/pwsh.yml. This
+# playbook only checks for it and fails with that instruction if it is
+# missing -- the shape core/markdownlint.yml uses for Node.js. That playbook
+# also asserts that this directory is on PSModulePath for every account,
+# which is what makes an AllUsers install readable by all of them.
+#
+# THE MODULES ARE SHARED; THE IDENTITY IS NOT. This is cloud-cli's first
+# rule, and Az is the clearest case of it: `Connect-AzAccount` writes a token
+# cache and a context to ~/.Azure in the account that runs it, and nothing
+# here runs it for anyone. No subscription, tenant or credential is
+# configured, and the closing summary prints the commands each account runs
+# for itself.
+#
+# Which modules? The eight this repository's Azure work actually uses --
+# Accounts, ApiManagement, Automation, Cdn, KeyVault, Resources, Storage and
+# Websites -- rather than the whole `Az` rollup, which is some 80 modules and
+# well over a gigabyte. Az.Accounts is the dependency the other seven share,
+# so it is pinned like the rest rather than left to be pulled in implicitly.
+#
+# ROOT MUST RUN pwsh HERE, WHICH core/pwsh.yml AVOIDS. Installing to the
+# AllUsers scope means writing under /usr/local, so the install itself is
+# privileged -- and pwsh writes ~/.cache/powershell (PowerShellGet's own
+# cache among it) wherever HOME points. It is therefore given a scratch HOME
+# that does not outlive the play, the same treatment ansible-core.yml gives
+# ansible-galaxy for the same reason.
+#
+# Usage:
+#   ansible-playbook cloud-cli/azure-pwsh.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/azure-pwsh.yml -e host=ws01 -e az_accounts_version=5.5.2
+
+- name: Install the Azure PowerShell modules system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current versions on the PowerShell Gallery as of 2026-08-17:
+    #   pwsh -c "Find-Module Az.Accounts | Select-Object Name,Version"
+    az_accounts_version: "5.5.2"
+    az_apimanagement_version: "4.2.0"
+    az_automation_version: "1.12.1"
+    az_cdn_version: "6.1.0"
+    az_keyvault_version: "6.6.0"
+    az_resources_version: "10.1.0"
+    az_storage_version: "9.7.2"
+    az_websites_version: "4.0.0"
+    azure_pwsh_modules:
+      # Az.Accounts first: the other seven depend on it, and installing it
+      # explicitly keeps its version pinned rather than resolved.
+      - name: Az.Accounts
+        version: "{{ az_accounts_version }}"
+        # A cmdlet each module must export once imported, checked in task 15.
+        cmdlet: Connect-AzAccount
+      - name: Az.ApiManagement
+        version: "{{ az_apimanagement_version }}"
+        cmdlet: Get-AzApiManagement
+      - name: Az.Automation
+        version: "{{ az_automation_version }}"
+        cmdlet: Get-AzAutomationAccount
+      - name: Az.Cdn
+        version: "{{ az_cdn_version }}"
+        cmdlet: Get-AzCdnProfile
+      - name: Az.KeyVault
+        version: "{{ az_keyvault_version }}"
+        cmdlet: Get-AzKeyVault
+      - name: Az.Resources
+        version: "{{ az_resources_version }}"
+        cmdlet: Get-AzResourceGroup
+      - name: Az.Storage
+        version: "{{ az_storage_version }}"
+        cmdlet: New-AzStorageContext
+      - name: Az.Websites
+        version: "{{ az_websites_version }}"
+        cmdlet: Get-AzWebApp
+    azure_pwsh_bin: /usr/local/bin/pwsh
+    azure_pwsh_modules_dir: /usr/local/share/powershell/Modules
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and
+    # PowerShellGet unpacks each module through the scratch HOME.
+    azure_pwsh_root_home: /var/tmp/azure-pwsh-root-home
+    azure_pwsh_smoke_dir: /var/tmp/azure-pwsh-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    azure_pwsh_verify_uid: 65534    # nobody
+    azure_pwsh_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that PowerShell is present
+      ansible.builtin.stat:
+        path: "{{ azure_pwsh_bin }}"
+      register: azure_pwsh_stat
+      check_mode: false
+
+    - name: 2. Fail with the prerequisite if PowerShell is missing
+      ansible.builtin.fail:
+        msg: >-
+          {{ azure_pwsh_bin }} is not installed, and these are PowerShell
+          modules. Run core/pwsh.yml against this host first:
+          ansible-playbook core/pwsh.yml -e host={{ inventory_hostname }}
+      when: not azure_pwsh_stat.stat.exists
+
+    - name: 3. Create the root-side scratch HOME
+      # pwsh writes ~/.cache/powershell and ~/.config/powershell on any
+      # invocation, PowerShellGet's cache included -- confirmed live. Under
+      # root that would be /root, which B2 forbids.
+      ansible.builtin.file:
+        path: "{{ azure_pwsh_root_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+
+    - name: 4. Write the script that lists the installed modules
+      # A file, not -Command: this expression contains a calculated property
+      # ({n=...;e={...}}), and passing that through YAML, Jinja and shlex
+      # splitting reaches pwsh mangled -- the first attempt returned nothing
+      # at all rather than JSON.
+      ansible.builtin.copy:
+        dest: "{{ azure_pwsh_root_home }}/list-modules.ps1"
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          $ErrorActionPreference = 'Stop'
+          Get-Module -ListAvailable -Name Az.* |
+            Select-Object Name,@{ n = 'Version'; e = { $_.Version.ToString() } } |
+            ConvertTo-Json -Compress -AsArray
+      check_mode: false
+
+    - name: 5. Read the module versions already installed for all users
+      # -ListAvailable reads the module manifests on PSModulePath without
+      # importing anything, so this is cheap and has no side effects. The
+      # version is a [Version] object; ToString() keeps it comparable as text
+      # rather than arriving as a four-field JSON object.
+      ansible.builtin.command:
+        cmd: >-
+          {{ azure_pwsh_bin }} -NoProfile -NonInteractive
+          -File {{ azure_pwsh_root_home }}/list-modules.ps1
+      environment: &pwsh_env
+        HOME: "{{ azure_pwsh_root_home }}"
+        POWERSHELL_TELEMETRY_OPTOUT: "1"
+      register: azure_pwsh_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Parse the installed module versions
+      ansible.builtin.set_fact:
+        # default('[]', true) rather than a ternary on "is the output
+        # empty": Jinja evaluates BOTH branches of ternary before choosing,
+        # so `'' | from_json` still runs and still raises when no Az module
+        # is installed yet -- which is exactly the first run this playbook
+        # exists for.
+        azure_pwsh_present: >-
+          {{ (azure_pwsh_installed.stdout | default('') | trim
+              | default('[]', true)) | from_json }}
+
+    - name: 7. Collect the modules whose pinned version is not installed
+      ansible.builtin.set_fact:
+        azure_pwsh_pending: >-
+          {{ azure_pwsh_pending | default([])
+             + ([item]
+                if (azure_pwsh_present
+                    | selectattr('Name', 'equalto', item.name)
+                    | selectattr('Version', 'equalto', item.version)
+                    | list | length == 0)
+                else []) }}
+      loop: "{{ azure_pwsh_modules }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+
+    - name: 8. Decide whether this run can verify
+      ansible.builtin.set_fact:
+        azure_pwsh_can_verify: >-
+          {{ not (ansible_check_mode and (azure_pwsh_pending | length > 0)) }}
+
+    - name: 8a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install
+          {{ azure_pwsh_pending | map(attribute='name') | join(', ') }}, so the
+          version checks and the unprivileged import below are skipped rather
+          than failed. Re-run without --check to verify.
+      when: not (azure_pwsh_can_verify | bool)
+
+    - name: 9. Install each pinned module for all users
+      # -Force answers the "untrusted repository" prompt that PSGallery
+      # otherwise raises on a non-interactive host, and -AllowClobber lets a
+      # module claim a command name another already exported, which the Az
+      # modules do among themselves. Neither weakens the pin:
+      # -RequiredVersion is exact.
+      #
+      # Every continuation line sits at the SAME indentation as the first: a
+      # more-indented line in a YAML folded scalar keeps its newline, and a
+      # newline inside -Command ends the statement, so PowerShell ran
+      # `Install-Module -Name Az.Cdn` and then choked on a bare
+      # `-RequiredVersion 6.1.0`.
+      ansible.builtin.command:
+        cmd: >-
+          {{ azure_pwsh_bin }} -NoProfile -NonInteractive -Command
+          "Install-Module -Name {{ item.name }}
+          -RequiredVersion {{ item.version }}
+          -Scope AllUsers -Force -AllowClobber"
+      environment: *pwsh_env
+      loop: "{{ azure_pwsh_pending | default([]) }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: 10. Make the module tree world-readable
+      # PowerShellGet installs with root's umask; 'X' only adds the execute
+      # bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ azure_pwsh_modules_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 11. Remove the root-side scratch HOME
+      ansible.builtin.file:
+        path: "{{ azure_pwsh_root_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 12. Create the scratch HOME for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ azure_pwsh_smoke_dir }}"
+        state: directory
+        owner: "{{ azure_pwsh_verify_uid }}"
+        group: "{{ azure_pwsh_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: azure_pwsh_can_verify | bool
+
+    - name: 13. Write the script the unprivileged check will run
+      # A file rather than -Command: this is PowerShell source going through
+      # YAML, Jinja and a shell, and a file skips three of those. Importing
+      # is the point -- -ListAvailable only reads manifests, while
+      # Import-Module loads the assemblies an account would actually use --
+      # and resolving a known cmdlet from each module proves the import did
+      # something. Nothing here contacts Azure: no Connect-AzAccount, no
+      # subscription, no credential.
+      ansible.builtin.copy:
+        dest: "{{ azure_pwsh_smoke_dir }}/smoke.ps1"
+        owner: "{{ azure_pwsh_verify_uid }}"
+        group: "{{ azure_pwsh_verify_gid }}"
+        mode: '0644'
+        content: |
+          $ErrorActionPreference = 'Stop'
+          $wanted = @(
+          {% for m in azure_pwsh_modules %}
+            [pscustomobject]@{ Name = '{{ m.name }}'; Version = '{{ m.version }}'; Cmdlet = '{{ m.cmdlet }}' }{{ ',' if not loop.last else '' }}
+          {% endfor %}
+          )
+          foreach ($w in $wanted) {
+            $found = Get-Module -ListAvailable -Name $w.Name |
+              Where-Object { $_.Version.ToString() -eq $w.Version }
+            if (-not $found) { throw "$($w.Name) $($w.Version) is not available" }
+            Import-Module -Name $w.Name -RequiredVersion $w.Version -ErrorAction Stop
+            $cmd = Get-Command -Name $w.Cmdlet -ErrorAction SilentlyContinue
+            if (-not $cmd) { throw "$($w.Name) did not export $($w.Cmdlet)" }
+            Write-Output "ok=$($w.Name):$($w.Version):$($cmd.Name)"
+          }
+      check_mode: false
+      when: azure_pwsh_can_verify | bool
+
+    - name: 14. Import every module as an unprivileged user
+      # Importing eight Az modules takes a while: they load a good deal of
+      # .NET assembly, and this is the one task in the play that is slow on
+      # purpose rather than by accident.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ azure_pwsh_verify_uid }} --regid={{ azure_pwsh_verify_gid }} --clear-groups
+          env HOME={{ azure_pwsh_smoke_dir }} POWERSHELL_TELEMETRY_OPTOUT=1
+          {{ azure_pwsh_bin }} -NoProfile -NonInteractive
+          -File {{ azure_pwsh_smoke_dir }}/smoke.ps1
+        chdir: "{{ azure_pwsh_smoke_dir }}"
+      register: azure_pwsh_smoke
+      changed_when: false
+      check_mode: false
+      when: azure_pwsh_can_verify | bool
+
+    - name: 15. Confirm every module imported and exported its cmdlet
+      ansible.builtin.assert:
+        that:
+          - ('ok=' ~ item.name ~ ':' ~ item.version ~ ':' ~ item.cmdlet)
+            in azure_pwsh_smoke.stdout
+        fail_msg: >-
+          {{ item.name }} {{ item.version }} did not import and export
+          {{ item.cmdlet }} for an unprivileged account:
+          {{ azure_pwsh_smoke.stdout | default('') }}
+        success_msg: "{{ item.name }} {{ item.version }} exports {{ item.cmdlet }}"
+      loop: "{{ azure_pwsh_modules }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      when: azure_pwsh_can_verify | bool
+
+    - name: 16. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ azure_pwsh_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 17. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['Azure PowerShell modules installed for all users:']
+             + (azure_pwsh_modules | map(attribute='name') | list
+                | zip(azure_pwsh_modules | map(attribute='version') | list)
+                | map('join', ' ')
+                | map('regex_replace', '^', '  ')
+                | list)
+             + ['',
+                '  ' ~ azure_pwsh_modules_dir,
+                '',
+                (azure_pwsh_can_verify | bool)
+                | ternary('Verified as an unprivileged user (uid ' ~ azure_pwsh_verify_uid
+                          ~ '): every module imported and exported its cmdlet. No Azure'
+                          ~ ' endpoint was contacted.',
+                          'Not verified: this was a --check run against a host without these versions.'),
+                '',
+                'The modules are shared; the identity is not. Each account signs in',
+                'for itself, and its token cache and context live in its own ~/.Azure:',
+                '',
+                '  Connect-AzAccount                      # device code or browser',
+                '  Connect-AzAccount -Identity            # a managed identity',
+                '  Set-AzContext -Subscription <id>       # choose a subscription',
+                '  Get-AzContext                          # what am I signed in as',
+                '',
+                'Usage:',
+                '  Get-AzResourceGroup',
+                '  Get-AzKeyVault -VaultName <name>',
+                '  New-AzStorageContext -StorageAccountName <name> -UseConnectedAccount'] }}
+      when: azure_pwsh_can_verify | bool

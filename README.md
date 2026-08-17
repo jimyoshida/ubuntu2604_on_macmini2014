@@ -29,7 +29,7 @@ installed once is usable by every account on a **shared** workstation. Run again
 | Directory | Description |
 |-----------|-------------|
 | [playbooks/misc/](playbooks/misc/README.md) | Developer tools (bats, certbot, dotnet-tools, dvc, gomplate, grype-syft, hadolint, jsonnet, junit2html, k6, kube-score, maven, mocha-chai, mongodb-tools, plantuml, playwright, testssl, trivy, zap) |
-| [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, logcli, tofu, promtool/amtool, vault) |
+| [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, logcli, tofu, promtool/amtool, vault, Azure PowerShell) |
 | [playbooks/container/](playbooks/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers, kubelogin/k9s/kdash) |
 | [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise, ansible-core, .NET SDK, PowerShell |
 

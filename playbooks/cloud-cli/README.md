@@ -106,6 +106,63 @@ and are not written anywhere — both are read by the wrapper from your own envi
 The `ansible-playbook cloud-cli/<tool>.yml` commands in this file are relative to
 `playbooks/`, which is where they must be run from.
 
+## azure-pwsh.yml
+
+Installs the Azure PowerShell (Az) modules for **all users**, with PowerShell from
+[`core/pwsh.yml`](../core/README.md#pwshyml) as a prerequisite — this playbook checks for it and
+fails with that instruction if it is missing.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/share/powershell/Modules/Az.*` | the modules, root-owned |
+
+Eight modules, pinned individually: `Az.Accounts` 5.5.2, `Az.ApiManagement` 4.2.0,
+`Az.Automation` 1.12.1, `Az.Cdn` 6.1.0, `Az.KeyVault` 6.6.0, `Az.Resources` 10.1.0,
+`Az.Storage` 9.7.2, `Az.Websites` 4.0.0 — not the whole `Az` rollup, which is some 80 modules
+and well over a gigabyte. `Az.Accounts` is the dependency the other seven share and is pinned
+explicitly rather than resolved implicitly.
+
+**The modules are shared; the identity is not** — rule 1 above, and Az is its clearest case.
+`Connect-AzAccount` writes a token cache and context to `~/.Azure` in the account that runs it,
+and nothing here runs it for anyone. No subscription, tenant or credential is configured; the
+closing summary prints the commands each account runs for itself.
+
+**Root has to run `pwsh` here**, which [`core/pwsh.yml`](../core/README.md#pwshyml) is careful to
+avoid: installing to the AllUsers scope means writing under `/usr/local`. Since `pwsh` writes
+`~/.cache/powershell` (PowerShellGet's cache among it) wherever `HOME` points, it gets a scratch
+`HOME` that does not outlive the play — the treatment `core/ansible-core.yml` gives
+`ansible-galaxy` for the same reason.
+
+### Verification imports, it does not just list
+
+`Get-Module -ListAvailable` only reads manifests. The unprivileged check imports each module at
+its pinned version and resolves a known cmdlet from it (`Connect-AzAccount`,
+`Get-AzKeyVault`, `New-AzStorageContext`, …), which is what proves the assemblies load for an
+account that did no setup of its own. Nothing contacts Azure — rule 3 above.
+
+### Two YAML/Jinja traps this playbook hit, both worth knowing
+
+- **A folded scalar keeps the newline of a more-indented line.** Written with the continuation
+  lines indented under it, `-Command "Install-Module -Name X
+ -RequiredVersion Y ..."` reached
+  PowerShell as three statements: it ran `Install-Module -Name X` and then choked on a bare
+  `-RequiredVersion`. Every continuation line now sits at the same indentation as the first.
+- **`ternary` evaluates both branches.** `(output | length > 0) | ternary(output | from_json, [])`
+  still runs `'' | from_json` when the output is empty — which is the first run on a host with no
+  Az module installed, exactly what this playbook is for. The fix is `default('[]', true)`
+  *before* `from_json`. [`misc/certbot.yml`](../misc/README.md#certbotyml) had the same shape and
+  the same latent failure, and was fixed with it.
+
+Anything with a calculated property (`Select-Object @{n=…;e={…}}`) or quoting of its own goes
+into a script file run with `-File` rather than through `-Command`, which keeps PowerShell source
+out of YAML, Jinja and shlex splitting all at once.
+
+Version overrides — one variable per module:
+
+```bash
+ansible-playbook cloud-cli/azure-pwsh.yml -e host=ws01 -e az_accounts_version=5.5.2
+```
+
 ## aws-cli.yml
 
 Installs the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/) from AWS's
