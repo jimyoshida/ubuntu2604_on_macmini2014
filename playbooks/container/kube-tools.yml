@@ -1,0 +1,500 @@
+---
+# Install the Kubernetes companion tools system-wide on a multi-user
+# workstation: kubelogin, k9s and kdash.
+#
+#   /usr/local/bin/kubelogin           root-owned, mode 0755
+#   /usr/local/bin/k9s                 root-owned, mode 0755
+#   /usr/local/bin/kdash               root-owned, mode 0755
+#   /etc/bash_completion.d/kubelogin   shared completion, generated from the binary
+#   /etc/bash_completion.d/k9s         shared completion, generated from the binary
+#
+# All three are single static binaries from GitHub releases, pinned and
+# checksum-verified against the SHA-256 GitHub publishes per asset (the
+# core/yq.yml source). kdash ships no completion subcommand -- `kdash
+# completion bash` answers "error: unexpected argument 'completion' found" --
+# so only the other two get one.
+#
+# WHAT THESE TOOLS DO NOT DO IS SHARE IDENTITY. All three read the
+# kubeconfig, and kubelogin in particular writes an Azure token cache to
+# ~/.kube/cache/kubelogin: that is a credential, per account, and nothing
+# here creates or touches any of it. k9s additionally keeps ~/.config/k9s
+# (settings, skins, aliases) and ~/.local/state/k9s (logs) -- confirmed
+# live, `k9s version` alone already creates the latter, which is why the
+# unprivileged checks below run with a scratch HOME rather than near a real
+# one.
+#
+# Like container/kind.yml, these are only as multi-user as the cluster access
+# behind them: this playbook installs binaries every account can execute, and
+# an account with no kubeconfig can do nothing with them. That is the honest
+# state of the tools, not a gap in the install.
+#
+# junit2html, which the same toolset elsewhere pairs with kube-score reports,
+# is NOT here: it already has its own playbook at misc/junit2html.yml, which
+# installs it root-owned via pipx rather than into one account's ~/.local.
+#
+# Usage:
+#   ansible-playbook container/kube-tools.yml -e host=<inventory host or group>
+#   ansible-playbook container/kube-tools.yml -e host=ws01 -e k9s_version=0.51.0
+
+- name: Install kubelogin, k9s and kdash system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current releases as of 2026-08-17:
+    #   curl -sS https://api.github.com/repos/<repo>/releases/latest | jq -r .tag_name
+    kubelogin_version: "0.2.19"
+    k9s_version: "0.51.0"
+    kdash_version: "2.1.1"
+    kube_tools_bin_dir: /usr/local/bin
+    kube_tools_completion_dir: /etc/bash_completion.d
+    # ansible_facts['architecture'] -> the name each project happens to use.
+    # They disagree -- kubelogin says linux-amd64, k9s says Linux_amd64, and
+    # kdash says plain "linux" for amd64 but "aarch64-gnu" for arm64 -- so
+    # every asset and archive member is spelled out per architecture rather
+    # than assembled from a single arch string.
+    kube_tools_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    kube_tools_arch: "{{ kube_tools_arch_map.get(ansible_facts['architecture'], '') }}"
+    kube_tools:
+      - name: kubelogin
+        version: "{{ kubelogin_version }}"
+        repo: Azure/kubelogin
+        asset_map:
+          amd64: "kubelogin-linux-amd64.zip"
+          arm64: "kubelogin-linux-arm64.zip"
+        member_map:
+          amd64: "bin/linux_amd64/kubelogin"
+          arm64: "bin/linux_arm64/kubelogin"
+        # `kubelogin --version` prints an empty "kubelogin version " line and
+        # puts the release on the next one, as "git hash: v<version>/<sha>".
+        version_args: "--version"
+        needle_prefix: "git hash: v"
+        needle_suffix: "/"
+        completion: true
+      - name: k9s
+        version: "{{ k9s_version }}"
+        repo: derailed/k9s
+        asset_map:
+          amd64: "k9s_Linux_amd64.tar.gz"
+          arm64: "k9s_Linux_arm64.tar.gz"
+        member_map:
+          amd64: k9s
+          arm64: k9s
+        version_args: "version --short"
+        needle_prefix: "v"
+        needle_suffix: ""
+        completion: true
+      - name: kdash
+        version: "{{ kdash_version }}"
+        repo: kdash-rs/kdash
+        asset_map:
+          amd64: "kdash-linux.tar.gz"
+          arm64: "kdash-aarch64-gnu.tar.gz"
+        member_map:
+          amd64: kdash
+          arm64: kdash
+        version_args: "--version"
+        needle_prefix: "kdash "
+        needle_suffix: ""
+        completion: false
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and
+    # the k9s archive alone is ~41 MB.
+    kube_tools_stage_dir: /var/tmp/kube-tools-install
+    # Two scratch HOMEs, not one: k9s writes ~/.local/state/k9s on every
+    # invocation including `version`, so the root-side checks need somewhere
+    # to put that which is not /root (B2), and the unprivileged ones need a
+    # directory uid 65534 owns.
+    kube_tools_root_home: /var/tmp/kube-tools-root-home
+    kube_tools_smoke_dir: /var/tmp/kube-tools-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    kube_tools_verify_uid: 65534    # nobody
+    kube_tools_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # unzip is what unarchive shells out to for kubelogin's .zip;
+      # bash-completion is what makes /etc/bash_completion.d read at all.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - tar
+          - unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No release assets are mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to kube_tools_arch_map
+          and to each tool's asset_map/member_map.
+      when: kube_tools_arch | length == 0
+
+    - name: 3. Create the root-side scratch HOME
+      ansible.builtin.file:
+        path: "{{ kube_tools_root_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+
+    - name: 4. Check the currently installed version of each tool
+      ansible.builtin.command:
+        cmd: "{{ kube_tools_bin_dir }}/{{ item.name }} {{ item.version_args }}"
+      environment:
+        # k9s writes ~/.local/state/k9s the moment it runs, even for
+        # `version` -- confirmed live -- so even this read-only check is kept
+        # away from root's own $HOME (B2).
+        HOME: "{{ kube_tools_root_home }}"
+      register: kube_tools_installed
+      loop: "{{ kube_tools }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Decide which tools need installing
+      ansible.builtin.set_fact:
+        kube_tools_pending: >-
+          {{ kube_tools_pending | default([])
+             + ([item.0]
+                if (item.0.needle_prefix ~ item.0.version ~ item.0.needle_suffix)
+                   not in (item.1.stdout | default(''))
+                else []) }}
+      loop: "{{ kube_tools | zip(kube_tools_installed.results) | list }}"
+      loop_control:
+        label: "{{ item.0.name }}"
+
+    - name: 6. Decide whether this run can verify
+      ansible.builtin.set_fact:
+        kube_tools_can_verify: >-
+          {{ not (ansible_check_mode and (kube_tools_pending | length > 0)) }}
+
+    - name: 6a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install
+          {{ kube_tools_pending | map(attribute='name') | join(', ') }}, so the
+          version checks and the unprivileged smoke tests below are skipped
+          rather than failed. Re-run without --check to verify.
+      when: not (kube_tools_can_verify | bool)
+
+    - name: 7. Create the staging directory
+      # Only when something is actually being downloaded: on a host that is
+      # already at every pin, this and its removal below are skipped rather
+      # than churning a directory for nothing.
+      ansible.builtin.file:
+        path: "{{ kube_tools_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+      when: (kube_tools_pending | default([])) | length > 0
+
+    - name: 8. Fetch the GitHub release metadata for each tool that needs installing
+      # check_mode: false because reading release metadata changes nothing on
+      # the host, so a dry run still validates every version pin upstream.
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ item.repo }}/releases/tags/v{{ item.version }}"
+        return_content: true
+      register: kube_tools_releases
+      loop: "{{ kube_tools_pending | default([]) }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      check_mode: false
+
+    - name: 9. Resolve the SHA-256 digest published for each asset
+      # None of these three ships a checksums file this repo can parse the
+      # same way twice -- kubelogin has one .sha256 per asset, k9s a combined
+      # checksums.sha256, kdash one .sha256 per asset -- so the digest GitHub
+      # computes per asset is used for all three instead. Equally
+      # authoritative and identical in shape, which is what lets one loop
+      # cover the set.
+      ansible.builtin.set_fact:
+        kube_tools_checksums: >-
+          {{ kube_tools_checksums | default({})
+             | combine({item.item.name:
+                        (item.json.assets
+                         | selectattr('name', 'equalto', item.item.asset_map[kube_tools_arch])
+                         | map(attribute='digest') | first | default(''))}) }}
+      loop: "{{ kube_tools_releases.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.json is defined
+
+    - name: 10. Fail if any release does not carry the expected asset
+      ansible.builtin.assert:
+        that:
+          - kube_tools_checksums[item.name] is match('^sha256:[0-9a-f]{64}$')
+        fail_msg: >-
+          The v{{ item.version }} release of {{ item.repo }} has no asset
+          named {{ item.asset_map[kube_tools_arch] }}, or GitHub published no
+          digest for it. Check the pin against
+          https://github.com/{{ item.repo }}/releases.
+      loop: "{{ kube_tools_pending | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: kube_tools_checksums is defined
+
+    - name: 11. Download each archive and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check. Not under --check: get_url is
+      # not skipped in check mode and would validate a destination directory
+      # task 6 has not really created.
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/{{ item.repo }}/releases/download/v{{ item.version }}/{{ item.asset_map[kube_tools_arch] }}
+        dest: "{{ kube_tools_stage_dir }}/{{ item.asset_map[kube_tools_arch] }}"
+        checksum: "{{ kube_tools_checksums[item.name] }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop: "{{ kube_tools_pending | default([]) }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      when: not ansible_check_mode
+
+    - name: 12. Unpack each archive
+      # unarchive reads both the .zip and the .tar.gz forms in this set; the
+      # member each one wants is extracted rather than the whole tree, since
+      # k9s also ships a LICENSE and README that have no business in
+      # /usr/local/bin.
+      ansible.builtin.unarchive:
+        src: "{{ kube_tools_stage_dir }}/{{ item.asset_map[kube_tools_arch] }}"
+        dest: "{{ kube_tools_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+        include:
+          - "{{ item.member_map[kube_tools_arch] }}"
+      loop: "{{ kube_tools_pending | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not ansible_check_mode
+
+    - name: 13. Install each binary
+      ansible.builtin.copy:
+        src: "{{ kube_tools_stage_dir }}/{{ item.member_map[kube_tools_arch] }}"
+        dest: "{{ kube_tools_bin_dir }}/{{ item.name }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      loop: "{{ kube_tools_pending | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not ansible_check_mode
+
+    - name: 14. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ kube_tools_stage_dir }}"
+        state: absent
+      check_mode: false
+      when: (kube_tools_pending | default([])) | length > 0
+
+    - name: 15. Verify the installed version of each tool
+      ansible.builtin.command:
+        cmd: "{{ kube_tools_bin_dir }}/{{ item.name }} {{ item.version_args }}"
+      environment:
+        HOME: "{{ kube_tools_root_home }}"
+      register: kube_tools_version_out
+      loop: "{{ kube_tools }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        (item.needle_prefix ~ item.version ~ item.needle_suffix)
+        not in kube_tools_version_out.stdout
+      when: kube_tools_can_verify | bool
+
+    - name: 16. Generate the shared bash completions from the installed binaries
+      # Generated, then written by copy in the next task rather than
+      # redirected straight to the file: copy compares content, so a re-run
+      # that changes nothing reports nothing. kdash is absent from this list
+      # because it ships no completion subcommand at all.
+      ansible.builtin.command:
+        cmd: "{{ kube_tools_bin_dir }}/{{ item.name }} completion bash"
+      environment:
+        HOME: "{{ kube_tools_root_home }}"
+      register: kube_tools_completion
+      loop: "{{ kube_tools | selectattr('completion') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      check_mode: false
+      when: kube_tools_can_verify | bool
+
+    - name: 17. Install the shared bash completions
+      # B3: /etc/bash_completion.d, where every account's interactive shell
+      # reads it, rather than a `source <(...)` line in one account's
+      # ~/.bashrc that re-runs the tool on every shell start.
+      ansible.builtin.copy:
+        dest: "{{ kube_tools_completion_dir }}/{{ item.item.name }}"
+        content: "{{ item.stdout }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ kube_tools_completion.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name | default('') }}"
+      when:
+        - kube_tools_can_verify | bool
+        - item.stdout is defined
+
+    - name: 18. Remove the root-side scratch HOME
+      ansible.builtin.file:
+        path: "{{ kube_tools_root_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 19. Create the scratch directory for the unprivileged checks
+      # Doubles as HOME: k9s writes ~/.local/state/k9s on any invocation, and
+      # kubelogin would write ~/.kube/cache/kubelogin if it ever obtained a
+      # token. Neither belongs in a real account's home, and uid 65534's is
+      # /nonexistent anyway.
+      ansible.builtin.file:
+        path: "{{ kube_tools_smoke_dir }}"
+        state: directory
+        owner: "{{ kube_tools_verify_uid }}"
+        group: "{{ kube_tools_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: kube_tools_can_verify | bool
+
+    - name: 20. Report each version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kube_tools_verify_uid }} --regid={{ kube_tools_verify_gid }} --clear-groups
+          env HOME={{ kube_tools_smoke_dir }}
+          {{ kube_tools_bin_dir }}/{{ item.name }} {{ item.version_args }}
+        chdir: "{{ kube_tools_smoke_dir }}"
+      register: kube_tools_smoke_versions
+      loop: "{{ kube_tools }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        (item.needle_prefix ~ item.version ~ item.needle_suffix)
+        not in kube_tools_smoke_versions.stdout
+      when: kube_tools_can_verify | bool
+
+    - name: 21. Write a kubeconfig for the kubelogin check to convert
+      # An Azure auth-provider kubeconfig of the shape kubelogin exists to
+      # migrate. The identifiers are all-zero placeholders and the server is
+      # example.invalid: converting it contacts nothing.
+      ansible.builtin.copy:
+        dest: "{{ kube_tools_smoke_dir }}/kubeconfig"
+        owner: "{{ kube_tools_verify_uid }}"
+        group: "{{ kube_tools_verify_gid }}"
+        mode: '0644'
+        content: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - cluster:
+                server: https://example.invalid:443
+              name: smoke
+          contexts:
+            - context:
+                cluster: smoke
+                user: smoke-user
+              name: smoke
+          current-context: smoke
+          users:
+            - name: smoke-user
+              user:
+                auth-provider:
+                  name: azure
+                  config:
+                    apiserver-id: 00000000-0000-0000-0000-000000000001
+                    client-id: 00000000-0000-0000-0000-000000000002
+                    tenant-id: 00000000-0000-0000-0000-000000000003
+                    environment: AzurePublicCloud
+                    config-mode: "1"
+      check_mode: false
+      when: kube_tools_can_verify | bool
+
+    - name: 22. Convert a kubeconfig with kubelogin as an unprivileged user
+      # Real work, offline: kubelogin rewrites the deprecated azure
+      # auth-provider block into an exec credential plugin. No token is
+      # requested and nothing is contacted -- the assertion is on the
+      # rewritten file, so a kubelogin that did nothing cannot pass.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ kube_tools_verify_uid }} --regid={{ kube_tools_verify_gid }} --clear-groups
+          env HOME={{ kube_tools_smoke_dir }}
+          {{ kube_tools_bin_dir }}/kubelogin convert-kubeconfig -l azurecli
+          --kubeconfig {{ kube_tools_smoke_dir }}/kubeconfig
+          && cat {{ kube_tools_smoke_dir }}/kubeconfig
+        chdir: "{{ kube_tools_smoke_dir }}"
+      register: kube_tools_smoke_kubelogin
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        'exec:' not in kube_tools_smoke_kubelogin.stdout
+        or 'get-token' not in kube_tools_smoke_kubelogin.stdout
+        or 'auth-provider' in kube_tools_smoke_kubelogin.stdout
+      when: kube_tools_can_verify | bool
+
+    - name: 23. Read k9s's own view of its configuration as an unprivileged user
+      # `k9s info` reports the paths it will use for config, logs and
+      # benchmarks. It needs no cluster, so it is the one thing a TUI can be
+      # asked to do offline that is more than printing a version -- and it
+      # proves the scratch HOME is where its state goes.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ kube_tools_verify_uid }} --regid={{ kube_tools_verify_gid }} --clear-groups
+          env HOME={{ kube_tools_smoke_dir }}
+          {{ kube_tools_bin_dir }}/k9s info
+        chdir: "{{ kube_tools_smoke_dir }}"
+      register: kube_tools_smoke_k9s
+      changed_when: false
+      check_mode: false
+      failed_when: kube_tools_smoke_dir not in kube_tools_smoke_k9s.stdout
+      when: kube_tools_can_verify | bool
+
+    - name: 24. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ kube_tools_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 25. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['Kubernetes companion tools installed system-wide:']
+             + (kube_tools | map(attribute='name') | list
+                | zip(kube_tools | map(attribute='version') | list)
+                | map('join', ' ')
+                | map('regex_replace', '^', '  ' ~ kube_tools_bin_dir ~ '/')
+                | list)
+             + ['',
+                '  ' ~ kube_tools_completion_dir ~ '/{kubelogin,k9s}   shared bash completion',
+                '',
+                (kube_tools_can_verify | bool)
+                | ternary('Verified as an unprivileged user (uid ' ~ kube_tools_verify_uid
+                          ~ '): kubelogin converted an Azure kubeconfig to an exec plugin'
+                          ~ ' offline, and k9s reported its own configuration paths.',
+                          'Not verified: this was a --check run against a host without these versions.'),
+                '',
+                'Cluster access is per account: each one brings its own kubeconfig,',
+                "and kubelogin caches its Azure tokens under that account's",
+                '~/.kube/cache/kubelogin. Nothing here creates or shares either.',
+                '',
+                'Usage:',
+                '  kubelogin convert-kubeconfig -l azurecli   # migrate an AKS kubeconfig',
+                '  k9s                                        # cluster TUI',
+                '  kdash                                      # dashboard TUI'] }}

@@ -328,3 +328,63 @@ delete` reclaims it.
 ```bash
 ansible-playbook container/minikube.yml -e host=ws01 -e minikube_version=1.38.1
 ```
+
+## kube-tools.yml
+
+Installs three Kubernetes companion tools in one playbook: [kubelogin](https://azure.github.io/kubelogin/),
+[k9s](https://k9scli.io/) and [kdash](https://kdash.cli.rs/).
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/kubelogin` | Azure AKS credential plugin for `kubectl` |
+| `/usr/local/bin/k9s` | cluster TUI |
+| `/usr/local/bin/kdash` | dashboard TUI |
+| `/etc/bash_completion.d/kubelogin`, `/etc/bash_completion.d/k9s` | shared completions, generated from the binaries |
+
+All three are single static binaries from GitHub releases, pinned and verified against the
+SHA-256 GitHub publishes per asset — the [`core/yq.yml`](../core/README.md#yqyml) source. None of
+the three ships a checksums file in the same shape (kubelogin one `.sha256` per asset, k9s a
+combined `checksums.sha256`, kdash one `.sha256` per asset), and the per-asset digest is
+identical in form for all of them, which is what lets a single loop cover the set.
+
+**The three projects disagree about architecture names**, so each asset and archive member is
+spelled out per architecture rather than assembled from one arch string: kubelogin says
+`linux-amd64`, k9s says `Linux_amd64`, and kdash says plain `linux` for amd64 but
+`aarch64-gnu` for arm64. kdash also ships no `completion` subcommand at all (`error: unexpected
+argument 'completion' found`), so only the other two get a completion file.
+
+### Identity stays per account, and k9s writes state on sight
+
+All three read the kubeconfig, and kubelogin writes an Azure token cache to
+`~/.kube/cache/kubelogin` — a credential, per account. Nothing here creates or touches any of
+it. k9s additionally keeps `~/.config/k9s` (settings, skins, aliases) and `~/.local/state/k9s`
+(logs), and **`k9s version` alone already creates the latter** — confirmed live. That is why
+this playbook keeps two scratch `HOME`s and removes both: one for the root-side version checks
+and completion generation, so nothing lands in `/root` (B2), and one owned by uid 65534 for the
+unprivileged checks.
+
+As with [`kind.yml`](#kindyml), these are only as multi-user as the cluster access behind them:
+the playbook installs binaries every account can execute, and an account with no kubeconfig can
+do nothing with them.
+
+### The unprivileged checks do real work offline
+
+- **kubelogin** converts a generated kubeconfig that uses the deprecated Azure `auth-provider`
+  block, and the assertion is on the rewritten file: the `exec` credential plugin and its
+  `get-token` argument must be present **and** `auth-provider` must be gone. No token is
+  requested and nothing is contacted — the placeholders are all-zero GUIDs against
+  `example.invalid`.
+- **k9s** is asked for `k9s info`, which reports the paths it will use for config, logs and
+  benchmarks. It needs no cluster, so it is the one thing a TUI can be asked to do offline that
+  is more than printing a version — and it proves the scratch `HOME` is where its state goes.
+- **kdash** is a TUI with no offline subcommand beyond `--version`, so that is what it gets.
+
+`junit2html`, which this toolset is often paired with for kube-score reports, is **not** here:
+it has its own playbook at [`misc/junit2html.yml`](../misc/README.md#junit2htmlyml), which
+installs it root-owned via pipx rather than into one account's `~/.local`.
+
+Version overrides — one variable per tool:
+
+```bash
+ansible-playbook container/kube-tools.yml -e host=ws01 -e k9s_version=0.51.0
+```
