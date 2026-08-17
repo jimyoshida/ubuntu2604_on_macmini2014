@@ -599,6 +599,57 @@ jira me                      # confirm which account is active
 
 `JIRA_API_TOKEN` is a secret and must never go in `/etc/environment`.
 
+## loki-cli.yml
+
+Installs [logcli](https://grafana.com/docs/loki/latest/query/logcli/), the Grafana Loki CLI,
+as a single static binary from the `grafana/loki` GitHub release.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/logcli` | the binary, root-owned, mode 0755 |
+
+There is no per-user state and nothing added to a shell profile — logcli has no config file
+at all. Endpoint and credentials come from flags or environment variables (`--addr` /
+`LOKI_ADDR`, `LOKI_USERNAME`, `LOKI_PASSWORD`, `LOKI_BEARER_TOKEN`, `LOKI_ORG_ID`), and per
+rules 1 and 2 above this playbook sets none of them: there is no site-wide Loki for this repo
+to name, and the credentials are per-account secrets that must not land in world-readable
+`/etc/environment`.
+
+### How the install is put together
+
+- **The pin** is **3.7.6**, upstream's current release as of 2026-08-17, read from the releases
+  API rather than assumed.
+- **Integrity.** `unarchive` straight from a URL would verify nothing, so the zip is fetched
+  with `get_url` and checked against the `SHA256SUMS` the release publishes for every asset —
+  an unverified 128 MB binary is never installed.
+- **Architecture** comes from `ansible_facts['architecture']`, and an unmapped one fails
+  loudly rather than installing an amd64 binary on arm64.
+- **Cleanup and ownership.** The download is staged under `/var/tmp` (disk, not the
+  size-capped `/tmp` tmpfs on these hosts) and removed once the binary is installed root-owned
+  at mode 0755, so nothing is left behind and the owner is not left to a umask.
+
+### `logcli --version` prints to stderr
+
+kingpin, the flag library logcli uses, writes `--version` output to **stderr** and exits 0.
+Both the idempotency check and the verification therefore read `.stderr`; reading `.stdout`
+matches nothing, which is exactly how the first run of this playbook failed. The comparison is
+against the full `logcli, version <x> ` prefix rather than a bare version substring, so a pin
+of `3.7.6` cannot be satisfied by a hypothetical `3.7.60`.
+
+### The smoke test runs a real query, offline
+
+`logcli query --stdin '<LogQL>'` runs the real LogQL engine over stdin with no server
+involved. The unprivileged check pipes two lines through a line filter and asserts that the
+matching one comes back **and the non-matching one does not** — a binary that merely echoed
+its input would otherwise pass. Query results go to stdout while logcli's `Common labels:`
+banner goes to stderr, so only stdout is asserted on.
+
+Version overrides:
+
+```bash
+ansible-playbook cloud-cli/loki-cli.yml -e host=ws01 -e loki_cli_version=3.7.6
+```
+
 ## opentofu.yml
 
 Installs [OpenTofu](https://opentofu.org/) from the packagecloud-hosted vendor repository.

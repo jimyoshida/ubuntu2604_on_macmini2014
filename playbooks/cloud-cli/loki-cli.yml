@@ -1,0 +1,290 @@
+---
+# Install logcli, the Grafana Loki CLI, system-wide on a multi-user
+# workstation.
+#
+#   /usr/local/bin/logcli   root-owned, mode 0755
+#
+# There is no per-user state and nothing to add to a shell profile: logcli
+# has no config file at all. Everything it needs comes from flags or
+# environment variables (--addr / LOKI_ADDR, LOKI_USERNAME, LOKI_PASSWORD,
+# LOKI_BEARER_TOKEN, LOKI_ORG_ID), and per rule 1 and 2 of cloud-cli's
+# README this playbook sets none of them: the endpoint of a Loki this repo
+# does not deploy is not a site-wide fact, and the credentials belong in each
+# account's own environment rather than in world-readable /etc/environment.
+#
+# The install itself is three things worth stating explicitly:
+#
+# 1. Integrity. `unarchive` straight from a URL would verify nothing, so the
+#    zip is fetched with get_url and checked against the SHA256SUMS file the
+#    release publishes for every asset -- the download fails rather than
+#    installing an unverified 128 MB binary.
+# 2. Architecture. The asset name comes from
+#    ansible_facts['architecture'], and an unmapped architecture fails with a
+#    clear message instead of installing an amd64 binary on arm64.
+# 3. Cleanup and ownership. The download is staged in a per-version directory
+#    under /var/tmp (disk, not the size-capped /tmp tmpfs on these hosts) and
+#    removed once the binary is installed root-owned at mode 0755, so nothing
+#    is left behind and the file's owner is not left to the caller's umask.
+#
+# Unlike mise and ansible, logcli touches no $HOME on any of the commands
+# this playbook runs -- confirmed live with a scratch HOME on both --version
+# and an actual --stdin query -- so the idempotency check may simply run the
+# installed binary.
+#
+# Usage:
+#   ansible-playbook cloud-cli/loki-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/loki-cli.yml -e host=ws01 -e loki_cli_version=3.7.6
+
+- name: Install the Loki CLI (logcli) system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current grafana/loki release as of 2026-08-17, read from the releases
+    # API rather than assumed:
+    #   curl -sS https://api.github.com/repos/grafana/loki/releases/latest \
+    #     | jq -r .tag_name
+    # logcli is versioned and released with Loki itself, so this is a Loki
+    # version number; it does not have to match the version of any Loki
+    # server queried with it.
+    loki_cli_version: "3.7.6"
+    loki_cli_repo: grafana/loki
+    loki_cli_bin: /usr/local/bin/logcli
+    # ansible_facts['architecture'] -> upstream release asset suffix. The
+    # release also carries linux-arm, darwin-* and windows assets; only the
+    # two Linux ones this repo's hosts can run are mapped.
+    loki_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    loki_cli_arch: "{{ loki_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    loki_cli_asset: "logcli-linux-{{ loki_cli_arch }}.zip"
+    # The zip holds one file, named for the platform rather than plain
+    # `logcli`, and there is no top-level directory.
+    loki_cli_archive_member: "logcli-linux-{{ loki_cli_arch }}"
+    loki_cli_base_url: >-
+      https://github.com/{{ loki_cli_repo }}/releases/download/v{{ loki_cli_version }}
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and
+    # the extracted binary is ~128 MB.
+    loki_cli_stage_dir: "/var/tmp/loki-cli-install-{{ loki_cli_version }}"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    loki_cli_verify_uid: 65534    # nobody
+    loki_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # unzip is what ansible's unarchive shells out to for a .zip; without
+      # it task 10 fails on an otherwise correct download.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No logcli release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to loki_cli_arch_map.
+      when: loki_cli_arch | length == 0
+
+    - name: 3. Check the currently installed logcli version
+      # Running the installed binary is safe here -- logcli writes nothing to
+      # $HOME (see the header comment). check_mode: false because this reads
+      # state that already exists; a skipped command registers rc 0 and empty
+      # output, which task 4 would misread as "the pinned version is absent".
+      #
+      # THE VERSION GOES TO STDERR, NOT STDOUT -- kingpin, the flag library
+      # logcli uses, prints --version output there, and it exits 0 doing it.
+      # Confirmed live; reading .stdout here matches nothing at all.
+      ansible.builtin.command: "{{ loki_cli_bin }} --version"
+      register: loki_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether logcli needs installing
+      # `logcli --version` prints "logcli, version 3.7.6 (branch: ...,
+      # revision: ...)", so the pin is compared against that exact prefix
+      # rather than a bare version substring: 3.7.6 would otherwise also
+      # match a hypothetical 3.7.60, and the revision hash is not pinnable.
+      ansible.builtin.set_fact:
+        loki_cli_install_needed: >-
+          {{ ('logcli, version ' ~ loki_cli_version ~ ' ')
+             not in (loki_cli_installed.stderr | default('')) }}
+        loki_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and ('logcli, version ' ~ loki_cli_version ~ ' ')
+                      not in (loki_cli_installed.stderr | default(''))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install logcli {{ loki_cli_version }}, so the
+          version check and the unprivileged query below are skipped rather
+          than failed. Re-run without --check to verify the install.
+      when: not (loki_cli_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ loki_cli_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: loki_cli_install_needed | bool
+
+    - name: 6. Fetch the release's SHA256SUMS file
+      # check_mode: false -- fetching a checksums file changes nothing on the
+      # host, so a dry run still validates the version pin against upstream
+      # rather than skipping and blaming the guard in task 8.
+      ansible.builtin.uri:
+        url: "{{ loki_cli_base_url }}/SHA256SUMS"
+        return_content: true
+      register: loki_cli_checksums
+      check_mode: false
+      when: loki_cli_install_needed | bool
+
+    - name: 7. Extract the expected checksum for this asset
+      # SHA256SUMS covers every asset in the release -- rpm, deb, zip, each
+      # platform -- so the entry is selected by exact asset name. The
+      # optional directory prefix is the same allowance influx-cli.yml makes:
+      # cheap here, and the difference between a working playbook and a
+      # confusing failure if upstream ever republishes with paths.
+      ansible.builtin.set_fact:
+        loki_cli_sha256: >-
+          {{ (loki_cli_checksums.content | default('')
+              | regex_search('(?m)^([0-9a-f]{64})\s+(?:\S*/)?' ~ (loki_cli_asset | regex_escape) ~ '$', '\1')
+              | first | default('')) }}
+      when: loki_cli_install_needed | bool
+
+    - name: 8. Fail if SHA256SUMS does not describe this asset
+      ansible.builtin.fail:
+        msg: >-
+          The SHA256SUMS for v{{ loki_cli_version }} has no entry for
+          {{ loki_cli_asset }}. Check the version pin and the asset naming
+          against the release page.
+      when:
+        - loki_cli_install_needed | bool
+        - (loki_cli_sha256 | default('')) | length != 64
+
+    - name: 9. Download the logcli archive and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check. Not under --check: get_url is
+      # not skipped in check mode and would validate a destination directory
+      # task 5 has not really created.
+      ansible.builtin.get_url:
+        url: "{{ loki_cli_base_url }}/{{ loki_cli_asset }}"
+        dest: "{{ loki_cli_stage_dir }}/{{ loki_cli_asset }}"
+        checksum: "sha256:{{ loki_cli_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - loki_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Unpack the archive
+      ansible.builtin.unarchive:
+        src: "{{ loki_cli_stage_dir }}/{{ loki_cli_asset }}"
+        dest: "{{ loki_cli_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - loki_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Install the logcli binary
+      # The archive member carries the platform in its name; the installed
+      # command is plain `logcli`.
+      ansible.builtin.copy:
+        src: "{{ loki_cli_stage_dir }}/{{ loki_cli_archive_member }}"
+        dest: "{{ loki_cli_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - loki_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ loki_cli_stage_dir }}"
+        state: absent
+
+    - name: 13. Verify the installed logcli version
+      ansible.builtin.command: "{{ loki_cli_bin }} --version"
+      register: loki_cli_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('logcli, version ' ~ loki_cli_version ~ ' ')
+        not in loki_cli_version_out.stderr
+      when: loki_cli_can_verify | bool
+
+    - name: 14. Run a LogQL query as an unprivileged user
+      # Stronger than --version: `query --stdin` runs the real LogQL engine
+      # over stdin with no server involved, so this exercises the parser and
+      # the line filter offline. Both halves of the assertion matter -- the
+      # matching line must come back and the non-matching one must not, or a
+      # binary that merely echoed its input would pass.
+      #
+      # logcli writes its "Common labels:" banner to stderr and query results
+      # to stdout, so only stdout is asserted on.
+      ansible.builtin.shell:
+        cmd: >-
+          printf 'hello world\nsecond line\n' |
+          setpriv --reuid={{ loki_cli_verify_uid }} --regid={{ loki_cli_verify_gid }} --clear-groups
+          {{ loki_cli_bin }} query --stdin '{job="smoke"} |= "hello"'
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: loki_cli_smoke
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        'hello world' not in loki_cli_smoke.stdout
+        or 'second line' in loki_cli_smoke.stdout
+      when: loki_cli_can_verify | bool
+
+    - name: 15. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          # Continuation lines sit at the same indentation as the first, not
+          # deeper: a more-indented line inside a YAML folded scalar keeps its
+          # newline instead of folding to a space, which put a line break in
+          # the middle of this sentence when it was written the other way.
+          - >-
+            {{ loki_cli_version_out.stderr_lines[0]
+            | default('logcli ' ~ loki_cli_version) | trim }}
+            installed system-wide.
+          - ""
+          - "  {{ loki_cli_bin }} ({{ loki_cli_arch }})"
+          - ""
+          - >-
+            {{ loki_cli_can_verify | bool
+               | ternary('Verified by running a real LogQL query as an unprivileged user (uid '
+                         ~ loki_cli_verify_uid ~ '), offline through --stdin.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "This installs the client only -- no Loki server runs here, and no"
+          - "endpoint or credential is configured for anyone. Each account sets"
+          - "its own, per cloud-cli's README:"
+          - ""
+          - "  export LOKI_ADDR=https://loki.example.internal   # or --addr=<url>"
+          - "  export LOKI_USERNAME=... LOKI_PASSWORD=...       # or LOKI_BEARER_TOKEN"
+          - "  export LOKI_ORG_ID=...                           # multi-tenant Loki"
+          - ""
+          - "Usage:"
+          - "  logcli labels                                  # list label names"
+          - "  logcli query '{job=\"varlogs\"}' --limit=50      # query a server"
+          - "  logcli query --tail '{job=\"varlogs\"}'          # follow live"
+          - "  cat app.log | logcli query --stdin '{j=\"x\"} |= \"ERROR\"'   # offline"

@@ -29,9 +29,9 @@ installed once is usable by every account on a **shared** workstation. Run again
 | Directory | Description |
 |-----------|-------------|
 | [playbooks/misc/](playbooks/misc/README.md) | Developer tools (bats, gomplate, grype-syft, hadolint, jsonnet, junit2html, kube-score, plantuml, trivy) |
-| [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, tofu, promtool/amtool, vault) |
+| [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (aws, az, az devops, gcloud, gcx, gh, glab, influx, jenkins, jira, logcli, tofu, promtool/amtool, vault) |
 | [playbooks/container/](playbooks/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers) |
-| [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise |
+| [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise, ansible-core |
 
 One thing to know before running `container/docker.yml`: it grants **no** account access to the
 Docker socket unless you name them in `docker_users` — membership of that group is equivalent to
