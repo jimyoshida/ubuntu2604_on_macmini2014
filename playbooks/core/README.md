@@ -55,14 +55,19 @@ found in `gcx-cli.yml`, here triggered by `git` itself rather than the tool bein
 
 ## nodejs.yml
 
-Installs Node.js LTS from the NodeSource apt repository, plus Yarn Classic and pnpm as real
-npm-global packages.
+Installs Node.js LTS from the NodeSource apt repository, plus Yarn Classic, pnpm and two audit
+report renderers as real npm-global packages.
 
 | Path | Contents |
 | --- | --- |
 | `/usr/bin/node`, `/usr/bin/npm`, `/usr/bin/npx` | from the NodeSource `nodejs` package |
 | `/usr/bin/yarn`, `/usr/bin/pnpm` | real npm-global installs |
+| `/usr/bin/audit-export`, `/usr/bin/yarn-audit-html` | npm-global installs — render `npm`/`yarn audit --json` as HTML |
 | `/etc/apt/sources.list.d/nodesource.sources` | repository definition, NodeSource's key inline |
+
+Every npm-global package comes from one list (`nodejs_npm_globals`), which drives the install,
+the per-package `npm ls` pin check and the world-readable pass alike, so adding one is a single
+list entry.
 
 **The Yarn/pnpm handling is the tricky part here.** NodeSource's `nodejs` package bundles
 Corepack, which ships `/usr/bin/yarn` and `/usr/bin/pnpm` as its own dispatcher shims from
@@ -80,6 +85,29 @@ non-deterministic download this playbook exists to prevent; it resolves the bina
 npm's own install metadata (`npm ls -g <pkg>@<version>`) rather than executing the binary at
 all. Only once that confirms a real npm-managed install does the playbook invoke
 `yarn --version` / `pnpm --version`, for the summary and the unprivileged smoke test.
+
+### The audit report renderers
+
+`audit-export` renders `npm audit --json` (it also accepts pnpm's and yarn's) and
+`yarn-audit-html` renders `yarn audit --json` and Berry's `yarn npm audit --json`. Each is
+verified by feeding it a synthetic advisory and asserting the module name survives into the
+report — proof it parsed the input rather than emitting a template.
+
+**`audit-export` embeds its findings base64-encoded** in the page rather than as markup, so its
+check decodes the payload before asserting on it. Grepping the HTML for a package name finds
+nothing even when the report is perfectly good — worth knowing before writing a check against
+it. `yarn-audit-html` needs no such decoding, but it does need `npm ls` rather than `--version`
+for its pin check, because it implements no `--version` flag at all (`error: unknown option
+'--version'`).
+
+**`npm-audit-html` is deliberately not installed**, and the reason is recorded so nobody adds it
+back by reflex. Its templates read the `advisories` key of npm v6's audit JSON; npm 7 replaced
+that with `auditReportVersion: 2` and a `vulnerabilities` map, and the package has had no
+release since 2020-11-11. Measured here before it was dropped: a real `npm audit --json` for a
+project with a **critical** lodash advisory rendered to a report **byte-for-byte identical** to
+one rendered from an empty audit, with no mention of lodash in it. It installs, it runs, and it
+reports nothing — worse than not having it. `audit-export` reads the same audit correctly, which
+is why it takes that place.
 
 Repository setup uses a declarative `deb822_repository`: NodeSource's signing key carries no
 expiry, so it is pinned by content inline (the `docker.yml`/`azure-cli.yml` form), and

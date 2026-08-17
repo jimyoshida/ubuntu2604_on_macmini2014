@@ -42,6 +42,26 @@
 # `yarn --version` / `pnpm --version` run, for the human-readable summary and
 # the unprivileged smoke test.
 #
+# AUDIT REPORT RENDERERS: audit-export and yarn-audit-html, and NOT
+# npm-audit-html. The last of those is the obvious npm-side choice and is
+# deliberately absent, which is worth recording so nobody adds it back by
+# reflex: its templates read the `advisories` key of npm v6's audit JSON, npm
+# 7 replaced that with `auditReportVersion: 2` and a `vulnerabilities` map,
+# and the package has had no release since 2020-11-11. Measured on this host
+# before it was dropped -- a real `npm audit --json` for a project with a
+# CRITICAL lodash advisory rendered to a report BYTE-FOR-BYTE IDENTICAL to
+# one rendered from an empty audit, with no mention of lodash anywhere in it.
+# It installs, it runs, and it reports nothing, which is worse than not
+# having it at all.
+#
+# audit-export takes that place instead, and does read npm 7+'s format: the
+# same lodash audit renders to a report whose payload names the package, the
+# advisory and its GHSA link. It embeds that payload BASE64-ENCODED in the
+# page rather than as markup, so task 25 decodes it before asserting on it --
+# grepping the HTML for a package name finds nothing even when the report is
+# perfectly good. yarn-audit-html covers the Yarn side and needs no such
+# decoding; task 26 carries a synthetic advisory through to its HTML.
+#
 # Usage:
 #   ansible-playbook core/nodejs.yml -e host=<inventory host or group>
 #   ansible-playbook core/nodejs.yml -e host=ws01 -e nodejs_version=24.19.0-1nodesource1
@@ -113,6 +133,13 @@
     # and pnpm, both as real npm-global installs -- see the header comment.
     yarn_version: "1.22.22"
     pnpm_version: "11.21.0"
+    # Audit-report renderers: plain npm-global CLIs with no Corepack
+    # entanglement, installed by the same mechanism as everything else here.
+    # They turn `npm audit --json` / `yarn audit --json` output into readable
+    # HTML, which is what makes them worth having on a workstation rather
+    # than only in CI.
+    audit_export_version: "5.1.5"
+    yarn_audit_html_version: "7.3.2"
     # Corepack installs one shim per package-manager ENTRY POINT, not one per
     # package manager: Yarn Classic also ships `yarnpkg`, pnpm also ships
     # `pnpx`. Cleaning only yarn/pnpm leaves the others behind and npm's
@@ -121,12 +148,22 @@
     # NodeSource's own binary, and its symlink target contains "corepack" too,
     # so including it here would delete a working part of the nodejs package.
     nodejs_corepack_shim_names: [yarn, yarnpkg, pnpm, pnpx]
-    # Checked one package per `npm ls` call, never both in one -- see task 15.
+    # Every package this playbook installs globally with npm. Checked one
+    # package per `npm ls` call, never several in one -- see task 15.
     nodejs_npm_globals:
       - name: yarn
         version: "{{ yarn_version }}"
       - name: pnpm
         version: "{{ pnpm_version }}"
+      - name: audit-export
+        version: "{{ audit_export_version }}"
+      - name: yarn-audit-html
+        version: "{{ yarn_audit_html_version }}"
+    # The same list as one `name@version ...` string for npm install.
+    nodejs_npm_specs: >-
+      {{ nodejs_npm_globals | map(attribute='name')
+         | zip(nodejs_npm_globals | map(attribute='version'))
+         | map('join', '@') | join(' ') }}
     nodejs_smoke_home: /var/tmp/nodejs-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
     nodejs_verify_uid: 65534    # nobody
@@ -318,7 +355,10 @@
       failed_when: false
       when: nodejs_can_verify | bool
 
-    - name: 16. Decide whether Yarn/pnpm need (re)installing
+    - name: 16. Decide whether the npm-global packages need (re)installing
+      # One decision for all of them, because one `npm install -g` installs
+      # them all: a missing audit renderer therefore also runs task 17's
+      # `corepack disable`, which is a no-op when there is no shim to remove.
       ansible.builtin.set_fact:
         nodejs_yarn_pnpm_install_needed: >-
           {{ 'corepack' in (nodejs_corepack_check.stdout | default(''))
@@ -372,15 +412,19 @@
         - item.stat.islnk | default(false)
         - "'corepack' in (item.stat.lnk_source | default(''))"
 
-    - name: 18. Install pinned Yarn and pnpm via npm as root
+    - name: 18. Install the pinned npm-global packages as root
       # The mechanism core/markdownlint.yml already established for a
-      # root-owned global npm install (decision-order mechanism 6).
-      ansible.builtin.command: "npm install -g yarn@{{ yarn_version }} pnpm@{{ pnpm_version }}"
+      # root-owned global npm install (decision-order mechanism 6). One
+      # invocation for the whole list, built from nodejs_npm_globals so
+      # adding a package means adding a list entry and nothing else.
+      ansible.builtin.command: "npm install -g {{ nodejs_npm_specs }}"
       when:
         - nodejs_can_verify | bool
         - nodejs_yarn_pnpm_install_needed | bool
 
-    - name: 19. Verify yarn and pnpm are real npm-managed packages, not Corepack shims
+    - name: 19. Verify every package is a real npm-managed install at its pin
+      # For yarn and pnpm this is also what proves they are not Corepack
+      # shims: a shim is not an npm-managed package at all.
       ansible.builtin.command:
         cmd: "npm ls -g {{ item.name }}@{{ item.version }} --depth=0"
       loop: "{{ nodejs_npm_globals }}"
@@ -401,9 +445,7 @@
         group: root
         mode: 'u=rwX,go=rX'
         recurse: true
-      loop:
-        - yarn
-        - pnpm
+      loop: "{{ nodejs_npm_globals | map(attribute='name') | list }}"
       when: nodejs_can_verify | bool
 
     - name: 21. Create a scratch HOME for the unprivileged checks
@@ -431,11 +473,16 @@
           setpriv --reuid={{ nodejs_verify_uid }} --regid={{ nodejs_verify_gid }} --clear-groups
           env HOME={{ nodejs_smoke_home }} {{ item.bin }} --version
         chdir: "{{ nodejs_smoke_home }}"
+      #
+      # yarn-audit-html is absent from this loop on purpose: it implements no
+      # --version flag at all ("error: unknown option '--version'"), so task
+      # 19's npm ls is what pins it and task 26 is what exercises it.
       register: nodejs_smoke_versions
       loop:
         - { name: node, bin: node, expect: "{{ nodejs_version.split('-')[0] }}" }
         - { name: yarn, bin: "{{ nodejs_yarn_bin }}", expect: "{{ yarn_version }}" }
         - { name: pnpm, bin: "{{ nodejs_pnpm_bin }}", expect: "{{ pnpm_version }}" }
+        - { name: audit-export, bin: audit-export, expect: "{{ audit_export_version }}" }
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
@@ -457,13 +504,78 @@
       failed_when: nodejs_smoke_npm_install.rc != 0
       when: nodejs_can_verify | bool
 
-    - name: 24. Remove the scratch HOME
+    - name: 24. Write audit reports for the renderers to convert
+      # Synthetic rather than real audits: the input is then fixed and
+      # offline, and each carries a known advisory whose module name must
+      # survive into the rendered report. The npm one is in npm 7+'s
+      # auditReportVersion 2 shape, which is what this host's npm emits.
+      ansible.builtin.copy:
+        dest: "{{ nodejs_smoke_home }}/{{ item.name }}"
+        owner: "{{ nodejs_verify_uid }}"
+        group: "{{ nodejs_verify_gid }}"
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: npm-audit.json
+          content: |
+            {"auditReportVersion":2,"vulnerabilities":{"smoke-pkg":{"name":"smoke-pkg","severity":"high","isDirect":true,"via":[{"source":1,"name":"smoke-pkg","dependency":"smoke-pkg","title":"Smoke advisory","url":"https://example.invalid/1","severity":"high","cwe":["CWE-000"],"cvss":{"score":7.5,"vectorString":null},"range":"<1.0.0"}],"effects":[],"range":"<1.0.0","nodes":["node_modules/smoke-pkg"],"fixAvailable":true}},"metadata":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":1,"critical":0,"total":1},"dependencies":{"prod":1,"dev":0,"optional":0,"peer":0,"peerOptional":0,"total":1}}}
+        - name: yarn-audit.json
+          content: |
+            {"type":"auditAdvisory","data":{"resolution":{"id":1,"path":"smoke-pkg","dev":false,"optional":false,"bundled":false},"advisory":{"id":1,"title":"Smoke advisory","module_name":"smoke-pkg","severity":"high","vulnerable_versions":"<1.0.0","patched_versions":">=1.0.0","cves":[],"cwe":"CWE-000","url":"https://example.invalid/1","findings":[{"version":"0.9.0","paths":["smoke-pkg"]}],"created":"2026-01-01T00:00:00.000Z","updated":"2026-01-01T00:00:00.000Z","recommendation":"Upgrade","overview":"smoke"}}}
+            {"type":"auditSummary","data":{"vulnerabilities":{"info":0,"low":0,"moderate":0,"high":1,"critical":0},"dependencies":1,"devDependencies":0,"optionalDependencies":0,"totalDependencies":1}}
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: false
+      when: nodejs_can_verify | bool
+
+    - name: 25. Render an npm audit report as an unprivileged user
+      # audit-export embeds its findings as base64 in the page, so the check
+      # decodes the payload before looking for the advisory: grepping the
+      # HTML itself for "smoke-pkg" finds nothing even when the report is
+      # perfectly good. Decoding is also what proves the renderer read npm
+      # 7+'s schema rather than quietly producing an empty report.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ nodejs_verify_uid }} --regid={{ nodejs_verify_gid }} --clear-groups
+          env HOME={{ nodejs_smoke_home }} bash -c
+          'cat {{ nodejs_smoke_home }}/npm-audit.json
+          | audit-export --path {{ nodejs_smoke_home }}/npm-audit.html'
+          && grep -oE '[A-Za-z0-9+/=]{200,}' {{ nodejs_smoke_home }}/npm-audit.html
+          | head -1 | base64 -d
+        chdir: "{{ nodejs_smoke_home }}"
+      register: nodejs_smoke_audit_export
+      changed_when: false
+      failed_when: >-
+        'smoke-pkg' not in nodejs_smoke_audit_export.stdout
+        or 'Smoke advisory' not in nodejs_smoke_audit_export.stdout
+      when: nodejs_can_verify | bool
+
+    - name: 26. Render a yarn audit report as an unprivileged user
+      # The real check of the pair: the advisory written above must survive
+      # into the HTML, so this proves yarn-audit-html parsed its input rather
+      # than emitting a template.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ nodejs_verify_uid }} --regid={{ nodejs_verify_gid }} --clear-groups
+          env HOME={{ nodejs_smoke_home }} bash -c
+          'cat {{ nodejs_smoke_home }}/yarn-audit.json
+          | yarn-audit-html --output {{ nodejs_smoke_home }}/yarn-audit.html'
+          && grep -c smoke-pkg {{ nodejs_smoke_home }}/yarn-audit.html
+        chdir: "{{ nodejs_smoke_home }}"
+      register: nodejs_smoke_yarn_audit_html
+      changed_when: false
+      failed_when: >-
+        'Found 1 vulnerabilities' not in nodejs_smoke_yarn_audit_html.stdout
+        or (nodejs_smoke_yarn_audit_html.stdout_lines | last | int) < 1
+      when: nodejs_can_verify | bool
+
+    - name: 27. Remove the scratch HOME
       ansible.builtin.file:
         path: "{{ nodejs_smoke_home }}"
         state: absent
       check_mode: false
 
-    - name: 25. Display installation summary
+    - name: 28. Display installation summary
       # A real Jinja list handed to msg, not a string joined on a literal
       # '\n' -- confirmed at run time that '\n' inside a >- folded scalar
       # never reaches Jinja as an escape, so a join('\n') here would have
