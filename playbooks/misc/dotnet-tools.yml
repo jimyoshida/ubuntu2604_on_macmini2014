@@ -1,0 +1,377 @@
+---
+# Install the .NET global tools system-wide on a multi-user workstation.
+#
+#   /usr/local/lib/dotnet-tools/   the tools, installed with --tool-path
+#   /usr/local/bin/<command>       a wrapper per command (see below)
+#
+# The .NET SDK is a prerequisite, provisioned by core/dotnet.yml. This
+# playbook only checks for it and fails with that instruction if it is
+# missing -- the same shape core/markdownlint.yml uses for Node.js.
+#
+# WHY WRAPPERS RATHER THAN --tool-path /usr/local/bin. A dotnet global tool
+# is framework-dependent: it asks for the exact .NET major version it was
+# built against, and Ubuntu 26.04 ships only .NET 10. Measured here:
+# Microsoft.PSRule.Tool 2.9.0 asks for Microsoft.NETCore.App 6.0.0 and dies
+# with "You must install or update .NET to run this application" even though
+# 10.0.10 is installed; its 3.0.0 prerelease asks for 8.0.0 and dies the same
+# way. Setting DOTNET_ROLL_FORWARD=Major makes it run on 10 -- confirmed,
+# `ps-rule --version` then answers 2.9.0.
+#
+# That variable belongs to the tool, not to the host: exporting it in
+# /etc/environment would change how EVERY .NET application on the machine
+# resolves its runtime. So the tools live in their own --tool-path and each
+# published command is a small wrapper that sets the variable for that one
+# process, honouring an account's own DOTNET_ROLL_FORWARD if it has set one.
+# The wrappers are the jenkins-cli.yml shape, for the same reason: a fixed
+# argument that has to be there every time belongs in one file, not in
+# everyone's shell profile.
+#
+# Per-user state: none is created here. The tools themselves are root-owned
+# and read-only to everyone else; running one writes into that account's own
+# ~/.dotnet and ~/.nuget, and PSRule's module cache (`ps-rule module add`)
+# likewise lands under the account that runs it. This playbook adds no
+# modules for anyone -- which module set a project needs is the project's
+# decision, not the workstation's.
+#
+# Usage:
+#   ansible-playbook misc/dotnet-tools.yml -e host=<inventory host or group>
+#   ansible-playbook misc/dotnet-tools.yml -e host=ws01 -e sqlpackage_version=170.4.83
+
+- name: Install the .NET global tools system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current stable releases on nuget.org as of 2026-08-17:
+    #   curl -sS https://api.nuget.org/v3-flatcontainer/<id>/index.json | jq -r '.versions[-1]'
+    # Prereleases are deliberately not tracked: PSRule's 3.0.0-b0783 needs a
+    # runtime this host does not have either (see the header), so it buys
+    # nothing here.
+    sqlpackage_version: "170.4.83"
+    dotnet_xdt_version: "2.2.1"
+    dotnet_sonarscanner_version: "11.2.1"
+    psrule_tool_version: "2.9.0"
+    dotnet_bin: /usr/bin/dotnet
+    dotnet_tools_path: /usr/local/lib/dotnet-tools
+    dotnet_tools_bin_dir: /usr/local/bin
+    dotnet_tools:
+      - package: microsoft.sqlpackage
+        version: "{{ sqlpackage_version }}"
+        command: sqlpackage
+        # sqlpackage reports a four-part version (170.4.83.3), so the pin is
+        # matched as a prefix rather than in full.
+        version_args: "/version"
+      - package: dotnet-xdt
+        version: "{{ dotnet_xdt_version }}"
+        command: dotnet-xdt
+        # No version flag at all: `dotnet-xdt --version` answers "Invalid
+        # argument". Task 16's real transform is what exercises it, and
+        # `dotnet tool list` is what pins it.
+        version_args: ""
+      - package: dotnet-sonarscanner
+        version: "{{ dotnet_sonarscanner_version }}"
+        command: dotnet-sonarscanner
+        version_args: "--help"
+      - package: Microsoft.PSRule.Tool
+        version: "{{ psrule_tool_version }}"
+        command: ps-rule
+        version_args: "--version"
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and a
+    # tool install fills a NuGet cache under the scratch HOME.
+    dotnet_tools_root_home: /var/tmp/dotnet-tools-root-home
+    dotnet_tools_smoke_dir: /var/tmp/dotnet-tools-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    dotnet_tools_verify_uid: 65534    # nobody
+    dotnet_tools_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that the .NET SDK is present
+      ansible.builtin.stat:
+        path: "{{ dotnet_bin }}"
+      register: dotnet_tools_sdk_stat
+      check_mode: false
+
+    - name: 2. Fail with the prerequisite if the SDK is missing
+      ansible.builtin.fail:
+        msg: >-
+          {{ dotnet_bin }} is not installed, and every tool here is a dotnet
+          global tool. Run core/dotnet.yml against this host first:
+          ansible-playbook core/dotnet.yml -e host={{ inventory_hostname }}
+      when: not dotnet_tools_sdk_stat.stat.exists
+
+    - name: 3. Create the tool path and the root-side scratch HOME
+      # The scratch HOME is not tidiness: `dotnet tool` writes ~/.dotnet,
+      # ~/.nuget and ~/.local wherever HOME points -- confirmed live -- and
+      # under root that would be /root, which B2 forbids.
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ dotnet_tools_path }}", mode: '0755' }
+        - { path: "{{ dotnet_tools_root_home }}", mode: '0700' }
+      loop_control:
+        label: "{{ item.path }}"
+      check_mode: false
+
+    - name: 4. Read the tools already installed at this tool path
+      ansible.builtin.command:
+        cmd: "{{ dotnet_bin }} tool list --tool-path {{ dotnet_tools_path }}"
+      environment: &dotnet_env
+        HOME: "{{ dotnet_tools_root_home }}"
+        DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+        DOTNET_NOLOGO: "1"
+      register: dotnet_tools_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Decide which tools need installing
+      # `dotnet tool list` prints a three-column table; a tool is at its pin
+      # when its package id and version appear on the same line. Package ids
+      # are compared lowercased because dotnet stores them that way whatever
+      # case they were installed with (Microsoft.PSRule.Tool becomes
+      # microsoft.psrule.tool).
+      ansible.builtin.set_fact:
+        dotnet_tools_pending: >-
+          {{ dotnet_tools_pending | default([])
+             + ([item]
+                if (dotnet_tools_installed.stdout | default('') | lower)
+                   is not search('^' ~ (item.package | lower | regex_escape)
+                                 ~ '\s+' ~ (item.version | regex_escape) ~ '\s', multiline=True)
+                else []) }}
+      loop: "{{ dotnet_tools }}"
+      loop_control:
+        label: "{{ item.package }} {{ item.version }}"
+
+    - name: 6. Decide whether this run can verify
+      ansible.builtin.set_fact:
+        dotnet_tools_can_verify: >-
+          {{ not (ansible_check_mode and (dotnet_tools_pending | length > 0)) }}
+
+    - name: 6a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install
+          {{ dotnet_tools_pending | map(attribute='package') | join(', ') }},
+          so the version checks and the unprivileged transform below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (dotnet_tools_can_verify | bool)
+
+    - name: 7. Install each tool at its pinned version
+      # `dotnet tool update`, not `install`: update installs a tool that is
+      # absent, moves one that is at another version, and does nothing when
+      # it is already at the pin -- one command for all three cases, all
+      # exiting 0. `install` refuses an existing tool.
+      ansible.builtin.command:
+        cmd: >-
+          {{ dotnet_bin }} tool update {{ item.package }}
+          --version {{ item.version }} --tool-path {{ dotnet_tools_path }}
+      environment: *dotnet_env
+      loop: "{{ dotnet_tools_pending | default([]) }}"
+      loop_control:
+        label: "{{ item.package }} {{ item.version }}"
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: 8. Make the tool tree world-readable
+      # dotnet installs with root's umask; 'X' only adds the execute bit to
+      # directories and already-executable files, which is what keeps the
+      # tool binaries runnable and the DLLs beside them merely readable.
+      ansible.builtin.file:
+        path: "{{ dotnet_tools_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 9. Publish each command as a wrapper on PATH
+      # DOTNET_ROLL_FORWARD is set here rather than in /etc/environment so it
+      # applies to these tools alone: see the header on PSRule asking for a
+      # .NET 6 runtime this host does not have. An account that has set the
+      # variable itself keeps its own value.
+      ansible.builtin.copy:
+        dest: "{{ dotnet_tools_bin_dir }}/{{ item.command }}"
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          # {{ item.package }} {{ item.version }}, installed by misc/dotnet-tools.yml.
+          # DOTNET_ROLL_FORWARD lets a tool built for an older .NET major run
+          # on the runtime this host actually has.
+          DOTNET_ROLL_FORWARD="${DOTNET_ROLL_FORWARD:-Major}"
+          export DOTNET_ROLL_FORWARD
+          exec {{ dotnet_tools_path }}/{{ item.command }} "$@"
+      loop: "{{ dotnet_tools }}"
+      loop_control:
+        label: "{{ item.command }}"
+
+    - name: 10. Verify every tool is installed at its pinned version
+      # The root-side scratch HOME is still in place for this, and is removed
+      # after it: dotnet refuses to run at all when HOME points at a
+      # directory that does not exist -- "The user's home directory could not
+      # be determined. Set the 'DOTNET_CLI_HOME' environment variable" -- so
+      # a check pointed at the not-yet-created unprivileged scratch fails
+      # before it reads anything.
+      ansible.builtin.command:
+        cmd: "{{ dotnet_bin }} tool list --tool-path {{ dotnet_tools_path }}"
+      environment: *dotnet_env
+      register: dotnet_tools_list_verify
+      changed_when: false
+      check_mode: false
+      when: dotnet_tools_can_verify | bool
+
+    - name: 11. Assert the pinned versions are what is installed
+      ansible.builtin.assert:
+        that:
+          - (dotnet_tools_list_verify.stdout | lower)
+            is search('^' ~ (item.package | lower | regex_escape)
+                      ~ '\s+' ~ (item.version | regex_escape) ~ '\s', multiline=True)
+        fail_msg: >-
+          {{ item.package }} is not at {{ item.version }} in
+          {{ dotnet_tools_path }}:
+          {{ dotnet_tools_list_verify.stdout | default('') }}
+        success_msg: "{{ item.package }} {{ item.version }}"
+      loop: "{{ dotnet_tools }}"
+      loop_control:
+        label: "{{ item.package }} {{ item.version }}"
+      when: dotnet_tools_can_verify | bool
+
+    - name: 12. Remove the root-side scratch HOME
+      ansible.builtin.file:
+        path: "{{ dotnet_tools_root_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 13. Create the scratch directory for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ dotnet_tools_smoke_dir }}"
+        state: directory
+        owner: "{{ dotnet_tools_verify_uid }}"
+        group: "{{ dotnet_tools_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: dotnet_tools_can_verify | bool
+
+    - name: 14. Run each tool that names its version as an unprivileged user
+      # Through the wrapper on PATH, not the tool path directly: that is what
+      # every account will use, and it is what carries DOTNET_ROLL_FORWARD.
+      # dotnet-xdt is absent from this loop because it has no version flag;
+      # task 15 exercises it for real instead.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ dotnet_tools_verify_uid }} --regid={{ dotnet_tools_verify_gid }} --clear-groups
+          env HOME={{ dotnet_tools_smoke_dir }}
+          DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+          {{ dotnet_tools_bin_dir }}/{{ item.command }} {{ item.version_args }}
+        chdir: "{{ dotnet_tools_smoke_dir }}"
+      register: dotnet_tools_smoke_versions
+      loop: "{{ dotnet_tools | selectattr('version_args', 'ne', '') | list }}"
+      loop_control:
+        label: "{{ item.command }}"
+      changed_when: false
+      check_mode: false
+      failed_when: item.version not in dotnet_tools_smoke_versions.stdout
+      when: dotnet_tools_can_verify | bool
+
+    - name: 15. Write the XML the transform check will read
+      ansible.builtin.copy:
+        dest: "{{ dotnet_tools_smoke_dir }}/{{ item.name }}"
+        owner: "{{ dotnet_tools_verify_uid }}"
+        group: "{{ dotnet_tools_verify_gid }}"
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: app.config
+          content: |
+            <?xml version="1.0"?>
+            <configuration>
+              <appSettings>
+                <add key="env" value="dev"/>
+              </appSettings>
+            </configuration>
+        - name: app.prod.config
+          content: |
+            <?xml version="1.0"?>
+            <configuration xmlns:xdt="http://schemas.microsoft.com/XML-Document-Transform">
+              <appSettings>
+                <add key="env" value="prod" xdt:Transform="SetAttributes" xdt:Locator="Match(key)"/>
+              </appSettings>
+            </configuration>
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: false
+      when: dotnet_tools_can_verify | bool
+
+    - name: 16. Transform an XML document with dotnet-xdt as an unprivileged user
+      # Real work, entirely offline: XDT applies the transform and the value
+      # in the output must have changed from dev to prod. A dotnet-xdt that
+      # copied its input unchanged cannot pass.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ dotnet_tools_verify_uid }} --regid={{ dotnet_tools_verify_gid }} --clear-groups
+          env HOME={{ dotnet_tools_smoke_dir }}
+          DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+          {{ dotnet_tools_bin_dir }}/dotnet-xdt
+          -s {{ dotnet_tools_smoke_dir }}/app.config
+          -t {{ dotnet_tools_smoke_dir }}/app.prod.config
+          -o {{ dotnet_tools_smoke_dir }}/app.out.config
+          && cat {{ dotnet_tools_smoke_dir }}/app.out.config
+        chdir: "{{ dotnet_tools_smoke_dir }}"
+      register: dotnet_tools_smoke_xdt
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        'value="prod"' not in dotnet_tools_smoke_xdt.stdout
+        or 'value="dev"' in dotnet_tools_smoke_xdt.stdout
+      when: dotnet_tools_can_verify | bool
+
+    - name: 17. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ dotnet_tools_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 18. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['.NET global tools installed system-wide:']
+             + (dotnet_tools | map(attribute='package') | list
+                | zip(dotnet_tools | map(attribute='version') | list)
+                | map('join', ' ')
+                | map('regex_replace', '^', '  ')
+                | list)
+             + ['',
+                '  ' ~ dotnet_tools_path ~ '   the tools themselves',
+                '  ' ~ dotnet_tools_bin_dir ~ '/{'
+                ~ (dotnet_tools | map(attribute='command') | join(',')) ~ '}   wrappers',
+                '',
+                (dotnet_tools_can_verify | bool)
+                | ternary('Verified as an unprivileged user (uid ' ~ dotnet_tools_verify_uid
+                          ~ '): each tool that names its version reported the pinned one,'
+                          ~ ' and dotnet-xdt applied a real XML transform offline.',
+                          'Not verified: this was a --check run against a host without these versions.'),
+                '',
+                'Each command on PATH is a wrapper that sets DOTNET_ROLL_FORWARD=Major,',
+                'so a tool built for an older .NET major runs on the runtime this host',
+                'has. Set that variable yourself to override it.',
+                '',
+                'No PSRule modules are installed for anyone: `ps-rule module add` writes',
+                "into the running account's own home, and which modules a project needs",
+                "is the project's decision.",
+                '',
+                'Usage:',
+                '  sqlpackage /Action:Extract /SourceConnectionString:...   # .dacpac from a DB',
+                '  dotnet-xdt -s app.config -t app.prod.config -o out.config',
+                '  dotnet-sonarscanner begin /k:"project-key"               # then build, then end',
+                '  ps-rule module add PSRule.Rules.Azure                    # per account',
+                '  ps-rule analyze --input-path .'] }}
+      when: dotnet_tools_can_verify | bool

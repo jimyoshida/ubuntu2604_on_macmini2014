@@ -815,3 +815,70 @@ Version overrides:
 ```bash
 ansible-playbook misc/dvc.yml -e host=ws01 -e dvc_version=3.67.1
 ```
+
+## dotnet-tools.yml
+
+Installs four .NET global tools, root-owned, with the .NET SDK from
+[`core/dotnet.yml`](../core/README.md#dotnetyml) as a prerequisite — this playbook only checks
+for it and fails with that instruction if it is missing, the shape
+[`core/markdownlint.yml`](../core/README.md#markdownlintyml) uses for Node.js.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/dotnet-tools/` | the tools, installed with `--tool-path` |
+| `/usr/local/bin/sqlpackage`, `dotnet-xdt`, `dotnet-sonarscanner`, `ps-rule` | one wrapper per command |
+
+| Tool | Package | Version |
+| --- | --- | --- |
+| `sqlpackage` | `microsoft.sqlpackage` | 170.4.83 |
+| `dotnet-xdt` | `dotnet-xdt` | 2.2.1 |
+| `dotnet-sonarscanner` | `dotnet-sonarscanner` | 11.2.1 |
+| `ps-rule` | `Microsoft.PSRule.Tool` | 2.9.0 |
+
+### Why wrappers rather than `--tool-path /usr/local/bin`
+
+A dotnet global tool is framework-dependent: it asks for the exact .NET major version it was
+built against, and Ubuntu 26.04 ships only .NET 10. Measured here:
+
+- **`Microsoft.PSRule.Tool` 2.9.0 asks for `Microsoft.NETCore.App` 6.0.0** and dies with *"You
+  must install or update .NET to run this application"* even though 10.0.10 is installed.
+- Its **3.0.0 prerelease asks for 8.0.0** and dies the same way, so tracking the prerelease
+  buys nothing.
+- **`DOTNET_ROLL_FORWARD=Major` makes it run on 10** — confirmed, `ps-rule --version` then
+  answers 2.9.0.
+
+That variable belongs to the tool, not the host: exporting it in `/etc/environment` would
+change how *every* .NET application on the machine resolves its runtime. So the tools live in
+their own `--tool-path` and each published command is a small wrapper that sets it for that one
+process, honouring an account's own `DOTNET_ROLL_FORWARD` if it has set one — the
+[`cloud-cli/jenkins-cli.yml`](../cloud-cli/README.md#jenkins-cliyml) shape, for the same reason.
+
+### Notes from measuring the tools
+
+- **`dotnet tool update --version X --tool-path P` covers all three cases** — absent, at another
+  version, already at the pin — and exits 0 for each. `install` refuses an existing tool, so
+  the playbook uses `update` throughout and decides what to run from `dotnet tool list`.
+- **`dotnet` refuses to run when `HOME` points at a directory that does not exist** (*"The
+  user's home directory could not be determined. Set the `DOTNET_CLI_HOME` environment
+  variable"*), so the root-side scratch `HOME` is removed only after the verification that uses
+  it, not before.
+- **`dotnet-xdt` has no version flag** (`--version` answers *"Invalid argument"*), so its pin is
+  held by `dotnet tool list` and its verification is a real XML transform: XDT rewrites a
+  `value="dev"` attribute to `value="prod"`, and the assertion requires the new value present
+  **and** the old one gone. Entirely offline.
+- **The `sonar-scanner` permission fix is not needed at 11.2.1.** Earlier versions shipped a
+  shell script in the tool store that needed `chmod 0755`; no such file exists in this release.
+- `sqlpackage` reports a four-part version (`170.4.83.3`), so its check matches the pin as a
+  prefix.
+
+### No PSRule modules are installed for anyone
+
+`ps-rule module add PSRule.Rules.Azure` writes into the running account's own home, and which
+module set a project needs is the project's decision rather than the workstation's. The closing
+summary prints the command for an account that wants it.
+
+Version overrides — one variable per tool:
+
+```bash
+ansible-playbook misc/dotnet-tools.yml -e host=ws01 -e dotnet_sonarscanner_version=11.2.1
+```
