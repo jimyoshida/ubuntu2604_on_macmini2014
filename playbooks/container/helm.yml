@@ -313,14 +313,20 @@
           content: |
             value: multiuser
         - name: templates/configmap.yaml
-          content: |
-            {% raw %}apiVersion: v1
+          # !unsafe rather than {% raw %}: this content is templated twice on its
+          # way to the file -- once when the loop item is built, once when
+          # `content:` above is expanded -- and only the first pass strips a raw
+          # block. ansible-core 2.16 then evaluates Go's `.Release` as Jinja and
+          # dies on the leading dot; 2.20's engine does not re-template a
+          # templated result, which is why {% raw %} passed there and failed on
+          # the 2.16 floor this repo supports. !unsafe blocks both passes.
+          content: !unsafe |
+            apiVersion: v1
             kind: ConfigMap
             metadata:
               name: {{ .Release.Name }}-smoke
             data:
               key: {{ .Values.value | quote }}
-            {% endraw %}
       loop_control:
         label: "{{ item.name }}"
       check_mode: false
