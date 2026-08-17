@@ -417,3 +417,63 @@ Version overrides:
 ansible-playbook misc/mocha-chai.yml -e host=ws01 \
   -e mocha_chai_packages='[{"name":"mocha","version":"11.8.0"},{"name":"chai","version":"6.2.2"}]'
 ```
+
+## maven.yml
+
+Installs [Apache Maven](https://maven.apache.org/) from the Apache binary distribution,
+root-owned, with a versioned tree and a symlink — the `cloud-cli/influx-cli.yml` shape, so
+`ls -l /usr/local/bin/mvn` says which version is active and a bump installs beside the old
+tree.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/maven/<version>/` | the unpacked distribution |
+| `/usr/local/bin/mvn` | symlink to that version's `bin/mvn` |
+
+A JDK (`default-jdk-headless`) is installed as a prerequisite, unpinned — the same way
+`cloud-cli/jenkins-cli.yml` installs the JRE it needs. Nothing is written to any `$HOME`:
+each account gets its own `~/.m2` (local artifact repository, and optionally a personal
+`settings.xml` holding repository credentials) the first time it runs a build, which is
+exactly the per-user state a shared workstation should keep per-user.
+
+**Not the apt package, deliberately.** Ubuntu 26.04 carries `maven` 3.9.12-1, four patch
+releases behind the 3.9.16 pinned here; the Apache tarball is self-contained, checksum-
+verified, and the version this repo pins is the version installed. Maven 4.0.0 and 3.10.0
+are both still release candidates as of 2026-08-17, so the 3.9.x line is the stable choice.
+
+### How the install is put together
+
+- **Integrity and idempotency.** The tarball is fetched with `get_url` against Apache's
+  published `.sha512`, and the whole install is skipped when the pinned version is already
+  active rather than re-downloaded every run.
+- **The tarball, not the zip.** Apache's `-bin.zip` does not carry Unix permission bits
+  reliably; the `.tar.gz` does, and its `bin/mvn` arrives already `0755`.
+- **No `settings.xml` of this repo's own.** The distribution ships one and it is left exactly
+  as shipped — writing a copy here to configure nothing is the dead config MIGRATION2's A2/A3
+  removed elsewhere. A host that needs a proxy or a mirror sets it there or in each account's
+  own `~/.m2/settings.xml`.
+- **A declared JDK prerequisite** rather than an assumption that something else installed one.
+
+### The JVM reads `user.home` from the passwd database, not `$HOME`
+
+`HOME=<scratch> java -XshowSettings:properties` prints `user.home = /nonexistent` for uid
+65534, so Maven tries to create `/nonexistent/.m2/repository` and fails no matter how
+carefully `$HOME` is set — the same class of trap as `core/ansible-core.yml`'s `remote_tmp`.
+The unprivileged checks therefore pass an explicit `-Dmaven.repo.local`. They also need
+`chdir`: the `mvn` script walks up looking for a project base directory, and an unprivileged
+process left in a directory it cannot read prints `cd: can't cd to /home/<invoker>` — the
+defect MIGRATION2 found in `gcx-cli.yml`, here triggered by Maven's own launcher.
+
+### The smoke test is an offline build, plus a deliberate failure
+
+`mvn -o -B validate` on a generated project must reach `BUILD SUCCESS` with an **empty**
+local repository and no network at all — proving Maven resolved the super POM, the lifecycle
+mapping and the project model out of the installed distribution. A second run against the
+same POM with `<version>` removed must fail with `'version' is missing`: without that
+negative half, a Maven that parsed nothing would still have reported success.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/maven.yml -e host=ws01 -e maven_version=3.9.16
+```
