@@ -16,6 +16,12 @@ playbooks run `failed=0` against `ws01` and `ws02`**, and it found four defects,
 playbooks this document had already marked verified. See
 [the `ws01`/`ws02` run](#the-ws01ws02-run-2026-08-17--and-the-four-defects-localhost-could-not-find).
 
+**One post-migration amendment, 2026-08-17:** `cowsay` was dropped from `core-tools.yml`'s
+package list. The plan text below is left as it was written — it records what was decided and
+found at the time — but the `cowsay` row in the verify-command table and the `/usr/games`
+`secure_path` finding no longer describe the shipped playbook. See
+[the removal note](#known-follow-ups).
+
 This document is the fourth in the series and the last: `core/` was the whole of what remained
 of the original single-user tree (`tool/`, `cloud-cli/` and `container/` were already gone — see
 the three documents above), and retiring it retires the entire legacy tree — nothing named
@@ -168,7 +174,7 @@ for):
 | `figlet` | `figlet` | `figlet -v` | medium |
 | `dos2unix` | `dos2unix` | `dos2unix -V` | medium |
 | `python3-pip` | `pip3` | `python3 -m pip --version` | high |
-| `cowsay` | `cowsay` | no version flag — invoke it and assert the output contains the input text | low |
+| ~~`cowsay`~~ | ~~`cowsay`~~ | ~~no version flag — invoke it and assert the output contains the input text~~ **removed from the playbook 2026-08-17** | low |
 | `aha` | `aha` | no confirmed version flag — likely `aha --help` exit-code only | low |
 | `ca-certificates` | none | not a binary — verify `/etc/ssl/certs/ca-certificates.crt` exists, is non-empty, and is world-readable | high |
 
@@ -176,6 +182,9 @@ for):
 `binary:` field like `modern-cli-tools.yml`'s: one package ships no executable at all, and two
 ship one with no way to ask its version. All three still verify **something real** (a file, or
 actual output), which fits A4's stated preference for real work over `--version` alone anyway.
+(With `cowsay` removed on 2026-08-17 the shipped playbook has two such packages rather than
+three, but the argument for the table shape is unchanged: `ca-certificates` and `aha` each still
+need their own hand-written check.)
 
 Pinning is the more mechanical half: eighteen `apt-cache policy` lookups against the target,
 following exactly the `modern-cli-tools.yml` shape — a `vars:` list of `{name, version}`, one
@@ -353,9 +362,13 @@ additions apply unchanged, with one more specific to this directory:
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `core-tools.yml` | apt, unpinned | apt, pinned, per-package verify | 19 packages, see the playbook's `vars` | Verified (localhost, ws01, ws02) |
+| `core-tools.yml` | apt, unpinned | apt, pinned, per-package verify | 17 packages, see the playbook's `vars` | Verified (localhost, ws01, ws02) |
 | `nodejs.yml` | NodeSource setup script, unpinned; Corepack shims mistaken for Yarn/pnpm | `deb822_repository`, pinned; Yarn/pnpm via `npm install -g` per decision (a) | nodejs 24.19.0-1nodesource1, yarn 1.22.22, pnpm 11.21.0 | Verified (localhost, ws01, ws02) |
 | `mise.yml` | vendor apt repo (`.list` + shell dearmor), unpinned; `mise activate` in `~/.bashrc` | `deb822_repository` (URL key form), pinned; activation in `/etc/profile.d/mise.sh` | 2026.8.6 | Verified (localhost, ws01, ws02) |
+
+The `core-tools.yml` count was 18 for every run recorded below, including the `ws01`/`ws02` one;
+it is 17 since `cowsay` was removed on 2026-08-17, after those runs. (It was written as "19" here
+until the same date, which never matched the playbook.)
 
 Every row is also **retired**: none of the source playbooks named in the first column still
 exists, each having been deleted on 2026-08-16 once its successor was verified, and `core/` was
@@ -394,7 +407,10 @@ what was actually verified in every row above.
 
 **Two more findings only visible by running the playbooks, not by reading the source.** First,
 `cowsay`'s Ubuntu package lives in `/usr/games`, which sudo's default `secure_path` does not
-include — `core-tools.yml` calls it by absolute path rather than relying on `PATH`. Second, every
+include — `core-tools.yml` called it by absolute path rather than relying on `PATH`. (`cowsay`
+was removed from the playbook on 2026-08-17, so nothing in `_multi-user/core/` depends on this
+any more; the finding is kept because `/usr/games` is where Ubuntu puts a whole class of
+packages, and the next one to be installed under `become` will hit it identically.) Second, every
 unprivileged smoke test in this directory needed an explicit `chdir` into its scratch `HOME` that
 an early draft omitted: `git lfs`/`git secret` (in `core-tools.yml`) and both `yarn` and `pnpm`
 (in `nodejs.yml`, the latter walking up from cwd looking for an rc file) all stat or scan the
@@ -564,6 +580,19 @@ that way. Steady state is reached again on the second run from either engine.
 
 ## Known follow-ups
 
+- **`cowsay` removed from `core-tools.yml`, 2026-08-17.** The package, its pin
+  (`core_tools_cowsay_version`), its entries in the two `dpkg-query` loops, its dedicated
+  speech-bubble smoke task and its summary line are all gone; the playbook's remaining tasks were
+  renumbered 9–11. This is the first change to any `_multi-user/core/` playbook after the
+  directory was marked verified, and it is a deletion rather than a fix, so nothing above is
+  invalidated by it — the plan text, the verify-command table and the `ws01`/`ws02` run all
+  describe an 18-package playbook and are left saying so, with the affected spots marked. **Not
+  done, and deliberately:** the playbook does not *uninstall* `cowsay` from hosts that already
+  have it. Both `ws01` and `ws02` were provisioned with it and still carry it. That is the same
+  shape as the `~/.bashrc` `mise` block below — deleting a task removes nothing already written
+  to a host — and it is the smaller version of that question, since an unwanted apt package is
+  inert in a way a `PATH`-rewriting shell hook is not. An `apt: state: absent` task would close
+  it if a stronger answer than "inert" is wanted.
 - ~~**Retiring `core/`.**~~ **Done 2026-08-16.** All three originals and the directory's README
   were deleted, on the gate `tool/`, `cloud-cli/` and `container/` passed: every successor
   verified against a real host. Retiring `core/` retired *the entire legacy tree* along with it —

@@ -22,9 +22,9 @@ as an arbitrary uid (`setpriv --reuid=65534`) rather than as the connecting acco
 
 ## core-tools.yml
 
-Installs eighteen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
+Installs seventeen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
 `lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `zip`, `unzip`, `vim`,
-`net-tools`, `ncat`, `figlet`, `dos2unix`, `make`, `ca-certificates`, `cowsay`, `aha` — all to
+`net-tools`, `ncat`, `figlet`, `dos2unix`, `make`, `ca-certificates`, `aha` — all to
 `/usr/bin` (or, for `ca-certificates`, a data file with no binary at all). There is no per-user
 state and nothing added to a shell profile for any of them. `jq` has its own dedicated
 playbook, [`jq.yml`](#jqyml).
@@ -32,24 +32,18 @@ playbook, [`jq.yml`](#jqyml).
 Every package is pinned and version-compared against what's installed, and every package is
 verified as an unprivileged user.
 
-Three packages do not fit a plain `--version` check, and the verify command for **every**
+Two packages do not fit a plain `--version` check, and the verify command for **every**
 package was confirmed against the actual installed binary rather than assumed:
 
 - **`ca-certificates`** ships no binary. Verified by checking `/etc/ssl/certs/ca-certificates.crt`
   itself: present, non-empty, world-readable.
-- **`cowsay`**'s Ubuntu package is the classic Perl build, which has no `--version` flag at all.
-  Verified by running it and checking the message comes back inside the cow's speech bubble.
-- **`aha`** has no reliably documented `--version` output either. Verified by feeding it a real
+- **`aha`** has no reliably documented `--version` output. Verified by feeding it a real
   ANSI bold escape sequence and checking it came back as an actual HTML document, not merely
   echoed unchanged.
 
-One finding only visible by actually running the playbook, not by reading the source: Debian and
-Ubuntu install `cowsay` to `/usr/games/cowsay`, and sudo's default `secure_path`
-(`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin`, confirmed on this
-host) does not include `/usr/games` — a bare `cowsay` on `PATH` resolves fine in an interactive
-login shell and fails under `become` with "No such file or directory". The playbook calls it by
-absolute path. `git-lfs` and `git-secret`'s unprivileged checks needed a `chdir` into the scratch
-`HOME` for a related reason: `git` stats the current directory on startup, and an unprivileged
+One finding only visible by actually running the playbook, not by reading the source:
+`git-lfs` and `git-secret`'s unprivileged checks needed a `chdir` into the scratch
+`HOME`, because `git` stats the current directory on startup and an unprivileged
 uid cannot even stat this repository's checkout path — the same class of defect MIGRATION2.md
 found in `gcx-cli.yml`, here triggered by `git` itself rather than the tool being installed.
 

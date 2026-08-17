@@ -5,23 +5,20 @@
 #   /usr/bin/<tool>                    for every package that ships a binary
 #   /etc/ssl/certs/ca-certificates.crt the one package here with no binary
 #
-# All eighteen packages already come from Ubuntu's own apt archive, so unlike
+# All seventeen packages already come from Ubuntu's own apt archive, so unlike
 # most of _multi-user/tools/ this migration needed no reach work: the source
 # playbook (core/core-tools.yml, renamed from core/agent-base.yml on
 # 2026-08-14) already installs to root-owned /usr paths. What it does not do
-# is pin anything (plain `state: present` on all eighteen) or verify that any
+# is pin anything (plain `state: present` on all of them) or verify that any
 # of them actually work, so this is pure correctness work: version-aware
 # idempotency (policy point 6) and per-package unprivileged verification
 # (policy point 9).
 #
 # The verification list is heterogeneous on purpose, not fifteen copies of
-# `--version`: three packages do not fit that shape at all.
+# `--version`: two packages do not fit that shape at all.
 #   - ca-certificates ships no binary. Verified by checking the bundle file
 #     itself: present, non-empty, world-readable.
-#   - cowsay's Ubuntu package is the classic Perl build, which has no
-#     --version flag at all. Verified by running it and checking the message
-#     comes back inside the cow's speech bubble.
-#   - aha has no reliable --version output either. Verified by feeding it a
+#   - aha has no reliable --version output. Verified by feeding it a
 #     real ANSI escape sequence and checking it did real work: converted to
 #     an HTML document, not just echoed back.
 # Every verify_cmd below was confirmed against the actual installed binary on
@@ -110,7 +107,6 @@
     # ca-certificates ships no binary, so it is installed with the rest but
     # verified separately (task 8), not through core_tools_packages.
     core_tools_ca_certificates_version: "20260601~26.04.1"
-    core_tools_cowsay_version: "3.03+dfsg2-8build1"
     core_tools_aha_version: "0.5.1-3build2"
     core_tools_smoke_home: /var/tmp/core-tools-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
@@ -130,7 +126,6 @@
       loop: >-
         {{ core_tools_packages
            + [{'name': 'ca-certificates', 'version': core_tools_ca_certificates_version},
-              {'name': 'cowsay', 'version': core_tools_cowsay_version},
               {'name': 'aha', 'version': core_tools_aha_version}] }}
       loop_control:
         label: "{{ item.name }}"
@@ -166,7 +161,6 @@
       loop: >-
         {{ core_tools_packages
            + [{'name': 'ca-certificates', 'version': core_tools_ca_certificates_version},
-              {'name': 'cowsay', 'version': core_tools_cowsay_version},
               {'name': 'aha', 'version': core_tools_aha_version}] }}
       loop_control:
         label: "{{ item.name }}"
@@ -218,28 +212,7 @@
       changed_when: false
       failed_when: core_tools_smoke.rc != 0
 
-    - name: 9. Print a speech-bubble message as an unprivileged user (cowsay)
-      # cowsay's Ubuntu package is the classic Perl build, which has no
-      # --version flag at all -- confirmed by running it with no arguments
-      # to check for a --version option, which does not exist. Real work
-      # instead: a known string must come back inside the cow's bubble.
-      #
-      # Absolute path, not a bare `cowsay` on PATH: Debian/Ubuntu installs it
-      # to /usr/games, which sudo's default secure_path
-      # (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin,
-      # confirmed on this host) does not include -- confirmed at run time,
-      # where the bare name failed with "No such file or directory" under
-      # become even though it resolves fine in an interactive login shell.
-      ansible.builtin.command:
-        cmd: >-
-          setpriv --reuid={{ core_tools_verify_uid }} --regid={{ core_tools_verify_gid }} --clear-groups
-          env HOME={{ core_tools_smoke_home }} /usr/games/cowsay multi-user-smoke-test
-        chdir: "{{ core_tools_smoke_home }}"
-      register: core_tools_cowsay_smoke
-      changed_when: false
-      failed_when: "'multi-user-smoke-test' not in core_tools_cowsay_smoke.stdout"
-
-    - name: 10. Convert an ANSI escape sequence to HTML as an unprivileged user (aha)
+    - name: 9. Convert an ANSI escape sequence to HTML as an unprivileged user (aha)
       # aha's --version output is not reliable enough to pin a match string
       # against, so this proves real work instead: a bold ANSI escape must
       # come back as an actual HTML document, not merely echoed unchanged.
@@ -255,13 +228,13 @@
         'multi-user-smoke-test' not in core_tools_aha_smoke.stdout
         or '<html' not in (core_tools_aha_smoke.stdout | lower)
 
-    - name: 11. Remove the scratch HOME
+    - name: 10. Remove the scratch HOME
       ansible.builtin.file:
         path: "{{ core_tools_smoke_home }}"
         state: absent
       check_mode: false
 
-    - name: 12. Display installation summary
+    - name: 11. Display installation summary
       # Built as a real Jinja list, not a folded string joined on a literal
       # '\n' -- confirmed at run time that a '\n' inside a >- folded scalar
       # never reaches Jinja as an escape (YAML block scalars do not process
@@ -278,7 +251,6 @@
                 | map('regex_replace', '^', '  ')
                 | list)
              + ['  ca-certificates ' ~ core_tools_ca_certificates_version,
-                '  cowsay ' ~ core_tools_cowsay_version,
                 '  aha ' ~ core_tools_aha_version,
                 '',
                 'Verified runnable by an unprivileged user (uid ' ~ core_tools_verify_uid ~ ').',
