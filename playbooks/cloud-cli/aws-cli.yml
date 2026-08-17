@@ -119,6 +119,10 @@
       ansible.builtin.command: "{{ aws_cli_bin }} --version"
       register: aws_cli_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them and the checks below
+      # act on output that was never produced.
+      check_mode: false
       failed_when: false
 
     - name: 4. Decide whether the AWS CLI needs installing
@@ -129,6 +133,16 @@
       ansible.builtin.set_fact:
         aws_cli_install_needed: >-
           {{ ('aws-cli/' ~ aws_cli_version ~ ' ') not in (aws_cli_installed.stdout | default('')) }}
+        aws_cli_can_verify: >-
+          {{ not (ansible_check_mode and (('aws-cli/' ~ aws_cli_version ~ ' ') not in (aws_cli_installed.stdout | default('')))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install the AWS CLI {{ aws_cli_version }}, so the
+          version check and the unprivileged configuration check below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (aws_cli_can_verify | bool)
 
     - name: 5. Create the staging directories
       # The gnupg subdirectory is created here rather than left to gpg: under
@@ -144,7 +158,14 @@
       loop:
         - "{{ aws_cli_stage_dir }}"
         - "{{ aws_cli_stage_dir }}/gnupg"
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 6. Write the AWS CLI signing key
       ansible.builtin.copy:
@@ -153,7 +174,14 @@
         owner: root
         group: root
         mode: '0600'
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 7. Download the AWS CLI installer and its signature
       ansible.builtin.get_url:
@@ -165,7 +193,14 @@
       loop:
         - "{{ aws_cli_zip }}"
         - "{{ aws_cli_zip }}.sig"
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 8. Import the signing key into a throwaway keyring
       # A staging GNUPGHOME rather than root's own keyring: this key is used
@@ -176,7 +211,14 @@
           gpg --homedir {{ aws_cli_stage_dir }}/gnupg --batch --quiet
           --import {{ aws_cli_stage_dir }}/aws-cli-public-key.asc
       changed_when: true
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 9. Confirm the imported key is the pinned AWS CLI signing key
       # Guards the embedded key block itself: a swapped key would otherwise
@@ -188,7 +230,14 @@
       register: aws_cli_fpr
       changed_when: false
       failed_when: aws_cli_key_fingerprint not in aws_cli_fpr.stdout
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 10. Verify the installer's signature
       # gpg exits 0 only for a good signature; the "key is not certified with
@@ -200,7 +249,14 @@
           --verify {{ aws_cli_stage_dir }}/{{ aws_cli_zip }}.sig
           {{ aws_cli_stage_dir }}/{{ aws_cli_zip }}
       changed_when: false
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 11. Unpack the installer
       ansible.builtin.unarchive:
@@ -209,7 +265,14 @@
         remote_src: true
         owner: root
         group: root
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 12. Run the AWS CLI installer
       # --update makes the installer replace an existing install instead of
@@ -221,7 +284,14 @@
           --install-dir {{ aws_cli_install_dir }}
           --bin-dir {{ aws_cli_bin_dir }}
       changed_when: true
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 13. Make the install tree readable by every account
       # The installer applies root's umask rather than an explicit mode, so
@@ -233,7 +303,14 @@
         group: root
         mode: 'u=rwX,go=rX'
         recurse: true
-      when: aws_cli_install_needed | bool
+      when:
+        - aws_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either: without this, --check on a host without the
+        # AWS CLI fails at "Destination /var/tmp/awscli-install-<version> does
+        # not exist" -- and get_url, unlike command, is NOT skipped in check
+        # mode, so it really does try to download.
+        - not ansible_check_mode
 
     - name: 14. Remove the staging directory
       ansible.builtin.file:
@@ -245,6 +322,8 @@
       register: aws_cli_version_out
       changed_when: false
       failed_when: ('aws-cli/' ~ aws_cli_version ~ ' ') not in aws_cli_version_out.stdout
+      check_mode: false
+      when: aws_cli_can_verify | bool
 
     - name: 16. Create a scratch HOME for the unprivileged check
       # `aws configure list` reads ~/.aws, so the smoke test needs a HOME it
@@ -256,6 +335,8 @@
         owner: "{{ aws_cli_verify_uid }}"
         group: "{{ aws_cli_verify_gid }}"
         mode: '0700'
+      check_mode: false
+      when: aws_cli_can_verify | bool
 
     - name: 17. Inspect AWS CLI configuration as an unprivileged user
       # Exercises more than --version does: `configure list` loads the
@@ -270,11 +351,15 @@
       register: aws_cli_smoke
       changed_when: false
       failed_when: "'access_key' not in aws_cli_smoke.stdout"
+      check_mode: false
+      when: aws_cli_can_verify | bool
 
     - name: 18. Remove the scratch HOME
       ansible.builtin.file:
         path: "{{ aws_cli_smoke_home }}"
         state: absent
+      check_mode: false
+      when: aws_cli_can_verify | bool
 
     - name: 19. Display installation summary
       ansible.builtin.debug:
@@ -293,3 +378,4 @@
           - "  aws configure                 # static keys, written to ~/.aws"
           - "  aws configure sso             # IAM Identity Center"
           - "  aws sts get-caller-identity   # confirm who you are"
+      when: aws_cli_can_verify | bool

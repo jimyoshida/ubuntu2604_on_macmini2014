@@ -36,12 +36,26 @@
       ansible.builtin.command: dpkg-query -W -f='${Version}' shellcheck
       register: shellcheck_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
       failed_when: false
 
     - name: 2. Decide whether shellcheck needs installing
       ansible.builtin.set_fact:
         shellcheck_install_needed: >-
           {{ shellcheck_installed.rc != 0 or shellcheck_installed.stdout != shellcheck_version }}
+        shellcheck_can_verify: >-
+          {{ not (ansible_check_mode and (shellcheck_installed.rc != 0 or shellcheck_installed.stdout != shellcheck_version)) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install shellcheck {{ shellcheck_version }}, so the
+          version check and the unprivileged lint below are skipped rather
+          than failed. Re-run without --check to verify.
+      when: not (shellcheck_can_verify | bool)
 
     - name: 3. Install shellcheck via apt
       ansible.builtin.apt:
@@ -56,6 +70,8 @@
       register: shellcheck_version_out
       changed_when: false
       failed_when: (shellcheck_version.split('-')[0]) not in shellcheck_version_out.stdout
+      check_mode: false
+      when: shellcheck_can_verify | bool
 
     - name: 5. Create a scratch script with a known issue for verification
       ansible.builtin.copy:
@@ -64,6 +80,8 @@
         content: |
           #!/bin/bash
           echo $1
+      check_mode: false
+      when: shellcheck_can_verify | bool
 
     - name: 6. Lint the scratch script as an unprivileged user
       ansible.builtin.command:
@@ -73,11 +91,15 @@
       register: shellcheck_smoke
       changed_when: false
       failed_when: "'SC2086' not in shellcheck_smoke.stdout"
+      check_mode: false
+      when: shellcheck_can_verify | bool
 
     - name: 7. Remove the scratch script
       ansible.builtin.file:
         path: /tmp/shellcheck-verify.sh
         state: absent
+      check_mode: false
+      when: shellcheck_can_verify | bool
 
     - name: 8. Display installation summary
       ansible.builtin.debug:
@@ -90,3 +112,4 @@
           - ""
           - "Usage:"
           - "  shellcheck script.sh        # Lint a shell script"
+      when: shellcheck_can_verify | bool

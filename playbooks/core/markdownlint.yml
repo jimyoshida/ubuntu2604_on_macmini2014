@@ -40,6 +40,10 @@
       ansible.builtin.command: dpkg -s nodejs
       register: markdownlint_nodejs_dpkg
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
       failed_when: false
 
     - name: 2. Fail if Node.js is not installed as a system package
@@ -53,6 +57,7 @@
       ansible.builtin.command: which node
       register: markdownlint_node_path
       changed_when: false
+      check_mode: false
 
     - name: 4. Fail if node in PATH is not a system-wide install
       # Guards against a per-user version manager (nvm, fnm, ...) shadowing
@@ -70,11 +75,13 @@
       ansible.builtin.command: npm config get prefix
       register: markdownlint_npm_prefix
       changed_when: false
+      check_mode: false
 
     - name: 6. Check the currently installed markdownlint-cli version
       ansible.builtin.command: "{{ markdownlint_npm_prefix.stdout }}/bin/markdownlint --version"
       register: markdownlint_installed
       changed_when: false
+      check_mode: false
       failed_when: false
 
     - name: 7. Decide whether markdownlint-cli needs installing
@@ -83,6 +90,16 @@
       ansible.builtin.set_fact:
         markdownlint_install_needed: >-
           {{ markdownlint_cli_version not in (markdownlint_installed.stdout | default('')) }}
+        markdownlint_can_verify: >-
+          {{ not (ansible_check_mode and (markdownlint_cli_version not in (markdownlint_installed.stdout | default('')))) }}
+
+    - name: 7a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install markdownlint-cli {{ markdownlint_cli_version }}, so the
+          version check and the unprivileged lint below are skipped rather
+          than failed. Re-run without --check to verify.
+      when: not (markdownlint_can_verify | bool)
 
     - name: 8. Install markdownlint-cli via npm as root
       ansible.builtin.command: "npm install -g markdownlint-cli@{{ markdownlint_cli_version }}"
@@ -104,6 +121,8 @@
       register: markdownlint_version_out
       changed_when: false
       failed_when: markdownlint_cli_version not in markdownlint_version_out.stdout
+      check_mode: false
+      when: markdownlint_can_verify | bool
 
     - name: 11. Write a markdown file with a known lint issue for the unprivileged smoke test
       ansible.builtin.copy:
@@ -112,6 +131,8 @@
         content: |
           #heading-with-no-space
           Body text.
+      check_mode: false
+      when: markdownlint_can_verify | bool
 
     - name: 12. Lint the file as an unprivileged user
       # markdownlint exits non-zero and writes its findings to stderr when it
@@ -126,11 +147,15 @@
       register: markdownlint_smoke
       changed_when: false
       failed_when: "'MD018' not in markdownlint_smoke.stderr"
+      check_mode: false
+      when: markdownlint_can_verify | bool
 
     - name: 13. Remove the smoke test file
       ansible.builtin.file:
         path: /tmp/markdownlint-multiuser-smoke.md
         state: absent
+      check_mode: false
+      when: markdownlint_can_verify | bool
 
     - name: 14. Display installation summary
       ansible.builtin.debug:
@@ -145,3 +170,4 @@
           - "Usage:"
           - "  markdownlint '**/*.md'              # Lint all markdown files"
           - "  markdownlint --fix '**/*.md'        # Automatically fix fixable issues"
+      when: markdownlint_can_verify | bool

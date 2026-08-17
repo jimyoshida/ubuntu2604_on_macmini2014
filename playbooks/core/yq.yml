@@ -55,12 +55,26 @@
       ansible.builtin.command: "{{ yq_bin }} --version"
       register: yq_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
       failed_when: false
 
     - name: 4. Decide whether yq needs installing
       ansible.builtin.set_fact:
         yq_install_needed: >-
           {{ yq_version not in (yq_installed.stdout | default('')) }}
+        yq_can_verify: >-
+          {{ not (ansible_check_mode and (yq_version not in (yq_installed.stdout | default('')))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install yq {{ yq_version }}, so the version check and
+          the unprivileged expression below are skipped rather than failed.
+          Re-run without --check to verify.
+      when: not (yq_can_verify | bool)
 
     - name: 5. Fetch the GitHub release metadata for yq v{{ yq_version }}
       # yq's own published checksums file uses a bespoke multi-algorithm rhash
@@ -73,6 +87,9 @@
         url: "https://api.github.com/repos/mikefarah/yq/releases/tags/v{{ yq_version }}"
         return_content: true
       register: yq_release
+      # Reading release metadata changes nothing, so a dry run really does
+      # validate the version pin against upstream.
+      check_mode: false
       when: yq_install_needed | bool
 
     - name: 6. Resolve the SHA-256 digest for the {{ yq_arch }} binary
@@ -99,6 +116,8 @@
       register: yq_version_out
       changed_when: false
       failed_when: yq_version not in yq_version_out.stdout
+      check_mode: false
+      when: yq_can_verify | bool
 
     - name: 9. Evaluate a YAML expression as an unprivileged user
       ansible.builtin.shell:
@@ -113,6 +132,8 @@
       register: yq_smoke
       changed_when: false
       failed_when: (yq_smoke.stdout | trim) != '1'
+      check_mode: false
+      when: yq_can_verify | bool
 
     - name: 10. Display installation summary
       ansible.builtin.debug:
@@ -126,3 +147,4 @@
           - "Usage:"
           - "  yq e '.key' file.yaml       # Read a value"
           - "  yq e '.key = \"val\"' -i file.yaml  # Edit in place"
+      when: yq_can_verify | bool
