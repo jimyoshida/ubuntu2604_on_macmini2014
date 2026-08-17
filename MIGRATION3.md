@@ -3,21 +3,24 @@
 Policy and procedure for migrating the container and Kubernetes playbooks from `container/` to
 `_multi-user/container/`.
 
-**Status: complete.** All seven playbooks are migrated, verified against `localhost`, and
+**Status: complete.** All seven playbooks are migrated, verified against `localhost`, `ws01`
+and `ws02`, and
 retired — the originals were deleted on 2026-08-14 and `container/` is gone with them, as
 `tool/` and `cloud-cli/` were before it. All
 three decisions [wave 1](#order-of-work) called for are settled — the kubectl package collision
 as (a), the Helm pin as 4.2.3-1, and the `xhost` question by deleting the line. Wave 2 migrated
 `devcontainers.yml` and `podman.yml`; wave 3 migrated `docker.yml`, `kubectl.yml` and
 `helm.yml`, including the apt preferences pin that resolves the kubectl collision; wave 4
-migrated `kind.yml` and `minikube.yml`. **Read
-[what the retirement gate did and did not cover](#known-follow-ups) before relying on the
-deletion**: it is the same `localhost`-only, ansible-core 2.20-only evidence `cloud-cli/` was
-retired on, and the 24.04-control-node-over-SSH run this plan called for was never performed.
-See
+migrated `kind.yml` and `minikube.yml`. The [retirement gate](#known-follow-ups) was narrower
+than the word suggests when it was taken — the same `localhost`-only, ansible-core 2.20-only
+evidence `cloud-cli/` was retired on — but the 24.04-control-node-over-SSH run this plan called
+for **has since been performed: all seven playbooks run `failed=0` against `ws01` and `ws02`**,
+and it found one defect (`helm.yml`) that no `localhost` run could have. See
 [Notes on the three that need a decision](#notes-on-the-three-that-need-a-decision),
 [Wave 2](#wave-2-devcontainers-podman), [Wave 3](#wave-3-docker-kubectl-helm),
-[Wave 4](#wave-4-kind-minikube) and [Migration status](#migration-status).
+[Wave 4](#wave-4-kind-minikube),
+[the `ws01`/`ws02` run](#the-ws01ws02-run-2026-08-17--and-the-one-defect-only-a-216-control-node-could-find)
+and [Migration status](#migration-status).
 
 `container/krew.yml` was the eighth. It is not in this plan: it was
 [retired](README.md#retired-containerkrewyml) on 2026-08-14 rather than migrated, because krew
@@ -524,13 +527,13 @@ MIGRATION.md's [ten-step procedure](MIGRATION.md#procedure) and MIGRATION2's
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `devcontainers.yml` | `npm install -g @latest` | npm global, pinned, prefix from run time | 0.88.0 | Verified (localhost) |
-| `podman.yml` | apt, unpinned | apt, pinned; linger by explicit list | podman 5.7.0+ds2-3build1, podman-compose 1.5.0-2 | Verified (localhost) |
-| `docker.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned; group by explicit list | docker-ce 5:29.7.2-1~ubuntu.26.04~resolute, containerd.io 2.3.3, buildx 0.36.1, compose 5.4.0 | Verified (localhost) |
-| `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | `pkgs.k8s.io` v1.36 + `/etc/apt/preferences.d/kubectl` — decision (a) | 1.36.3-1.1 | Verified (localhost) |
-| `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | 4.2.3-1 | Verified (localhost) |
-| `kind.yml` | release binary, `stat.exists` | release binary + checksum + version guard | 0.32.0 (was 0.27.0) | Verified (localhost) |
-| `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | 1.38.1 | Verified (localhost) |
+| `devcontainers.yml` | `npm install -g @latest` | npm global, pinned, prefix from run time | 0.88.0 | Verified (localhost, ws01, ws02) |
+| `podman.yml` | apt, unpinned | apt, pinned; linger by explicit list | podman 5.7.0+ds2-3build1, podman-compose 1.5.0-2 | Verified (localhost, ws01, ws02) |
+| `docker.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned; group by explicit list | docker-ce 5:29.7.2-1~ubuntu.26.04~resolute, containerd.io 2.3.3, buildx 0.36.1, compose 5.4.0 | Verified (localhost, ws01, ws02) |
+| `kubectl.yml` | `pkgs.k8s.io` v1.30, unpinned | `pkgs.k8s.io` v1.36 + `/etc/apt/preferences.d/kubectl` — decision (a) | 1.36.3-1.1 | Verified (localhost, ws01, ws02) |
+| `helm.yml` | vendor apt repo, unpinned | vendor apt repo, A5 cleanup, pinned (3→4) | 4.2.3-1 | Verified (localhost, ws01, ws02) |
+| `kind.yml` | release binary, `stat.exists` | release binary + checksum + version guard | 0.32.0 (was 0.27.0) | Verified (localhost, ws01, ws02) |
+| `minikube.yml` | release binary, `stat.exists` | release binary + checksum + version guard | 1.38.1 | Verified (localhost, ws01, ws02) |
 | `krew.yml` | `curl \| sh` → `~/.krew` | — | — | [Retired](README.md#retired-containerkrewyml) 2026-08-14, not migrated |
 
 Every row is also **retired**: none of the source playbooks named in the first column still
@@ -742,6 +745,103 @@ The general rule for the next migration: a tool that keeps per-user state may cr
 *any* invocation, including one that only prints a version, so the playbook's own calls need
 redirecting as much as the smoke test's do.
 
+### The `ws01`/`ws02` run (2026-08-17) — and the one defect only a 2.16 control node could find
+
+**All seven playbooks run `failed=0` against both real workstations, from a 24.04 control node
+(ansible-core 2.16) against Ubuntu 26.04 / Python 3.14 targets.** This discharges, for this
+directory, the [retirement-gate follow-up](#known-follow-ups) every "Verified (localhost)" row
+carried: the runs exercised the 2.16 floor, a real `remote_user` over SSH, and two hosts that
+were provisioned by the *legacy* playbooks rather than being clean. Six of the seven needed no
+change. One did.
+
+Final state, both hosts identical, each playbook re-run to idempotency:
+
+| Playbook | Recap (re-run) | Installed |
+| --- | --- | --- |
+| `devcontainers.yml` | `ok=12 changed=2` | 0.88.0 |
+| `podman.yml` | `ok=14 changed=2` | podman 5.7.0, podman-compose 1.5.0 |
+| `docker.yml` | `ok=18 changed=2` | docker 29.7.2, buildx 0.36.1, compose 5.4.0, containerd 2.3.3 |
+| `kubectl.yml` | `ok=23 changed=2` | kubectl v1.36.3, kubectx/kubens |
+| `helm.yml` | `ok=18 changed=3` | helm v4.2.3 |
+| `kind.yml` | `ok=12 changed=2` | kind v0.32.0 |
+| `minikube.yml` | `ok=12 changed=2` | minikube v1.38.1 |
+
+Every `changed` is scratch state created and removed; `/var/tmp` holds no leftovers on either
+host afterwards.
+
+**`helm.yml` failed on both hosts, and neither `localhost` nor 2.20 could ever have caught it.**
+Task 14 died writing the smoke chart:
+
+```
+An unhandled exception occurred while templating ... template error while templating
+string: unexpected '.'. String: apiVersion: v1 ... name: {{ .Release.Name }}-smoke
+```
+
+The chart's ConfigMap is Go template source, and it reaches the file through **two** templating
+passes: once when the loop item is built, once when `content: "{{ item.content }}"` is expanded.
+`{% raw %}` only survives the first. ansible-core **2.20 does not re-template a templated
+result**, so the second pass never happened there and the playbook passed; **2.16 does**, and
+evaluates Go's `.Release` as Jinja, where a leading dot is a syntax error. The fix is `!unsafe`
+on that item's content, which blocks both passes, with the `{% raw %}` markers removed so they
+do not leak into the file.
+
+The fix was confirmed on **both** engines, as the [scope](#scope) requires: `failed=0` from the
+2.16 control node against both
+hosts, and `failed=0` again running the playbook under **ansible-core 2.20.1 on `ws01` itself**
+(local connection), where `helm lint` and `helm template` both render the chart. A one-sided fix
+here would have been as invisible as the one-sided verification that let the defect through.
+
+This is the exact counterpart to MIGRATION2's `gitlab-cli.yml` finding — one playbook, one
+defect, invisible to the verification that was actually run — but it fails on a different axis.
+`gitlab-cli.yml` was a *connection-mode* defect (cwd differs local vs remote); this is a
+*control-node-version* defect. **The 2.16 floor is not a formality: it is a second
+implementation of the template engine, and this repo had a playbook that only worked on one of
+them.** Anything writing template syntax through a loop variable is suspect; `misc/gomplate.yml`
+was checked and is safe, because its `{% raw %}` blocks sit inline in a `cmd:` string and are
+templated once.
+
+**The 2.16 control node otherwise holds, as it did for `cloud-cli/`.** No interpreter complaint
+anywhere across seven playbooks and two hosts, so 24.04 stays supported for this directory too.
+
+**The kubectl collision was resolved under harder conditions than `localhost` offered.** Both
+hosts had `packages.cloud.google.com` configured (from `cloud-cli/gcloud-cli.yml`) with
+candidate `1:580.0.0-0`, and **no kubectl installed at all** — so the preferences pin had to win
+the initial candidate selection outright rather than hold a correct version already in place. It
+did: `Installed: 1.36.3-1.1`, `Candidate: 1.36.3-1.1`, `kubectl version --client` reporting
+`v1.36.3` with no `-dispatcher` suffix, and `apt-get -s upgrade` proposing no change. Decision
+(a) is now verified against a live epoch collision on two hosts, which is the case it was chosen
+for.
+
+**The predecessor-cleanup tasks fired for real, which `localhost` could only partly show.** Both
+hosts still carried the legacy `helm-stable-debian.list` (and helm 4.2.3 installed from it), and
+`ws01` still carried `container/docker.yml`'s auto-named
+`download_docker_com_linux_ubuntu.list`. Both were removed and replaced by the A5-convention
+`.sources` files. The `changed=6` vs `changed=5` split between `ws01` and `ws02` on docker's
+first run is precisely that one cleanup task.
+
+**The npm-prefix finding was exercised by two hosts that genuinely disagree.** `ws01` runs
+NodeSource node 24 with a global prefix of `/usr`; `ws02` runs the archive's node 22 with
+`/usr/local`. `devcontainers.yml` read each at run time and installed to the right place on
+both — `/usr/bin/devcontainer` and `/usr/local/bin/devcontainer` respectively. MIGRATION.md's
+`markdownlint` finding said never to assume this; until now no run had two hosts that actually
+differed.
+
+**B1's additive rule held on a host that had a member.** `ws01` already had one account in the
+`docker` group. Run with `docker_users` empty — the default — the group was left exactly as it
+was, granting nothing and revoking nothing, while `ws02`'s group stayed empty. B4's subuid
+assertion was re-tested over SSH with `-e podman_linger_users=nobody`: it failed at task 10 with
+the `usermod --add-subuids` remedy and granted no lingering, the assertion sitting ahead of the
+grant as designed.
+
+**A caution for post-run checks, not a defect.** After the run `/root/.minikube` was present on
+both hosts, which looks like a [B2](#policy-amendments) violation. It was not the playbook: the
+`MINIKUBE_HOME` redirect works, and removing the directory and re-running left it absent. It was
+*the verification command* — a bare `minikube version` issued as root to check what got
+installed — reproducing wave 4's own finding that any invocation creates the state. The lesson
+generalises past minikube: for a tool that keeps per-user state, an ad-hoc check run as root
+violates the rule the playbook was careful to keep, and it will be misread as the playbook's
+doing.
+
 ## Upstream survey (2026-08-11)
 
 Checked while writing this plan, to confirm each target mechanism exists. **Every version here
@@ -841,6 +941,14 @@ which is exactly the staleness this warning is about. The current readings are i
   not by any later wave, and not before the deletion. So the item does not close with the
   directory; it moves forward. It applies to all 31 playbooks in `_multi-user/` now, and the
   cheapest way to discharge it is still one playbook, one 24.04 control node, one remote host.
+
+  **Closed for this directory 2026-08-17:** all seven playbooks now run `failed=0` against both
+  `ws01` and `ws02` over SSH from a 2.16 control node, which turned up one defect (`helm.yml`,
+  since fixed) that the `localhost`/2.20 evidence structurally could not reach. See
+  [the `ws01`/`ws02` run](#the-ws01ws02-run-2026-08-17--and-the-one-defect-only-a-216-control-node-could-find).
+  With [`cloud-cli/` closed the same way](MIGRATION2.md#known-follow-ups) on the same day, the
+  outstanding remainder is `core/` and `misc/` — the item stays open until those are run too,
+  and this run is the second of three reasons to expect it to find something when they are.
 - **Renaming `_multi-user/`.** The underscore meant *staging*, sorting the tree apart from the
   live single-user directories it would replace. Those directories are gone — `core/` is the
   whole of the legacy tree and has no `_multi-user/` counterpart — so the prefix now marks a
