@@ -8,6 +8,15 @@
 #
 #   /opt/pipx            PIPX_HOME   (the venv and its installed package)
 #   /usr/local/bin/junit2html   PIPX_BIN_DIR, the app symlink pipx creates
+#   /usr/local/share/man        PIPX_MAN_DIR
+#
+# PIPX_MAN_DIR is set for the same reason as the other two, and it is not
+# cosmetic: left unset, pipx creates /root/.local/share/man on every run --
+# confirmed by removing that directory, running an install with the variable
+# set (it stays gone) and one without it (it comes back). Writing under
+# root's own $HOME is what MIGRATION3's B2 forbids, and it also puts any man
+# page a package ships somewhere no other account can read. Task 2 clears up
+# the directory left behind by runs made before this was set.
 #
 # There is nothing to add to a shell profile: junit2html is a plain CLI with
 # no per-user configuration.
@@ -26,8 +35,12 @@
 
   vars:
     junit2html_version: "31.1.4"
+    # What pipx creates under root's own $HOME when PIPX_MAN_DIR is unset,
+    # cleared up below.
+    junit2html_legacy_man_dir: /root/.local/share/man
     junit2html_pipx_home: /opt/pipx
     junit2html_bin_dir: /usr/local/bin
+    junit2html_man_dir: /usr/local/share/man
     junit2html_bin: "{{ junit2html_bin_dir }}/junit2html"
     # uid/gid used to prove the install is usable by an arbitrary user
     junit2html_verify_uid: 65534    # nobody
@@ -42,23 +55,62 @@
         update_cache: true
         cache_valid_time: 3600
 
-    - name: 2. Check the currently installed junit2html version
+    - name: 2. Look for the man directory pipx creates when PIPX_MAN_DIR is unset
+      # check_mode: false because this reads state that already exists.
+      ansible.builtin.stat:
+        path: "{{ junit2html_legacy_man_dir }}"
+      register: junit2html_man_stat
+      check_mode: false
+
+    - name: 3. Remove that directory when it is empty
+      # rmdir rather than state: absent, so it goes only when empty: anything
+      # since put there is somebody's and is left alone (rmdir simply fails,
+      # which failed_when: false tolerates and changed_when reports as no
+      # change). Any other playbook here doing the same is a no-op, not a
+      # conflict.
+      #
+      # `removes:` is deliberately NOT used to skip this: a command skipped
+      # that way registers rc 0 and no `skipped` key at all, so every run
+      # after the first would report a change it did not make. The stat above
+      # is the gate instead.
+      ansible.builtin.command:
+        cmd: rmdir {{ junit2html_legacy_man_dir }}
+      register: junit2html_rmdir_man
+      changed_when: junit2html_rmdir_man.rc == 0
+      failed_when: false
+      when: junit2html_man_stat.stat.exists
+
+    - name: 4. Check the currently installed junit2html version
       # junit2html has no --version flag; pipx's own metadata is the only
       # source of the installed version.
       ansible.builtin.command: pipx list --short
       environment:
         PIPX_HOME: "{{ junit2html_pipx_home }}"
         PIPX_BIN_DIR: "{{ junit2html_bin_dir }}"
+        PIPX_MAN_DIR: "{{ junit2html_man_dir }}"
       register: junit2html_installed
       changed_when: false
+      check_mode: false
       failed_when: false
 
-    - name: 3. Decide whether junit2html needs installing
+    - name: 5. Decide whether junit2html needs installing
       ansible.builtin.set_fact:
         junit2html_install_needed: >-
           {{ ('junit2html ' ~ junit2html_version) not in (junit2html_installed.stdout | default('')) }}
+        junit2html_can_verify: >-
+          {{ not (ansible_check_mode
+                  and ('junit2html ' ~ junit2html_version)
+                      not in (junit2html_installed.stdout | default(''))) }}
 
-    - name: 4. Install junit2html via pipx as root
+    - name: 5a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install junit2html {{ junit2html_version }}, so the
+          version check and the unprivileged render below are skipped rather
+          than failed. Re-run without --check to verify the install.
+      when: not (junit2html_can_verify | bool)
+
+    - name: 6. Install junit2html via pipx as root
       community.general.pipx:
         name: junit2html
         source: "junit2html=={{ junit2html_version }}"
@@ -66,9 +118,10 @@
       environment:
         PIPX_HOME: "{{ junit2html_pipx_home }}"
         PIPX_BIN_DIR: "{{ junit2html_bin_dir }}"
+        PIPX_MAN_DIR: "{{ junit2html_man_dir }}"
       when: junit2html_install_needed | bool
 
-    - name: 5. Ensure the pipx install tree is world-readable
+    - name: 7. Ensure the pipx install tree is world-readable
       # Guards against pipx's own umask when creating the venv; 'X' only adds
       # the execute bit to directories and already-executable files.
       ansible.builtin.file:
@@ -79,16 +132,19 @@
         mode: 'u=rwX,go=rX'
         recurse: true
 
-    - name: 6. Verify the installed junit2html version
+    - name: 8. Verify the installed junit2html version
       ansible.builtin.command: pipx list --short
       environment:
         PIPX_HOME: "{{ junit2html_pipx_home }}"
         PIPX_BIN_DIR: "{{ junit2html_bin_dir }}"
+        PIPX_MAN_DIR: "{{ junit2html_man_dir }}"
       register: junit2html_version_out
       changed_when: false
+      check_mode: false
       failed_when: ('junit2html ' ~ junit2html_version) not in junit2html_version_out.stdout
+      when: junit2html_can_verify | bool
 
-    - name: 7. Write a sample JUnit XML report for the unprivileged smoke test
+    - name: 9. Write a sample JUnit XML report for the unprivileged smoke test
       ansible.builtin.copy:
         dest: /tmp/junit2html-multiuser-smoke.xml
         mode: '0644'
@@ -97,8 +153,10 @@
           <testsuite name="multiuser-smoke" tests="1" failures="0" errors="0" skipped="0">
             <testcase classname="smoke" name="test_ok" time="0.01"/>
           </testsuite>
+      check_mode: false
+      when: junit2html_can_verify | bool
 
-    - name: 8. Render the report as an unprivileged user
+    - name: 10. Render the report as an unprivileged user
       ansible.builtin.command:
         cmd: >-
           setpriv --reuid={{ junit2html_verify_uid }} --regid={{ junit2html_verify_gid }} --clear-groups
@@ -110,22 +168,27 @@
         TMPDIR: /tmp
       register: junit2html_smoke
       changed_when: false
+      check_mode: false
+      when: junit2html_can_verify | bool
 
-    - name: 9. Confirm the report was rendered
+    - name: 11. Confirm the report was rendered
       ansible.builtin.stat:
         path: /tmp/junit2html-multiuser-smoke.html
       register: junit2html_smoke_report
+      check_mode: false
       failed_when: not junit2html_smoke_report.stat.exists
+      when: junit2html_can_verify | bool
 
-    - name: 10. Remove the smoke test files
+    - name: 12. Remove the smoke test files
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
         - /tmp/junit2html-multiuser-smoke.xml
         - /tmp/junit2html-multiuser-smoke.html
+      check_mode: false
 
-    - name: 11. Display installation summary
+    - name: 13. Display installation summary
       ansible.builtin.debug:
         msg:
           - "junit2html {{ junit2html_version }} installed system-wide."
@@ -139,3 +202,4 @@
           - "  junit2html results.xml report.html   # Convert a JUnit XML report to HTML"
           - "  junit2html results.xml               # Write HTML to stdout"
           - "  junit2html --summary-matrix *.xml    # Summarise multiple report files"
+      when: junit2html_can_verify | bool

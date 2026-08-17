@@ -209,13 +209,26 @@ Installs [junit2html](https://gitlab.com/inorton/junit2html) via `pipx`, root-ow
 | --- | --- |
 | `/opt/pipx` | `PIPX_HOME` — the pipx-managed virtualenv holding junit2html |
 | `/usr/local/bin/junit2html` | `PIPX_BIN_DIR` — the app symlink pipx creates |
+| `/usr/local/share/man` | `PIPX_MAN_DIR` |
 
-Runs `pipx` as `root` with `PIPX_HOME`/`PIPX_BIN_DIR` redirected to the root-owned paths
+Runs `pipx` as `root` with `PIPX_HOME`/`PIPX_BIN_DIR`/`PIPX_MAN_DIR` redirected to the root-owned paths
 above — the pipx-as-root pattern from `MIGRATION.md`'s install mechanism decision order —
 rather than the per-user `~/.local/bin` / `~/.local/pipx` that a plain `pipx install` as
 the connecting user would use. There is nothing to add to a shell profile: junit2html is a
 plain CLI with no per-user configuration.
 
+- **`PIPX_MAN_DIR` matters.** Left unset, pipx creates `/root/.local/share/man` on every
+  run — confirmed by removing that directory, running an install with the variable set (it
+  stays gone) and one without it (it comes back). Writing under root's own `$HOME` is what
+  MIGRATION3's B2 forbids. The playbook also clears up the directory earlier runs left
+  behind, with `rmdir` rather than `state: absent` so it goes only when empty; anything since
+  put there is somebody's and is left alone. [`certbot.yml`](#certbotyml), the other pipx
+  user here, does the same, and the two are no-ops for each other.
+- **`--check` verifies instead of failing.** The read-only checks — the pipx version read and
+  the unprivileged render — carry `check_mode: false`, so a dry run against an
+  already-provisioned host really exercises them; and when `--check` is the run that would have
+  done the install, the `junit2html_can_verify` gate skips them with a note rather than failing
+  on a report that was never rendered. Same shape as the rest of `misc/`.
 - **No `--version` flag.** junit2html has no way to report its own version, so both the
   idempotency check and the post-install verification instead parse `pipx list --short`,
   which prints `junit2html <version>` once installed.
@@ -710,9 +723,9 @@ appears instead — then run one without it, and it comes back. Writing under ro
 is what MIGRATION3's B2 forbids, and it also puts any man page a package ships somewhere no
 other account can read. Here it points at `/usr/local/share/man`, where `man certbot` finds it.
 
-The playbook also clears up the directory earlier runs left behind, with `rmdir` rather than
-`state: absent` so it goes only when empty: anything since put there is somebody's and is left
-alone.
+Both this playbook and [`junit2html.yml`](#junit2htmlyml) — the other pipx user here — also
+clear up the directory earlier runs left behind, with `rmdir` rather than `state: absent` so it
+goes only when empty: anything since put there is somebody's and is left alone.
 
 ### The plugin is injected, not installed alongside
 
