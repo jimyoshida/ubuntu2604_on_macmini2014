@@ -1,7 +1,7 @@
 # Core Playbooks (multi-user workstations)
 
-Standalone playbooks that install the base CLI toolset, Node.js and mise on a **shared** Ubuntu
-workstation. They are the multi-user successors to `core/`. See
+Standalone playbooks that install the base CLI toolset, Node.js, mise and ansible-core on a
+**shared** Ubuntu workstation. They are the multi-user successors to `core/`. See
 [MIGRATION4.md](../../MIGRATION4.md) for the policy and the per-tool plan.
 
 Run from `playbooks/`:
@@ -185,6 +185,89 @@ actually works end-to-end for a real interactive session, not just that the bina
 apt package pins are release-specific (see `shellcheck.yml`'s note on the same issue,
 below); to override one, edit `modern_tools_packages` with `-e` as a JSON list, the same
 pattern [`misc/grype-syft.yml`](../misc/README.md) uses for its tool list.
+
+## ansible-core.yml
+
+Installs [ansible-core](https://github.com/ansible/ansible) from the Ubuntu apt package —
+ten CLI entrypoints under `/usr/bin`, root-owned — plus five pinned Galaxy collections into
+`/usr/share/ansible/collections`. There is no per-user state and nothing to add to a shell
+profile: that directory is already the system-wide half of ansible-core's default
+`COLLECTIONS_PATH` (`~/.ansible/collections:/usr/share/ansible/collections`), so every account
+picks the collections up with no environment variable and no config of its own.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/ansible{,-config,-console,-doc,-galaxy,-inventory,-playbook,-pull,-test,-vault}` | from the `ansible-core` apt package |
+| `/usr/share/ansible/collections` | `ansible.posix`, `community.general`, `community.docker`, `community.postgresql`, `amazon.aws` |
+
+**ansible-core, not the `ansible` community bundle.** apt carries both: `ansible`
+(13.1.0+dfsg-1ubuntu1 on 26.04) is the batteries-included collection bundle that depends on
+`ansible-core`, a much larger install with its own collection versioning. This playbook pins
+the engine and exactly the five collections above, and neither installs nor removes the
+bundle — though it does declare `Depends: ansible-core (>= 2.18.0~)`, so pinning
+`ansible_core_version` under that floor makes apt refuse the transaction rather than
+silently break the bundle.
+
+**The bundle, where it is installed, is also what makes the collection handling non-trivial.**
+It ships four of these five collections under `/usr/lib/python3/dist-packages/ansible_collections`
+at its own versions (measured on ws01: `amazon.aws` 10.1.2, `ansible.posix` 2.1.0,
+`community.docker` 5.0.4, `community.general` 12.1.0, `community.postgresql` 4.2.0 — all older
+than the pins here except postgresql, which matches exactly). Two consequences the playbook is
+built around:
+
+- **`ansible-galaxy collection install` silently does nothing** when the collection is visible
+  in *any* path, including that bundle's. Confirmed live with `community.postgresql` 4.2.0: the
+  install reported success-by-omission and nothing landed in the target path. Hence
+  `--force-with-deps` — the `deps` half matters too, or a dependency that exists only in the
+  bundle's tree (`community.library_inventory_filtering_v1`, for `community.docker`) is skipped
+  as well, leaving this install dependent on a package it does not own.
+- **The idempotency check reads the version installed at the target path**, not whether the
+  collection is installed at all — and it keys on `<path>/ansible_collections`, which is what
+  `ansible-galaxy collection list --format json` reports, not the path passed to `-p`.
+
+**`ansible` writes to `$HOME` on a plain `--version`**, so, exactly as in `mise.yml`, this
+playbook never runs ansible itself as root: `dpkg-query` supplies both the idempotency check and
+the version verification. `ansible-galaxy` is worse — it writes a `galaxy_token` and a
+`galaxy_cache/`— and it is the one command here that *has* to run as root, so it gets a scratch
+`HOME`/`ANSIBLE_HOME` that does not outlive the play.
+
+**A scratch `$HOME` alone is not enough for the unprivileged checks**, which is the one genuinely
+non-obvious finding here. ansible resolves `remote_tmp` (default `~/.ansible/tmp`) against the
+*remote user's* home as read from the OS user database, and identifies that user from
+`USER`/`LOGNAME` in the environment — not from `$HOME`. Under `become: true` those are still
+root, so a smoke test that only overrides `HOME` has ansible try to `mkdir /root/.ansible/tmp` as
+uid 65534 and fail with "Failed to create temporary directory"; clearing `USER`/`LOGNAME` instead
+just moves the target to nobody's `/nonexistent`, which is no more writable. Both were reproduced
+directly on a target, which is why `ANSIBLE_REMOTE_TEMP` is set explicitly rather than inferred.
+
+The unprivileged verification is three checks as `nobody`, all of them level-2 rather than a bare
+`--version`:
+
+1. `ansible --version` reports the pinned core version.
+2. For each collection, `ansible-doc -t module -F <collection>` prints the file path ansible's own
+   plugin loader resolved — asserted to be under `/usr/share/ansible/collections`. This is the
+   empirical proof that a configured collections path beats the bundle's copies on the PYTHONPATH,
+   and incidentally that the installed tree is world-readable.
+3. A real one-task playbook runs over a local connection, exercising inventory parsing, Jinja
+   templating, a filter plugin loaded out of `community.general`, and the module transfer that
+   needs a writable temp directory. `ANSIBLE_NOCOWS=1` keeps cowsay, where it is installed, from
+   decorating the output the check parses.
+
+Collection pins are the latest release of each on galaxy.ansible.com as of 2026-08-17, read from
+the Galaxy v3 API rather than assumed. Galaxy publishes often — re-check before treating them as
+current:
+
+```bash
+curl -sS https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/community/general/ | jq .highest_version
+```
+
+Version overrides — the apt pin is Ubuntu-release-specific in the same way `shellcheck.yml`'s is;
+each collection has its own variable:
+
+```bash
+ansible-playbook core/ansible-core.yml -e host=ws01 -e ansible_core_version=2.20.1-1
+ansible-playbook core/ansible-core.yml -e host=ws01 -e ansible_collection_community_general_version=13.3.0
+```
 
 ## jq.yml
 

@@ -1,0 +1,469 @@
+---
+# Install ansible-core plus a pinned set of Galaxy collections system-wide on
+# a multi-user workstation.
+#
+#   /usr/bin/ansible, ansible-playbook, ansible-galaxy, ansible-doc,
+#   ansible-config, ansible-console, ansible-inventory, ansible-pull,
+#   ansible-vault, ansible-test        installed by apt, root-owned
+#   /usr/share/ansible/collections     pinned Galaxy collections, root-owned
+#
+# There is no per-user state and nothing to add to a shell profile:
+# /usr/share/ansible/collections is already the system-wide half of
+# ansible-core's default COLLECTIONS_PATH ('~/.ansible/collections:
+# /usr/share/ansible/collections'), so every account picks the collections up
+# with no environment variable and no config file of its own.
+#
+# ansible-core, NOT the `ansible` community bundle. apt carries both:
+# `ansible` (13.1.0+dfsg-1ubuntu1 on 26.04) is the batteries-included
+# collection bundle that depends on `ansible-core`, and it is a different,
+# much larger install with its own collection versioning. This playbook pins
+# and verifies the engine plus exactly the five collections listed below. It
+# neither installs nor removes the bundle; if the bundle is already present
+# on a target, note that it declares `Depends: ansible-core (>= 2.18.0~)`, so
+# pinning ansible_core_version below that floor would make apt refuse the
+# transaction rather than silently break the bundle.
+#
+# THE BUNDLE, IF PRESENT, ALSO SHIPS FOUR OF THESE FIVE COLLECTIONS at its
+# own versions, under /usr/lib/python3/dist-packages/ansible_collections
+# (measured on ws01: amazon.aws 10.1.2, ansible.posix 2.1.0, community.docker
+# 5.0.4, community.general 12.1.0, community.postgresql 4.2.0 -- every one of
+# them older than the pins here, except postgresql, which matches). That has
+# two consequences this playbook is built around:
+#
+#   1. A configured collections path wins over collections found on the
+#      PYTHONPATH, so installing into /usr/share/ansible/collections shadows
+#      the bundle's copies rather than colliding with them. Task 19 proves
+#      that empirically for an arbitrary uid rather than trusting it: it
+#      reads back the file path ansible's own plugin loader resolves.
+#   2. `ansible-galaxy collection install` treats a collection found in ANY
+#      visible path as already installed and does nothing -- confirmed live
+#      with community.postgresql 4.2.0, which the bundle already had, so the
+#      install silently no-op'd and nothing landed in the target path. Hence
+#      --force-with-deps below, and hence the idempotency check reads the
+#      version installed AT THE TARGET PATH rather than asking whether the
+#      collection is installed at all.
+#
+# ANSIBLE WRITES TO $HOME ON A PLAIN --version, so this playbook never runs
+# ansible itself as root: the install and post-install version checks compare
+# dpkg-query output instead (confirmed live: `env -i HOME=<scratch> ansible
+# --version` creates <scratch>/.ansible/tmp from the plainest possible
+# invocation). Running that as root would leave /root/.ansible behind, which
+# is what MIGRATION3's B2 forbids -- the same rule that shapes mise.yml.
+# ansible-galaxy is worse: it writes a galaxy_token file and a galaxy_cache/
+# directory. It is the one ansible command here that HAS to run as root
+# (it writes into a root-owned system path), so it gets a scratch HOME and
+# ANSIBLE_HOME of its own, removed again in task 14.
+#
+# A SCRATCH $HOME IS NOT ENOUGH ON ITS OWN for the unprivileged run, which is
+# the one non-obvious thing here. ansible resolves `remote_tmp` (default
+# `~/.ansible/tmp`) against the *remote user's* home as read from the OS user
+# database, not against $HOME -- and it identifies that user from
+# USER/LOGNAME in the environment. Under `become: true` those are still root,
+# so a smoke test that only overrides HOME has ansible try to mkdir
+# /root/.ansible/tmp as uid 65534 and fail "Failed to create temporary
+# directory"; clearing USER/LOGNAME instead just moves the target to nobody's
+# /nonexistent, which is no more writable. Both were reproduced directly on a
+# target. ANSIBLE_REMOTE_TEMP is therefore set explicitly below rather than
+# left to inference, and ANSIBLE_HOME keeps every other piece of ansible
+# state (collections, local temp) inside the scratch directory.
+#
+# Usage:
+#   ansible-playbook core/ansible-core.yml -e host=<inventory host or group>
+#   ansible-playbook core/ansible-core.yml -e host=ws01 -e ansible_core_version=2.20.1-1
+#   ansible-playbook core/ansible-core.yml -e host=ws01 \
+#     -e ansible_collection_community_general_version=13.3.0
+
+- name: Install ansible-core and pinned Galaxy collections system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt candidate version on Ubuntu 26.04 (resolute), checked 2026-08-17.
+    # apt versions are release-specific (see shellcheck.yml's note on the
+    # same issue), so overriding this only helps if that exact dpkg version
+    # is available from the target's configured apt sources.
+    ansible_core_version: "2.20.1-1"
+    # Upstream version as ansible reports it, derived from the dpkg version
+    # by dropping the Debian revision: 2.20.1-1 -> 2.20.1.
+    ansible_core_upstream: "{{ ansible_core_version.split('-')[0] }}"
+    # Every CLI entrypoint the package ships, from `dpkg -L ansible-core`.
+    ansible_core_binaries:
+      - /usr/bin/ansible
+      - /usr/bin/ansible-config
+      - /usr/bin/ansible-console
+      - /usr/bin/ansible-doc
+      - /usr/bin/ansible-galaxy
+      - /usr/bin/ansible-inventory
+      - /usr/bin/ansible-playbook
+      - /usr/bin/ansible-pull
+      - /usr/bin/ansible-test
+      - /usr/bin/ansible-vault
+    # The system-wide half of ansible-core's default COLLECTIONS_PATH.
+    ansible_core_collections_path: /usr/share/ansible/collections
+    # ...and the key `ansible-galaxy collection list --format json` files
+    # that path's contents under. It is not the path as passed to -p:
+    # ansible-galaxy reports the ansible_collections/ directory inside it,
+    # which is also where the collections themselves land.
+    ansible_core_collections_key: "{{ ansible_core_collections_path }}/ansible_collections"
+    # Latest release of each collection on galaxy.ansible.com as of
+    # 2026-08-17, read from the Galaxy v3 API rather than assumed. Galaxy
+    # publishes often; re-check before treating these as current:
+    #   curl -sS https://galaxy.ansible.com/api/v3/plugin/ansible/content/\
+    #     published/collections/index/<namespace>/<name>/ | jq .highest_version
+    ansible_collection_ansible_posix_version: "2.2.2"
+    ansible_collection_community_general_version: "13.3.0"
+    ansible_collection_community_docker_version: "5.2.2"
+    ansible_collection_community_postgresql_version: "4.2.0"
+    ansible_collection_amazon_aws_version: "11.4.0"
+    ansible_core_collections:
+      - name: ansible.posix
+        version: "{{ ansible_collection_ansible_posix_version }}"
+      - name: community.general
+        version: "{{ ansible_collection_community_general_version }}"
+      - name: community.docker
+        version: "{{ ansible_collection_community_docker_version }}"
+      - name: community.postgresql
+        version: "{{ ansible_collection_community_postgresql_version }}"
+      - name: amazon.aws
+        version: "{{ ansible_collection_amazon_aws_version }}"
+    # Scratch HOMEs: one for the root-side ansible-galaxy runs, one for the
+    # unprivileged checks. Neither outlives the play.
+    ansible_core_galaxy_home: /var/tmp/ansible-core-galaxy-home
+    ansible_core_smoke_home: /var/tmp/ansible-core-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    ansible_core_verify_uid: 65534    # nobody
+    ansible_core_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed ansible-core version
+      # dpkg-query, never `ansible --version` as root -- see the header
+      # comment on why running ansible itself as root is a B2 violation.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' ansible-core
+      register: ansible_core_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide whether ansible-core needs installing
+      ansible.builtin.set_fact:
+        ansible_core_install_needed: >-
+          {{ ansible_core_installed.rc != 0
+             or ansible_core_installed.stdout != ansible_core_version }}
+        ansible_core_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (ansible_core_installed.rc != 0
+                       or ansible_core_installed.stdout != ansible_core_version)) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install ansible-core {{ ansible_core_version }}, so
+          the version, collection and smoke checks below are skipped for this
+          run.
+      when: not (ansible_core_can_verify | bool)
+
+    - name: 3. Install ansible-core via apt
+      ansible.builtin.apt:
+        name: "ansible-core={{ ansible_core_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_core_install_needed | bool
+
+    - name: 4. Verify the installed ansible-core version
+      # check_mode: false here and on every later read-only task (13, 18, 19,
+      # 20): a `command`/`shell` task is skipped under --check by default,
+      # which would make a dry run against an already-provisioned host report
+      # ok without having verified anything. None of them writes outside the
+      # scratch directories, which are created and removed with check_mode:
+      # false for the same reason. The ansible_core_can_verify gate above
+      # still holds: what --check cannot verify is a host where --check
+      # itself did not perform the install.
+      ansible.builtin.command: dpkg-query -W -f='${Version}' ansible-core
+      register: ansible_core_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: ansible_core_version != ansible_core_version_out.stdout
+      when: ansible_core_can_verify | bool
+
+    - name: 5. Stat every CLI entrypoint the package ships
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ ansible_core_binaries }}"
+      register: ansible_core_bin_stat
+      when: ansible_core_can_verify | bool
+
+    - name: 6. Confirm every entrypoint is a root-owned executable
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.xusr
+        fail_msg: >-
+          {{ item.item }} is missing or is not a root-owned executable, so
+          the ansible-core install is not usable by every account on this
+          host.
+      loop: "{{ ansible_core_bin_stat.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when: ansible_core_can_verify | bool
+
+    - name: 7. Create the system-wide collections path
+      ansible.builtin.file:
+        path: "{{ ansible_core_collections_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: 8. Create a scratch HOME for the root-side ansible-galaxy runs
+      # ansible-galaxy writes ~/.ansible/galaxy_token and
+      # ~/.ansible/galaxy_cache/api.json on a plain install (confirmed live),
+      # so it gets a scratch HOME rather than leaving that under /root.
+      ansible.builtin.file:
+        path: "{{ ansible_core_galaxy_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+
+    - name: 9. Read the collection versions installed at the system path
+      # -p reports every visible path, not only this one; the parse below
+      # keys on ansible_core_collections_key alone, because a bundle copy
+      # under /usr/lib/python3/dist-packages says nothing about what is
+      # pinned here.
+      ansible.builtin.command:
+        cmd: >-
+          ansible-galaxy collection list
+          -p {{ ansible_core_collections_path }} --format json
+      environment: &galaxy_env
+        HOME: "{{ ansible_core_galaxy_home }}"
+        ANSIBLE_HOME: "{{ ansible_core_galaxy_home }}/.ansible"
+      register: ansible_core_collections_list
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 10. Parse the installed collection versions
+      ansible.builtin.set_fact:
+        ansible_core_collections_installed: >-
+          {{ (ansible_core_collections_list.stdout | default('{}') | from_json)
+             .get(ansible_core_collections_key, {}) }}
+
+    - name: 11. Collect the collections whose pinned version is not installed
+      ansible.builtin.set_fact:
+        ansible_core_collections_pending: >-
+          {{ ansible_core_collections_pending | default([])
+             + ([item.name]
+                if ansible_core_collections_installed.get(item.name, {}).get('version', '')
+                   != item.version
+                else []) }}
+      loop: "{{ ansible_core_collections }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+
+    - name: 11a. Note that collection verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install {{ ansible_core_collections_pending | join(', ') }},
+          so the collection checks below are skipped for this run.
+      when:
+        - ansible_check_mode
+        - ansible_core_collections_pending | length > 0
+
+    - name: 12. Install each pinned collection into the system path
+      # --force-with-deps, not a plain install: without --force, a collection
+      # the `ansible` bundle already ships is treated as installed and
+      # nothing lands here (see the header comment), and without the deps
+      # half, a dependency that exists only in the bundle's path is skipped
+      # too -- leaving this install dependent on a package it does not own.
+      ansible.builtin.command:
+        cmd: >-
+          ansible-galaxy collection install {{ item.name }}:=={{ item.version }}
+          -p {{ ansible_core_collections_path }} --force-with-deps
+      environment: *galaxy_env
+      loop: "{{ ansible_core_collections }}"
+      loop_control:
+        label: "{{ item.name }}:{{ item.version }}"
+      when: item.name in ansible_core_collections_pending
+      changed_when: true
+
+    - name: 13. Re-read the collection versions installed at the system path
+      ansible.builtin.command:
+        cmd: >-
+          ansible-galaxy collection list
+          -p {{ ansible_core_collections_path }} --format json
+      environment: *galaxy_env
+      register: ansible_core_collections_verify
+      changed_when: false
+      check_mode: false
+      when:
+        - ansible_core_can_verify | bool
+        - not (ansible_check_mode and ansible_core_collections_pending | length > 0)
+
+    - name: 14. Remove the ansible-galaxy scratch HOME
+      ansible.builtin.file:
+        path: "{{ ansible_core_galaxy_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 15. Confirm every pinned collection is installed at the pinned version
+      ansible.builtin.assert:
+        that:
+          - (ansible_core_collections_verify.stdout | from_json)
+            .get(ansible_core_collections_key, {})
+            .get(item.name, {}).get('version', '') == item.version
+        fail_msg: >-
+          {{ item.name }} is not installed at {{ item.version }} under
+          {{ ansible_core_collections_path }}.
+        success_msg: "{{ item.name }} {{ item.version }}"
+      loop: "{{ ansible_core_collections }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      when: ansible_core_collections_verify is not skipped
+
+    - name: 16. Create a scratch HOME for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ ansible_core_smoke_home }}"
+        state: directory
+        owner: "{{ ansible_core_verify_uid }}"
+        group: "{{ ansible_core_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: ansible_core_can_verify | bool
+
+    - name: 17. Write a one-task playbook for the unprivileged smoke test
+      ansible.builtin.copy:
+        dest: "{{ ansible_core_smoke_home }}/smoke.yml"
+        owner: "{{ ansible_core_verify_uid }}"
+        group: "{{ ansible_core_verify_gid }}"
+        mode: '0644'
+        content: |
+          ---
+          - name: ansible-core smoke test
+            hosts: localhost
+            connection: local
+            gather_facts: false
+            tasks:
+              - name: Render an expression through Jinja
+                ansible.builtin.debug:
+                  msg: "ansible-core smoke {{ '{{' }} 6 * 7 {{ '}}' }}"
+
+              - name: Load a filter plugin out of community.general
+                ansible.builtin.assert:
+                  that:
+                    - "('ok' | community.general.dict_kv('smoke')) == {'smoke': 'ok'}"
+                  success_msg: collection filter plugin loaded
+      check_mode: false
+      when: ansible_core_can_verify | bool
+
+    - name: 18. Report the ansible version as an unprivileged user
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ ansible_core_verify_uid }}
+          --regid={{ ansible_core_verify_gid }} --clear-groups
+          env HOME={{ ansible_core_smoke_home }}
+          ANSIBLE_HOME={{ ansible_core_smoke_home }}/.ansible
+          ansible --version
+        chdir: "{{ ansible_core_smoke_home }}"
+      register: ansible_core_smoke_version
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('core ' ~ ansible_core_upstream) not in ansible_core_smoke_version.stdout
+      when: ansible_core_can_verify | bool
+
+    - name: 19. Confirm the pinned collections are what an unprivileged user resolves
+      # The real test of precedence over the bundle's copies under
+      # /usr/lib/python3/dist-packages: ansible-doc -F prints the file path
+      # its plugin loader resolved for each module, so this reads back the
+      # path actually in effect for uid 65534 -- and, incidentally, proves
+      # the installed tree is world-readable.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ ansible_core_verify_uid }}
+          --regid={{ ansible_core_verify_gid }} --clear-groups
+          env HOME={{ ansible_core_smoke_home }}
+          ANSIBLE_HOME={{ ansible_core_smoke_home }}/.ansible
+          ansible-doc -t module -F {{ item.name }} | head -1
+        chdir: "{{ ansible_core_smoke_home }}"
+      register: ansible_core_smoke_doc
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ((ansible_core_smoke_doc.stdout | trim).split() | last)
+        is not match(ansible_core_collections_key ~ '/')
+      loop: "{{ ansible_core_collections }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - ansible_core_can_verify | bool
+        - ansible_core_collections_verify is not skipped
+
+    - name: 20. Run a real playbook as an unprivileged user
+      # Stronger than --version per A4: this exercises the engine end to end
+      # -- inventory parsing, a local connection, Jinja templating, a filter
+      # plugin loaded out of community.general, and the module transfer that
+      # needs a writable temp directory -- rather than printing a version
+      # string. ANSIBLE_REMOTE_TEMP is explicit because ansible would
+      # otherwise resolve it to root's or nobody's home (see the header
+      # comment), and ANSIBLE_NOCOWS keeps cowsay, if it is installed on the
+      # target, from decorating the output this task parses.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ ansible_core_verify_uid }}
+          --regid={{ ansible_core_verify_gid }} --clear-groups
+          env HOME={{ ansible_core_smoke_home }}
+          ANSIBLE_HOME={{ ansible_core_smoke_home }}/.ansible
+          ANSIBLE_LOCAL_TEMP={{ ansible_core_smoke_home }}/.ansible/tmp
+          ANSIBLE_REMOTE_TEMP={{ ansible_core_smoke_home }}/.ansible/tmp
+          ANSIBLE_NOCOWS=1
+          ansible-playbook -i localhost, {{ ansible_core_smoke_home }}/smoke.yml
+        chdir: "{{ ansible_core_smoke_home }}"
+      register: ansible_core_smoke_run
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        'ansible-core smoke 42' not in ansible_core_smoke_run.stdout
+        or 'collection filter plugin loaded' not in ansible_core_smoke_run.stdout
+        or 'failed=0' not in ansible_core_smoke_run.stdout
+      when: ansible_core_can_verify | bool
+
+    - name: 21. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ ansible_core_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 22. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            ansible-core {{ ansible_core_version_out.stdout
+            | default(ansible_core_version, true) | trim }} installed system-wide.
+          - ""
+          - "  {{ ansible_core_binaries | join(', ') }}"
+          - ""
+          - "Collections in {{ ansible_core_collections_path }}:"
+          - >-
+            {{ ansible_core_collections | map(attribute='name')
+            | zip(ansible_core_collections | map(attribute='version'))
+            | map('join', ' ') | join(', ') }}
+          - ""
+          - >-
+            Verified runnable by an unprivileged user (uid
+            {{ ansible_core_verify_uid }}): {{ ansible_core_smoke_version.stdout_lines[0]
+            | default('version check skipped') | trim }}, a one-task playbook ran
+            to completion over a local connection, and every collection above
+            resolved out of {{ ansible_core_collections_path }}.
+          - ""
+          - "Usage:"
+          - "  ansible-playbook -i inventory.ini play.yml   # Run a playbook"
+          - "  ansible -m ping <host>                       # Ad-hoc check"
+          - "  ansible-doc -l community.general             # Browse a collection"
+      when: ansible_core_can_verify | bool
