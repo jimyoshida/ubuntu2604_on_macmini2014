@@ -144,7 +144,7 @@ ansible-playbook core/mise.yml -e host=ws01 -e mise_version=2026.8.6
 
 ## modern-tools.yml
 
-Installs 12 modern CLI tool replacements from apt, root-owned, at `/usr/bin` (no per-user
+Installs 13 modern CLI tool replacements from apt, root-owned, at `/usr/bin` (no per-user
 state, nothing added to a shell profile for any of them):
 
 | Tool | apt package | Binary |
@@ -152,7 +152,15 @@ state, nothing added to a shell profile for any of them):
 | gum, fzf, eza, lsd, duf, procs, gdu, htop, glow | same name | same name |
 | ripgrep | `ripgrep` | `rg` |
 | bat | `bat` | `batcat` (symlinked to `/usr/local/bin/bat`) |
+| fd | `fd-find` | `fdfind` (symlinked to `/usr/local/bin/fd`) |
 | dust | `du-dust` | `dust` |
+
+**Two of them ship under a different binary name**, because the upstream name is already
+taken on Debian: `bat` is installed as `batcat` (the bacula tools own `/usr/bin/bat`) and `fd`
+as `fdfind` (`fdclone`, a file manager, owns `/usr/bin/fd`). Both are published under their
+upstream name from `/usr/local/bin`, which precedes `/usr/bin` on the default `PATH`, rather
+than left to each account to alias for itself — and the verification runs them *through* `PATH`
+as `nobody`, so it proves the symlink resolves and wins rather than merely existing.
 
 Also lays down:
 

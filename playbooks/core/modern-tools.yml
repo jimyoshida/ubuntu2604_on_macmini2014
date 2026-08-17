@@ -1,8 +1,8 @@
 ---
 # Install modern CLI tool replacements system-wide on a multi-user workstation.
 #
-# All twelve of these are current-enough Ubuntu apt packages, so they need no
-# more than a version pin. Three tools from the fifteen-tool source playbook
+# All thirteen of these are current-enough Ubuntu apt packages, so they need
+# no more than a version pin. Three tools from the fifteen-tool source playbook
 # are split into their own playbooks instead of bundled here:
 #   - yq.yml: Ubuntu's apt `yq` is the unrelated Python jq-wrapper, not
 #     mikefarah's Go yq that Homebrew installs, so it needs a release binary
@@ -13,6 +13,7 @@
 #
 #   /usr/bin/<tool>            for everything installed via apt
 #   /usr/local/bin/bat         symlink; apt installs the binary as batcat
+#   /usr/local/bin/fd          symlink; apt installs the binary as fdfind
 #   /etc/profile.d/fzf.sh      fzf key bindings and completion (interactive shells only)
 #
 # fzf's key bindings only take effect if /etc/profile.d is actually sourced by
@@ -54,10 +55,18 @@
         apt_package: bat
         version: "0.25.0-5ubuntu1"
         binary: batcat
+        # apt renames the binary; `alias` is the upstream name, published
+        # from /usr/local/bin by task 5.
+        alias: bat
       - name: eza
         apt_package: eza
         version: "0.23.4-1ubuntu1"
         binary: eza
+      - name: fd
+        apt_package: fd-find
+        version: "10.3.0-2ubuntu1"
+        binary: fdfind
+        alias: fd
       - name: lsd
         apt_package: lsd
         version: "1.2.0-1"
@@ -127,13 +136,22 @@
       changed_when: false
       failed_when: item.version != modern_tools_version_out.stdout
 
-    - name: 5. Ensure /usr/local/bin/bat symlinks to batcat
-      # apt names the binary batcat to avoid a clash with bacula-console.
+    - name: 5. Publish the upstream name for tools apt renamed
+      # Two of these ship under a different binary name because the upstream
+      # one is already taken on Debian: bat is installed as batcat (the bacula
+      # tools own /usr/bin/bat) and fd as fdfind (fdclone, a file manager,
+      # owns /usr/bin/fd). Documentation, muscle memory and every tutorial use
+      # the upstream names, so both are published from /usr/local/bin --
+      # which comes before /usr/bin on the default PATH -- rather than left to
+      # each account to alias for itself.
       ansible.builtin.file:
-        src: /usr/bin/batcat
-        dest: /usr/local/bin/bat
+        src: "/usr/bin/{{ item.binary }}"
+        dest: "/usr/local/bin/{{ item.alias }}"
         state: link
         force: true
+      loop: "{{ modern_tools_packages | selectattr('alias', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.alias }} -> {{ item.binary }}"
 
     - name: 6. Add fzf key bindings and completion for interactive shells
       ansible.builtin.copy:
@@ -172,7 +190,26 @@
       register: modern_tools_smoke
       changed_when: false
 
-    - name: 9. Verify fzf key bindings load for an unprivileged interactive shell
+    - name: 9. Run the renamed tools under their upstream name
+      # Proves the symlinks in task 5 resolve for an arbitrary account and,
+      # because this goes through PATH rather than a full path, that
+      # /usr/local/bin really does win over /usr/bin for them.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ modern_tools_verify_uid }} --regid={{ modern_tools_verify_gid }} --clear-groups
+          bash -i -c 'command -v {{ item.alias }} && {{ item.alias }} --version'
+      loop: "{{ modern_tools_packages | selectattr('alias', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.alias }}"
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: modern_tools_alias_smoke
+      changed_when: false
+      failed_when: >-
+        ('/usr/local/bin/' ~ item.alias) not in modern_tools_alias_smoke.stdout
+
+    - name: 10. Verify fzf key bindings load for an unprivileged interactive shell
       ansible.builtin.shell:
         cmd: >-
           setpriv --reuid={{ modern_tools_verify_uid }} --regid={{ modern_tools_verify_gid }} --clear-groups
@@ -184,7 +221,7 @@
       changed_when: false
       failed_when: "'__fzf_select__' not in modern_tools_fzf_smoke.stdout"
 
-    - name: 10. Display installation summary
+    - name: 11. Display installation summary
       ansible.builtin.debug:
         msg:
           - "Modern CLI tools installed system-wide:"
@@ -192,6 +229,9 @@
           - ""
           - "Verified runnable by an unprivileged user (uid {{ modern_tools_verify_uid }}),"
           - "including fzf key bindings in a non-login interactive shell."
+          - ""
+          - "apt renames two of these; both are published under the upstream name:"
+          - "{% for t in modern_tools_packages | selectattr('alias', 'defined') | list %}  /usr/local/bin/{{ t.alias }} -> /usr/bin/{{ t.binary }}{% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}"
           - ""
           - "No per-user setup is required: fzf's key bindings and completion"
           - "load from /etc/profile.d/fzf.sh for every interactive shell."
