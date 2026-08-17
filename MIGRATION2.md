@@ -85,6 +85,11 @@ rather than discovering an interpreter incompatibility in wave 4. If it does not
 a finding about the 24.04 control node, not about any individual playbook — record it here and
 decide whether 24.04 stays supported.
 
+> **Settled 2026-08-17: it holds.** All thirteen playbooks were run from a 24.04 control node
+> (ansible-core 2.16) against `ws01`/`ws02` on Python 3.14, `failed=0`, with no interpreter
+> complaint anywhere. 24.04 stays supported. See [the `ws01`/`ws02`
+> run](#the-ws01ws02-run-2026-08-17--and-the-one-defect-only-ssh-could-find).
+
 **On the target naming.** `_multi-user/tools/` needed the plural to avoid colliding with the
 `tool/` it replaces. No such collision exists here — `_multi-user/cloud-cli/` and `cloud-cli/`
 are distinguished by their parent — so keep the source directory's name. The leading
@@ -101,6 +106,10 @@ underscore on `_multi-user/` still means "staging", same as before.
   before relying on the deletion: `localhost` only, ansible-core 2.20 only, and no
   SSH/`remote_user` path — `ws01`/`ws02` have never been provisioned by either generation.
   The originals are recoverable from git history (`git log --diff-filter=D -- cloud-cli/`).
+  **Closed 2026-08-17:** all three limits are gone — every playbook now runs `failed=0` against
+  both `ws01` and `ws02` over SSH from a 2.16 control node, which turned up one defect
+  (`gitlab-cli.yml`, since fixed). See [the `ws01`/`ws02`
+  run](#the-ws01ws02-run-2026-08-17--and-the-one-defect-only-ssh-could-find).
 - Deploying any of the *servers* these CLIs talk to (Jenkins, Vault, InfluxDB, Alertmanager).
   Every playbook here installs a client only, and that stays true after migration.
 
@@ -429,19 +438,19 @@ additions:
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `github-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 2.97.0 | Verified (localhost) |
-| `opentofu.yml` | vendor apt repo (2 keys) | vendor apt repo, A5 cleanup, 1 key | 1.12.5 | Verified (localhost) |
-| `prometheus-cli.yml` | apt | apt, pinned | promtool 2.53.5+ds1-3, alertmanager 0.28.1+ds-3 | Verified (localhost) |
-| `azure-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 2.89.0-1~noble | Verified (localhost) |
-| `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 579.0.0-0 | Verified (localhost) |
-| `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | 1.112.0 | Verified (localhost) |
-| `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Verified (localhost) |
-| `jira-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | 1.7.0 | Verified (localhost) |
-| `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | 1.0.0 | Verified (localhost) |
-| `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/lib` + symlink | 2.8.0 | Verified (localhost) |
-| `vault-cli.yml` | brew + tap | HashiCorp apt repo, A5 cleanup | 2.0.4-1 | Verified (localhost) |
-| `jenkins-cli.yml` | jar from a running Jenkins + `$JENKINS_URL` | pinned jar from `repo.jenkins-ci.org` + checksum; URL from a play var | 2.576 | Verified (localhost) |
-| `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | az 2.89.0-1~noble, ext 1.0.6 | Verified (localhost) |
+| `github-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 2.97.0 | Verified (localhost, ws01, ws02) |
+| `opentofu.yml` | vendor apt repo (2 keys) | vendor apt repo, A5 cleanup, 1 key | 1.12.5 | Verified (localhost, ws01, ws02) |
+| `prometheus-cli.yml` | apt | apt, pinned | promtool 2.53.5+ds1-3, alertmanager 0.28.1+ds-3 | Verified (localhost, ws01, ws02) |
+| `azure-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 2.89.0-1~noble | Verified (localhost, ws01, ws02) |
+| `gcloud-cli.yml` | vendor apt repo | vendor apt repo, A5 cleanup | 579.0.0-0 | Verified (localhost, ws01, ws02) |
+| `gitlab-cli.yml` | floating latest `.deb` | pinned `.deb` + checksum | 1.112.0 | Verified (localhost, ws01, ws02) |
+| `aws-cli.yml` | vendor zip installer | same installer, pinned + signature-verified | 2.36.17 | Verified (localhost, ws01, ws02) |
+| `jira-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | 1.7.0 | Verified (localhost, ws01, ws02) |
+| `gcx-cli.yml` | brew + tap | release tarball → `/usr/local/bin` | 1.0.0 | Verified (localhost, ws01, ws02) |
+| `influx-cli.yml` | brew | `dl.influxdata.com` tarball → `/usr/local/lib` + symlink | 2.8.0 | Verified (localhost, ws01, ws02) |
+| `vault-cli.yml` | brew + tap | HashiCorp apt repo, A5 cleanup | 2.0.4-1 | Verified (localhost, ws01, ws02) |
+| `jenkins-cli.yml` | jar from a running Jenkins + `$JENKINS_URL` | pinned jar from `repo.jenkins-ci.org` + checksum; URL from a play var | 2.576 | Verified (localhost, ws01, ws02) |
+| `azure-devops-cli.yml` | apt `az` + per-user extension | apt `az` + `az extension add --system` | az 2.89.0-1~noble, ext 1.0.6 | Verified (localhost, ws01, ws02) |
 
 Every row is also **retired**: none of the source playbooks named in the first column still
 exists, each having been deleted on 2026-08-10 once its successor was verified, and
@@ -464,6 +473,131 @@ against the policy, but **not executed against a target host**. Treat them as un
 someone runs `ansible-playbook cloud-cli/<tool>.yml -e host=<host>` and updates the table.
 Rows marked "Verified" completed with `failed=0` against the listed host, and re-ran
 idempotently.
+
+### The `ws01`/`ws02` run (2026-08-17) — and the one defect only SSH could find
+
+**All thirteen playbooks now run `failed=0` against both real workstations, from a 24.04
+control node.** This closes the two caveats every "Verified (localhost)" row below carries and
+that the [scope note](#scope) records as the limit of what "proven" covered: the runs here
+exercised **ansible-core 2.16** against **Python 3.14** targets, over SSH as a real
+`remote_user`. Twelve of the thirteen needed no change. One did.
+
+**The 2.16 control node question is settled: the lower half of the support matrix holds.** The
+[control-node section](#scope) asked for one wave-2 playbook to be run from 24.04 early,
+precisely so an interpreter incompatibility would not surface in wave 4. Run late rather than
+early, but run against all thirteen: `github-cli.yml` went first as the canary and passed, and
+nothing in the remaining twelve produced an interpreter complaint. ansible-core 2.16 drives
+Ubuntu 26.04 / Python 3.14 targets for every playbook in this directory, so 24.04 stays
+supported and no finding needs recording against it.
+
+**`gitlab-cli.yml` failed on both hosts, and `localhost` could never have caught it.** Task 14
+died as uid 65534 with:
+
+```
+failed to read configuration:  open .git/glab-cli/config.yml: permission denied
+```
+
+This is wave 3's `gcx` finding recurring in a wave-2 playbook — **the smoke test needs a
+working directory, not just a `HOME`** — and `gitlab-cli.yml` was the only playbook with
+unprivileged smoke tests that never got the `chdir` fix. It escaped wave 2 because of what the
+cwd happens to be in each connection mode, which is the whole reason a local run cannot
+substitute for a remote one:
+
+- On `localhost`, ansible runs from the repo checkout under `/home/yoshida/…`, mode `0755` and
+  world-traversable. `glab` looks for `.git/glab-cli/config.yml`, gets `ENOENT`, and carries on.
+- Over SSH the cwd is the login home. **Ubuntu 26.04 creates home directories mode `0750`**, so
+  uid 65534 cannot traverse it at all; the same lookup gets `EACCES`, which `glab` treats as
+  fatal rather than absent.
+
+The distinction that makes this a real defect and not a quirk of the test host is that
+**`ENOENT` and `EACCES` are different code paths in the tool**, and only the remote run reaches
+the second. Fixed the wave-3 way — `chdir` into the scratch `HOME` on tasks 14 and 15, with
+`check_mode: false` on the create and remove so the dry run keeps working (wave 2's `chdir`
+defect). Both hosts pass after the fix.
+
+Two general points worth carrying forward:
+
+- **A per-user home mode is part of the target's contract.** Nothing in either migration
+  document anticipated that the *connecting account's home directory permissions* could fail a
+  smoke test. Any playbook running `command` as an unprivileged uid without `chdir` inherits
+  that directory, so `chdir` into a directory the playbook itself created should be the default
+  for these tests, not a fix applied where a tool is known to read the cwd.
+- **"Verified (localhost)" was a weaker claim than the table's wording suggested.** Twelve of
+  thirteen survived the move to real hosts untouched, so the local runs were not worthless — but
+  the one failure was in the class the caveat named, and it took thirteen minutes of real running
+  to find something six weeks of local verification could not.
+
+Idempotency re-runs are `failed=0` on both hosts and **identical between them**, task for task,
+and they match the counts recorded for `localhost` throughout this document exactly —
+`ok=10 changed=2 skipped=10` for `aws-cli`, `ok=11 changed=2 skipped=4` for `azure-cli`,
+`ok=14 changed=2` for `jira-cli`/`gcx-cli`/`influx-cli`, `ok=17 changed=3` for `vault-cli`,
+`ok=16 changed=2` for `jenkins-cli`, `ok=19 changed=4` for `azure-devops-cli`. Every `changed`
+is a scratch `HOME` created and removed.
+
+Post-run checks independent of the playbooks, on both hosts: `gh 2.97.0`, `tofu 1.12.5`,
+`promtool 2.53.5+ds1`, `amtool 0.28.1+ds`, `az 2.89.0` with `azure-devops` extension `1.0.6`,
+`gcloud 579.0.0`, `glab 1.112.0`, `aws-cli/2.36.17`, `jira 1.7.0`, `gcx 1.0.0`, `influx`
+symlinked to `2.8.0`, `vault 2.0.4-1`, `jenkins-cli.jar` reporting
+`Implementation-Version: 2.576`. All binaries root-owned and world-readable; completions
+present in `/etc/bash_completion.d`; `vault.service` `disabled`; `/var/tmp` holds no playbook
+leftovers; `apt-get update` warns about nothing.
+
+**The legacy `.list` cleanup did its job, and `ws01` was the case that needed it.** `ws01`
+arrived carrying `azure-cli.list`, `github-cli.list`, `google-cloud-sdk.list` and
+`opentofu.list` from the retired single-user playbooks; `ws02` carried
+`google-cloud-sdk.list`. All are gone, replaced by the corresponding `.sources`, and
+`apt-get update` reports no duplicate-target warning on either host — the fifth wave-2 finding
+confirmed on a host that was not `localhost`. Repositories belonging to other directories
+(`docker`, `mise`, `nodesource`, `helm`, `trivy`) are untouched, as they should be.
+
+**The Homebrew follow-up is live on both hosts and is not closed by this run.** Both carry a
+`/home/linuxbrew` with formulae that shadow tools this directory installs — `jira` on `ws01`,
+and `gcx`, `influx` and `vault` on `ws02` — and `/home/yoshida/.bashrc` carries a
+`brew shellenv` line on each (line 133 and 136 respectively). The playbooks' own system-wide
+check (`env -i … bash -lc`, uid 65534) passes on both, so nothing puts brew on the *system*
+PATH. What could not be settled from here is the per-user half: every shell mode reachable
+through ansible's non-tty connection — `bash -lc`, `bash -lic`, `bash -ic` — resolved all four
+tools to the system copies and showed no `linuxbrew` in `PATH` at all, which means `.bashrc`
+was never sourced and **the interactive case was not actually exercised**, not that it passes.
+
+> **Resolved the same day by purging Homebrew from both hosts** rather than by testing the
+> interactive case — see [the purge below](#homebrew-purged-from-ws01ws02-2026-08-17). With no
+> prefix left there is no shadowing to check, interactively or otherwise.
+
+### Homebrew purged from `ws01`/`ws02` (2026-08-17)
+
+Both prefixes are gone: `/home/linuxbrew` (1.1G on `ws01`, 1.4G on `ws02`),
+`~/.cache/Homebrew`, and the `brew shellenv` block from `/home/yoshida/.bashrc` on each. This
+closes the [per-user half of the Homebrew follow-up](#known-follow-ups) for these two hosts the
+same way `localhost` closed it on 2026-08-11 — by removing the prefix, not by proving the
+`PATH` order safe.
+
+**The purge cost nothing, and that was checked rather than assumed.** Every formula on either
+host already had a system-wide equivalent installed by this repo's own playbooks — all 12
+`core/modern-tools.yml` tools, plus `jq`, `yq`, `shellcheck`, `jsonnet`, `bats`, `hadolint`,
+`trivy`, `grype`/`syft`, and the four `cloud-cli` tools that prompted the follow-up. Verified
+by resolving each of 28 tools before and after; all resolve to `/usr/bin` or `/usr/local/bin`,
+and the four de-brew playbooks re-run `failed=0` afterwards with their `PATH` assertions intact.
+
+**One formula had no successor: `go` 1.26.5 on `ws02`**, which existed only in the brew prefix —
+no repo playbook provides a Go toolchain and there was no system `go`. Dropped deliberately
+(apt offers `golang-go` `2:1.26~1` if it is wanted back). `~/go` did not exist, so no workspace
+was lost. **If a Go toolchain is wanted on these workstations, it needs a playbook** — it is
+currently the one thing `ws02` had that this repo cannot reproduce.
+
+On MIGRATION2.md's two documented traps, checked before deleting: **no hand-built binary** in
+either prefix — every entry in `bin/`/`sbin/` was a symlink into `Cellar`, and there were no
+broken symlinks — and the **orphaned `lib/node_modules/npm` was present on `ws01`** exactly as
+the `localhost` cleanup predicted, superseded by `/usr/bin/npm` and so no loss. `etc/` held only
+formula-generated config and `var/` only brew's own bookkeeping; no `brew services` units, no
+crontab or systemd references, and no other account on either host referenced the prefix.
+Checking first is what makes `rm -rf` on the prefix the right tool here rather than 38
+`brew uninstall` calls — but it is the checking, not the `rm -rf`, that this entry is
+recommending.
+
+**The follow-up is now closed for every host this repo knows about**, `localhost` included. It
+stays open in principle for any host provisioned before 2026-08-10 that is not one of these
+three, since `core/homebrew.yml`'s deletion uninstalled nothing.
 
 `aws-cli.yml` is verified against `localhost` — this repo's own workstation, provisioned in
 place via an `ansible_connection=local` inventory entry rather than over SSH — and **not** yet
@@ -877,8 +1011,14 @@ and is therefore not a clean read of what `ws01`/`ws02` see.
   there. Two things that cleanup turned up and that are worth expecting on any other host: a
   hand-built binary living in `.linuxbrew/bin` that belonged to no formula and would have gone
   with a bare `rm -rf`, and an orphaned `lib/node_modules/npm` left by a formula that was no
-  longer installed. Check the prefix for non-formula content before deleting it. The item stays
-  open for every other host provisioned before 2026-08-10.
+  longer installed. Check the prefix for non-formula content before deleting it. ~~The item stays
+  open for every other host provisioned before 2026-08-10.~~ **Done on `ws01` and `ws02`
+  2026-08-17**, the same way and after the same checks — the orphaned `node_modules/npm` recurred
+  on `ws01`, the hand-built binary did not appear on either, and `go` was the one formula with no
+  system-wide successor. See [the purge
+  entry](#homebrew-purged-from-ws01ws02-2026-08-17). **Closed for all three hosts this repo
+  knows about**; it stays open only for hosts provisioned before 2026-08-10 that are not among
+  them.
 - ~~**`cloud-cli/env-tmpl.sh` successor**~~ — **closed 2026-08-10.** There is none: the file
   is deleted and its content is now documentation, in
   [`_multi-user/cloud-cli/README.md`](_multi-user/cloud-cli/README.md#environment-variables)
