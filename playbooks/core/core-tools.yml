@@ -5,7 +5,7 @@
 #   /usr/bin/<tool>                    for every package that ships a binary
 #   /etc/ssl/certs/ca-certificates.crt the one package here with no binary
 #
-# All seventeen packages already come from Ubuntu's own apt archive, so unlike
+# All eighteen packages already come from Ubuntu's own apt archive, so unlike
 # most of _multi-user/tools/ this migration needed no reach work: the source
 # playbook (core/core-tools.yml, renamed from core/agent-base.yml on
 # 2026-08-14) already installs to root-owned /usr paths. What it does not do
@@ -35,9 +35,12 @@
 # (ncat does; figlet and dos2unix do not), and always grep for a version-
 # bearing string rather than the tool's own name.
 #
-# There is no shell configuration here and no per-user state: every package
-# in this list is a plain CLI tool or a system-wide data file, so there is
-# nothing for B2/B3 to say and nothing to add to a shell profile.
+# There is no shell configuration here, and the only per-user state any of
+# these creates is parallel's: running a job -- not `--version`, which writes
+# nothing -- makes ~/.parallel/tmp in the invoking account's own home, which
+# is exactly where it belongs. Nothing here writes into anyone's $HOME (the
+# unprivileged checks get the scratch one below), so there is nothing else
+# for B2/B3 to say and nothing to add to a shell profile.
 #
 # Usage:
 #   ansible-playbook core/core-tools.yml -e host=<inventory host or group>
@@ -104,6 +107,16 @@
       - name: make
         version: "4.4.1-3"
         verify_cmd: "make --version | grep -q 'GNU Make 4.4.1'"
+      # The one verify_cmd here that does real work rather than reading a
+      # version string: running jobs is GNU parallel's whole purpose, so this
+      # runs three of them and checks their combined output. Ubuntu's package
+      # prints no citation notice -- confirmed, an unprivileged run writes
+      # nothing at all to stderr -- so there is nothing to silence for it.
+      - name: parallel
+        version: "20240222+ds-3"
+        verify_cmd: >-
+          parallel --version | grep -q '^GNU parallel 20240222'
+          && seq 3 | parallel echo | sort | tr '\n' ' ' | grep -q '1 2 3'
     # ca-certificates ships no binary, so it is installed with the rest but
     # verified separately (task 8), not through core_tools_packages.
     core_tools_ca_certificates_version: "20260601~26.04.1"

@@ -22,17 +22,19 @@ as an arbitrary uid (`setpriv --reuid=65534`) rather than as the connecting acco
 
 ## core-tools.yml
 
-Installs seventeen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
+Installs eighteen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
 `lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `zip`, `unzip`, `vim`,
-`net-tools`, `ncat`, `figlet`, `dos2unix`, `make`, `ca-certificates`, `aha` — all to
-`/usr/bin` (or, for `ca-certificates`, a data file with no binary at all). There is no per-user
-state and nothing added to a shell profile for any of them. `jq` has its own dedicated
-playbook, [`jq.yml`](#jqyml).
+`net-tools`, `ncat`, `figlet`, `dos2unix`, `make`, `parallel`, `ca-certificates`, `aha` — all
+to `/usr/bin` (or, for `ca-certificates`, a data file with no binary at all). Nothing is added
+to a shell profile, and the only per-user state any of them creates is GNU parallel's: running
+a job — not `--version`, which writes nothing — makes `~/.parallel/tmp` in the invoking
+account's own home, where it belongs. `jq` has its own dedicated playbook,
+[`jq.yml`](#jqyml).
 
 Every package is pinned and version-compared against what's installed, and every package is
 verified as an unprivileged user.
 
-Two packages do not fit a plain `--version` check, and the verify command for **every**
+Three packages do not fit a plain `--version` check, and the verify command for **every**
 package was confirmed against the actual installed binary rather than assumed:
 
 - **`ca-certificates`** ships no binary. Verified by checking `/etc/ssl/certs/ca-certificates.crt`
@@ -40,6 +42,10 @@ package was confirmed against the actual installed binary rather than assumed:
 - **`aha`** has no reliably documented `--version` output. Verified by feeding it a real
   ANSI bold escape sequence and checking it came back as an actual HTML document, not merely
   echoed unchanged.
+- **`parallel`** could be checked with a version string, but running jobs is the whole point
+  of it, so its check runs three and compares their combined output — the one verify command
+  here that does real work. Ubuntu's package prints no citation notice (confirmed: an
+  unprivileged run writes nothing at all to stderr), so nothing has to be silenced for it.
 
 One finding only visible by actually running the playbook, not by reading the source:
 `git-lfs` and `git-secret`'s unprivileged checks needed a `chdir` into the scratch
