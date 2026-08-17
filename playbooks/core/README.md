@@ -1,7 +1,7 @@
 # Core Playbooks (multi-user workstations)
 
-Standalone playbooks that install the base CLI toolset, Node.js, mise and ansible-core on a
-**shared** Ubuntu workstation. They are the multi-user successors to `core/`. See
+Standalone playbooks that install the base CLI toolset, Node.js, mise, ansible-core and the
+.NET SDK on a **shared** Ubuntu workstation. They are the multi-user successors to `core/`. See
 [MIGRATION4.md](../../MIGRATION4.md) for the policy and the per-tool plan.
 
 Run from `playbooks/`:
@@ -174,6 +174,46 @@ Version overrides:
 
 ```bash
 ansible-playbook core/mise.yml -e host=ws01 -e mise_version=2026.8.6
+```
+
+## dotnet.yml
+
+Installs the .NET SDK from the Ubuntu archive.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/dotnet` | the CLI |
+| `/usr/lib/dotnet/` | SDK, runtimes, targeting packs, templates |
+
+**No Microsoft apt repository and no vendor key**: Ubuntu 26.04 carries .NET 10 itself, as
+`dotnet-sdk-10.0`, which pulls the host, runtime, ASP.NET runtime, targeting packs, templates
+and the AOT components with it — thirteen packages in all. That is a change from earlier
+releases, where `packages.microsoft.com` was the only source.
+
+**Per-user state is the norm with .NET, and this playbook creates none of it.** Each account
+gets its own `~/.dotnet` (CLI state, first-run sentinel) and `~/.nuget/packages` (the package
+cache) on first use. A shared NuGet cache is deliberately not created: one account's restore
+should not decide what another builds against.
+
+That same fact makes the CLI unsafe to run as root here — `dotnet --version` alone creates
+`/root/.dotnet`, which MIGRATION3's B2 forbids — so the idempotency and version checks read
+`dpkg-query` (as `mise.yml` does) and every actual `dotnet` invocation is unprivileged with a
+scratch `HOME`.
+
+The unprivileged verification is the strongest form available: it creates a console project
+from the SDK's own template, builds it and runs it, so the templates, the compiler, the runtime
+and NuGet restore are all exercised for an account that did no setup of its own.
+
+Telemetry is left to each account (`DOTNET_CLI_TELEMETRY_OPTOUT=1`), the same way
+[`misc/dvc.yml`](../misc/README.md#dvcyml) leaves DVC's analytics alone; the playbook sets it
+only for its own checks.
+
+This is the prerequisite for [`misc/dotnet-tools.yml`](../misc/README.md#dotnet-toolsyml).
+
+Version overrides:
+
+```bash
+ansible-playbook core/dotnet.yml -e host=ws01 -e dotnet_version=10.0.110-0ubuntu1~26.04.1
 ```
 
 ## modern-tools.yml

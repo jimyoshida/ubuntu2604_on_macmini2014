@@ -1,0 +1,200 @@
+---
+# Install the .NET SDK system-wide on a multi-user workstation.
+#
+#   /usr/bin/dotnet         the CLI, from the Ubuntu archive
+#   /usr/lib/dotnet/        the SDK, runtimes, targeting packs and templates
+#
+# Ubuntu 26.04 carries .NET 10 in its own archive -- dotnet-sdk-10.0, which
+# pulls the host, runtime, ASP.NET runtime, targeting packs, templates and
+# the AOT components with it -- so there is no Microsoft apt repository to
+# add and no vendor key to pin. That is a change from earlier releases, where
+# packages.microsoft.com was the only source.
+#
+# PER-USER STATE IS THE NORM WITH .NET AND THIS PLAYBOOK CREATES NONE OF IT.
+# Each account gets its own ~/.dotnet (CLI state, the first-run sentinel) and
+# ~/.nuget/packages (the package cache) the first time it runs the CLI, which
+# is where they belong: a shared NuGet cache would let one account's restore
+# decide what another account builds against.
+#
+# The same fact makes the CLI unsafe to run as root here: `dotnet --version`
+# alone creates /root/.dotnet, which is what MIGRATION3's B2 forbids. So the
+# idempotency and version checks read dpkg-query, exactly as mise.yml does,
+# and every actual invocation of dotnet below is unprivileged with a scratch
+# HOME.
+#
+# Telemetry: the .NET CLI reports usage by default. This playbook turns that
+# off for nobody -- it is a per-account or per-site decision, and the way to
+# make it site-wide is DOTNET_CLI_TELEMETRY_OPTOUT=1 in /etc/environment,
+# which this repository does not write for anyone. It does set that variable
+# (and DOTNET_NOLOGO) for its own verification, the same way azure-cli.yml
+# keeps its smoke tests from forking a telemetry uploader.
+#
+# This is the prerequisite for misc/dotnet-tools.yml, which installs the
+# dotnet global tools into a root-owned --tool-path.
+#
+# Usage:
+#   ansible-playbook core/dotnet.yml -e host=<inventory host or group>
+#   ansible-playbook core/dotnet.yml -e host=ws01 -e dotnet_version=10.0.110-0ubuntu1~26.04.1
+
+- name: Install the .NET SDK system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt candidate on Ubuntu 26.04 (resolute), checked 2026-08-17. apt
+    # versions are release-specific (see shellcheck.yml's note on the same
+    # issue), so overriding this only helps if that exact dpkg version is
+    # available from the target's configured apt sources.
+    dotnet_package: dotnet-sdk-10.0
+    dotnet_version: "10.0.110-0ubuntu1~26.04.1"
+    dotnet_bin: /usr/bin/dotnet
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and a
+    # first build fills a NuGet cache under this directory.
+    dotnet_smoke_home: /var/tmp/dotnet-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    dotnet_verify_uid: 65534    # nobody
+    dotnet_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed .NET SDK version
+      # dpkg-query, never `dotnet --version` as root -- see the header on why
+      # running the CLI as root is a B2 violation.
+      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ dotnet_package }}"
+      register: dotnet_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide whether the .NET SDK needs installing
+      ansible.builtin.set_fact:
+        dotnet_install_needed: >-
+          {{ dotnet_installed.rc != 0 or dotnet_installed.stdout != dotnet_version }}
+        dotnet_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (dotnet_installed.rc != 0
+                       or dotnet_installed.stdout != dotnet_version)) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install {{ dotnet_package }} {{ dotnet_version }},
+          so the version check and the unprivileged build below are skipped
+          rather than failed. Re-run without --check to verify.
+      when: not (dotnet_can_verify | bool)
+
+    - name: 3. Install the .NET SDK via apt
+      # Thirteen packages in total: the host, hostfxr, runtime, ASP.NET
+      # runtime, targeting packs, templates and the AOT components. Only the
+      # SDK is pinned; the rest are its dependencies at matching versions.
+      ansible.builtin.apt:
+        name: "{{ dotnet_package }}={{ dotnet_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        allow_downgrade: true
+      when: dotnet_install_needed | bool
+
+    - name: 4. Verify the installed .NET SDK package version
+      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ dotnet_package }}"
+      register: dotnet_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: dotnet_version != dotnet_version_out.stdout
+      when: dotnet_can_verify | bool
+
+    - name: 5. Create a scratch HOME for the unprivileged checks
+      # dotnet writes ~/.dotnet and ~/.nuget the moment it runs, and uid
+      # 65534's home is /nonexistent, so every check below gets this instead.
+      ansible.builtin.file:
+        path: "{{ dotnet_smoke_home }}"
+        state: directory
+        owner: "{{ dotnet_verify_uid }}"
+        group: "{{ dotnet_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: dotnet_can_verify | bool
+
+    - name: 6. Report the SDK version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ dotnet_verify_uid }} --regid={{ dotnet_verify_gid }} --clear-groups
+          env HOME={{ dotnet_smoke_home }}
+          DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+          {{ dotnet_bin }} --list-sdks
+        chdir: "{{ dotnet_smoke_home }}"
+      register: dotnet_smoke_sdks
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        (dotnet_version.split('-')[0]) not in dotnet_smoke_sdks.stdout
+        or '/usr/lib/dotnet/sdk' not in dotnet_smoke_sdks.stdout
+      when: dotnet_can_verify | bool
+
+    - name: 7. Build and run a project as an unprivileged user
+      # A4's strongest form: the SDK creates a project from its own template,
+      # compiles it and runs the result, so this exercises the templates, the
+      # compiler, the runtime and NuGet restore for an account that did no
+      # setup of its own. `dotnet new` is given --no-restore so the restore
+      # happens once, inside the build.
+      #
+      # setpriv, not become_user: an uid has to be written "#65534" for sudo,
+      # and a YAML scalar starting with # is a comment -- quoting it makes
+      # ansible pass the literal string, which sudo rejects with "'-u'
+      # expects an argument". Every other unprivileged check in this
+      # repository uses setpriv for the same reason.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ dotnet_verify_uid }} --regid={{ dotnet_verify_gid }} --clear-groups
+          env HOME={{ dotnet_smoke_home }}
+          DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+          bash -c "set -e;
+          {{ dotnet_bin }} new console -o smoke --no-restore >/dev/null;
+          cd smoke;
+          {{ dotnet_bin }} run"
+        chdir: "{{ dotnet_smoke_home }}"
+      register: dotnet_smoke_run
+      changed_when: false
+      check_mode: false
+      failed_when: "'Hello, World!' not in dotnet_smoke_run.stdout"
+      when: dotnet_can_verify | bool
+
+    - name: 8. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ dotnet_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 9. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            .NET SDK {{ dotnet_version_out.stdout | default(dotnet_version, true) | trim }}
+            installed system-wide.
+          - ""
+          - "  {{ dotnet_bin }}"
+          - "  /usr/lib/dotnet/   SDK, runtimes, targeting packs, templates"
+          - ""
+          - >-
+            {{ dotnet_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ dotnet_verify_uid
+            ~ '): a console project was created from the SDK template, built'
+            ~ ' and run.',
+            'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "Each account gets its own ~/.dotnet and ~/.nuget/packages on first"
+          - "use. A shared NuGet cache is deliberately not created: one account's"
+          - "restore should not decide what another builds against."
+          - ""
+          - "The .NET CLI reports telemetry by default. Per account:"
+          - "  export DOTNET_CLI_TELEMETRY_OPTOUT=1"
+          - "For every account, add that line to /etc/environment."
+          - ""
+          - "Usage:"
+          - "  dotnet new console -o app     # project from a template"
+          - "  dotnet build | test | run     # build, test, run"
+          - "  dotnet tool install --tool-path ...   # see misc/dotnet-tools.yml"
+      when: dotnet_can_verify | bool
