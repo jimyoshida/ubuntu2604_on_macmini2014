@@ -1,0 +1,328 @@
+---
+# Install certbot, with the Route 53 DNS plugin, system-wide on a multi-user
+# workstation.
+#
+#   /opt/pipx/venvs/certbot/     the virtualenv, root-owned, world-readable
+#   /usr/local/bin/certbot       the app symlink pipx creates
+#   /usr/local/share/man/        pipx's man page destination (see below)
+#
+# The client only. Nothing here obtains, renews or installs a certificate,
+# and no ACME account is created for anyone: those are per-site actions that
+# need real DNS or a real web server, and on this host they are run by hand
+# under sudo. certbot keeps all of its state in /etc/letsencrypt,
+# /var/lib/letsencrypt and /var/log/letsencrypt -- root-owned system paths,
+# not per-user state -- and none of the three is created by this playbook.
+#
+# pipx, not apt and not snap:
+#
+#   * apt carries certbot 4.0.0-4 on 26.04 against upstream's 5.7.0, a whole
+#     major version behind. certbot speaks ACME to a live CA, and the gap
+#     between distribution and upstream is exactly where its protocol-level
+#     fixes sit, so this is one of the tools worth taking from upstream.
+#   * snap installs, but it refreshes itself on Canonical's schedule rather
+#     than on a pin in this repository, which is the opposite of what every
+#     other playbook here does. Nothing else in playbooks/ uses snap.
+#
+# pipx run as root with its state redirected to root-owned, world-readable
+# paths is the shape misc/junit2html.yml already uses here; the plugin then
+# goes into the same virtualenv with `pipx inject`, which is what puts its
+# entry point on certbot's plugin list.
+#
+# PIPX_MAN_DIR IS SET DELIBERATELY. Without it pipx creates
+# /root/.local/share/man -- confirmed by removing that directory, running an
+# install with PIPX_MAN_DIR set (it stays gone, and the configured directory
+# appears instead), then running one without it (it comes back). Writing
+# under root's own $HOME is what MIGRATION3's B2 forbids, and it also puts
+# any man page a package ships somewhere no other account can read.
+#
+# Usage:
+#   ansible-playbook misc/certbot.yml -e host=<inventory host or group>
+#   ansible-playbook misc/certbot.yml -e host=ws01 -e certbot_version=5.7.0
+
+- name: Install certbot and its DNS plugins system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current release on PyPI as of 2026-08-17:
+    #   curl -sS https://pypi.org/pypi/certbot/json | jq -r .info.version
+    certbot_version: "5.7.0"
+    # Plugins injected into certbot's own virtualenv. certbot releases its
+    # plugins in lockstep with itself, so these track certbot_version unless
+    # overridden individually. Add a plugin by adding an entry -- e.g.
+    # certbot-dns-cloudflare -- and it appears on `certbot plugins`.
+    certbot_plugins:
+      - name: certbot-dns-route53
+        version: "{{ certbot_version }}"
+    # What pipx creates under root's own $HOME when PIPX_MAN_DIR is unset,
+    # cleared up below.
+    certbot_legacy_man_dir: /root/.local/share/man
+    certbot_pipx_home: /opt/pipx
+    certbot_bin_dir: /usr/local/bin
+    certbot_man_dir: /usr/local/share/man
+    certbot_bin: /usr/local/bin/certbot
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts.
+    certbot_smoke_dir: /var/tmp/certbot-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    certbot_verify_uid: 65534    # nobody
+    certbot_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - pipx
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Look for the man directory pipx creates when PIPX_MAN_DIR is unset
+      # check_mode: false because this reads state that already exists.
+      ansible.builtin.stat:
+        path: "{{ certbot_legacy_man_dir }}"
+      register: certbot_man_stat
+      check_mode: false
+
+    - name: 3. Remove that directory when it is empty
+      # rmdir rather than state: absent, so it goes only when empty: anything
+      # since put there is somebody's and is left alone (rmdir simply fails,
+      # which failed_when: false tolerates and changed_when reports as no
+      # change). Any other playbook here doing the same is a no-op, not a
+      # conflict.
+      #
+      # `removes:` is deliberately NOT used to skip this: a command skipped
+      # that way registers rc 0 and no `skipped` key at all, so every run
+      # after the first would report a change it did not make. The stat above
+      # is the gate instead.
+      ansible.builtin.command:
+        cmd: rmdir {{ certbot_legacy_man_dir }}
+      register: certbot_rmdir_man
+      changed_when: certbot_rmdir_man.rc == 0
+      failed_when: false
+      when: certbot_man_stat.stat.exists
+
+    - name: 4. Read what pipx has installed
+      # --json rather than `pipx list --short`: the short form names only the
+      # main package, and this playbook has to know the injected plugin
+      # versions too. check_mode: false because this reads existing state.
+      ansible.builtin.command: pipx list --json
+      environment: &pipx_env
+        PIPX_HOME: "{{ certbot_pipx_home }}"
+        PIPX_BIN_DIR: "{{ certbot_bin_dir }}"
+        PIPX_MAN_DIR: "{{ certbot_man_dir }}"
+      register: certbot_pipx_list
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Parse the installed certbot and plugin versions
+      # An empty PIPX_HOME makes `pipx list --json` print nothing at all
+      # rather than an empty object, hence the default.
+      ansible.builtin.set_fact:
+        certbot_venv: >-
+          {{ (certbot_pipx_list.stdout | default('') | trim | length > 0)
+             | ternary((certbot_pipx_list.stdout | default('{}') | from_json)
+                       .get('venvs', {}).get('certbot', {}), {}) }}
+
+    - name: 6. Decide what needs installing
+      ansible.builtin.set_fact:
+        certbot_installed_version: >-
+          {{ certbot_venv.get('metadata', {}).get('main_package', {}).get('package_version', '') }}
+        certbot_injected: >-
+          {{ certbot_venv.get('metadata', {}).get('injected_packages', {}) }}
+
+    - name: 7. Collect the plugins whose pinned version is not injected
+      ansible.builtin.set_fact:
+        certbot_plugins_pending: >-
+          {{ certbot_plugins_pending | default([])
+             + ([item.name ~ '==' ~ item.version]
+                if certbot_injected.get(item.name, {}).get('package_version', '') != item.version
+                else []) }}
+      loop: "{{ certbot_plugins }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+
+    - name: 8. Decide whether certbot itself needs installing
+      ansible.builtin.set_fact:
+        certbot_install_needed: >-
+          {{ certbot_installed_version != certbot_version }}
+        certbot_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (certbot_installed_version != certbot_version
+                       or certbot_plugins_pending | length > 0)) }}
+
+    - name: 8a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install certbot {{ certbot_version }}
+          {{ (certbot_plugins_pending | length > 0)
+             | ternary('or ' ~ (certbot_plugins_pending | join(', ')), '') }},
+          so the version check and the unprivileged plugin listing below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (certbot_can_verify | bool)
+
+    - name: 9. Install certbot via pipx as root
+      community.general.pipx:
+        name: certbot
+        source: "certbot=={{ certbot_version }}"
+        state: install
+        force: true
+      environment: *pipx_env
+      when: certbot_install_needed | bool
+
+    - name: 10. Inject the pinned plugins into certbot's virtualenv
+      # A plugin is only discoverable when it lives in certbot's OWN
+      # virtualenv -- certbot finds plugins through the certbot.plugins entry
+      # point group inside its own environment, so a separate pipx install of
+      # the plugin would leave `certbot plugins` unchanged. Task 16 checks
+      # the plugin is listed rather than merely present.
+      community.general.pipx:
+        name: certbot
+        state: inject
+        inject_packages: "{{ certbot_plugins_pending }}"
+        force: true
+      environment: *pipx_env
+      when: certbot_plugins_pending | length > 0
+
+    - name: 11. Ensure the pipx install tree is world-readable
+      # Guards against pipx's own umask when creating the venv; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      #
+      # This is the one task that reports "changed" under --check while
+      # reporting nothing under a real run: the file module cannot walk a
+      # tree it is not allowed to touch, so with recurse it answers
+      # conservatively. A real run on an already-correct tree is unchanged.
+      ansible.builtin.file:
+        path: "{{ certbot_pipx_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 12. Re-read what pipx has installed
+      ansible.builtin.command: pipx list --json
+      environment: *pipx_env
+      register: certbot_pipx_verify
+      changed_when: false
+      check_mode: false
+      when: certbot_can_verify | bool
+
+    - name: 13. Confirm certbot and every plugin are at their pinned versions
+      ansible.builtin.assert:
+        that:
+          - certbot_verify_venv.metadata.main_package.package_version == certbot_version
+          - certbot_verify_venv.metadata.injected_packages
+            | dict2items | selectattr('key', 'equalto', item.name)
+            | map(attribute='value.package_version') | first | default('') == item.version
+        fail_msg: >-
+          certbot is {{ certbot_verify_venv.metadata.main_package.package_version
+          | default('absent') }} (pinned {{ certbot_version }}) and
+          {{ item.name }} is
+          {{ certbot_verify_venv.metadata.injected_packages
+             | dict2items | selectattr('key', 'equalto', item.name)
+             | map(attribute='value.package_version') | first | default('absent') }}
+          (pinned {{ item.version }}) in {{ certbot_pipx_home }}.
+        success_msg: "certbot {{ certbot_version }} + {{ item.name }} {{ item.version }}"
+      vars:
+        certbot_verify_venv: >-
+          {{ (certbot_pipx_verify.stdout | from_json).venvs.certbot }}
+      loop: "{{ certbot_plugins }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      when: certbot_can_verify | bool
+
+    - name: 14. Create the scratch directory for the unprivileged checks
+      # certbot insists on writable config, work and log directories even for
+      # read-only subcommands, and its real ones (/etc/letsencrypt,
+      # /var/lib/letsencrypt, /var/log/letsencrypt) are root-only by design.
+      # The unprivileged checks below therefore point all three here rather
+      # than at the real ones, which they must never touch.
+      ansible.builtin.file:
+        path: "{{ certbot_smoke_dir }}"
+        state: directory
+        owner: "{{ certbot_verify_uid }}"
+        group: "{{ certbot_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: certbot_can_verify | bool
+
+    - name: 15. Report the certbot version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ certbot_verify_uid }} --regid={{ certbot_verify_gid }} --clear-groups
+          env HOME={{ certbot_smoke_dir }}
+          {{ certbot_bin }} --version
+        chdir: "{{ certbot_smoke_dir }}"
+      register: certbot_smoke_version
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('certbot ' ~ certbot_version) not in certbot_smoke_version.stdout
+      when: certbot_can_verify | bool
+
+    - name: 16. List the available plugins as an unprivileged user
+      # The real check, and the reason task 8 injects rather than installs
+      # separately: `certbot plugins` enumerates the certbot.plugins entry
+      # points certbot can actually load, so a plugin that appears here is
+      # one certbot could really use -- and the built-in authenticators
+      # appearing beside it prove the listing itself is genuine.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ certbot_verify_uid }} --regid={{ certbot_verify_gid }} --clear-groups
+          env HOME={{ certbot_smoke_dir }}
+          {{ certbot_bin }} plugins
+          --config-dir {{ certbot_smoke_dir }}/config
+          --work-dir {{ certbot_smoke_dir }}/work
+          --logs-dir {{ certbot_smoke_dir }}/logs
+        chdir: "{{ certbot_smoke_dir }}"
+      register: certbot_smoke_plugins
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        '* standalone' not in certbot_smoke_plugins.stdout
+        or '* webroot' not in certbot_smoke_plugins.stdout
+        or certbot_plugins
+           | map(attribute='name')
+           | map('regex_replace', '^certbot-dns-', '* dns-')
+           | reject('in', certbot_smoke_plugins.stdout) | list | length > 0
+      when: certbot_can_verify | bool
+
+    - name: 17. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ certbot_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 18. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            certbot {{ certbot_version }} installed system-wide, with
+            {{ certbot_plugins | map(attribute='name') | join(', ') }}.
+          - ""
+          - "  {{ certbot_bin }} ({{ certbot_pipx_home }}/venvs/certbot)"
+          - ""
+          - >-
+            {{ certbot_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ certbot_verify_uid
+            ~ '): certbot reported its version and listed every pinned plugin'
+            ~ ' beside its own built-in authenticators.',
+            'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "The client only -- no certificate is obtained and no ACME account"
+          - "is registered here. Real issuance writes to /etc/letsencrypt and"
+          - "needs root, so run it under sudo:"
+          - ""
+          - "  sudo certbot certonly --dns-route53 -d example.com"
+          - "  sudo certbot certificates                 # what this host holds"
+          - "  sudo certbot renew --dry-run              # exercise renewal"
+          - "  certbot plugins                           # what is available"
+          - ""
+          - "--dns-route53 reads the usual AWS credentials -- each account's own"
+          - "~/.aws or the environment -- and needs Route 53 change permissions."
+      when: certbot_can_verify | bool

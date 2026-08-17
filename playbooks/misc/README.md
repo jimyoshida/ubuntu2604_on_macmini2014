@@ -674,3 +674,73 @@ Version overrides:
 ansible-playbook misc/mongodb-tools.yml -e host=ws01 -e mongodb_tools_version=100.18.0
 ansible-playbook misc/mongodb-tools.yml -e host=ws01 -e mongosh_version=2.10.0
 ```
+
+## certbot.yml
+
+Installs [certbot](https://certbot.eff.org/) and the Route 53 DNS plugin with `pipx`, run as
+root with its state redirected to root-owned, world-readable paths — the same shape
+[`junit2html.yml`](#junit2htmlyml) uses.
+
+| Path | Contents |
+| --- | --- |
+| `/opt/pipx/venvs/certbot/` | the virtualenv: certbot and every injected plugin |
+| `/usr/local/bin/certbot` | the app symlink pipx creates |
+| `/usr/local/share/man/` | `PIPX_MAN_DIR` — see below |
+
+The client only. Nothing here obtains, renews or installs a certificate, and no ACME account is
+registered for anyone: those need real DNS or a real web server and are run by hand under
+`sudo`. certbot's own state lives in `/etc/letsencrypt`, `/var/lib/letsencrypt` and
+`/var/log/letsencrypt` — root-owned system paths, not per-user state — and none of the three is
+created here.
+
+### pipx, not apt and not snap
+
+- **apt** carries certbot `4.0.0-4` on 26.04 against upstream's `5.7.0` — a whole major version
+  behind. certbot speaks ACME to a live CA, and that gap is exactly where its protocol-level
+  fixes sit, so this is one of the tools worth taking from upstream.
+- **snap** installs cleanly, but it refreshes on Canonical's schedule rather than on a pin in
+  this repository, which is the opposite of what every other playbook here does. Nothing else
+  in `playbooks/` uses snap.
+
+### `PIPX_MAN_DIR` is set deliberately
+
+Without it, pipx creates `/root/.local/share/man`. Confirmed by experiment: remove that
+directory, run an install with `PIPX_MAN_DIR` set — it stays gone and the configured directory
+appears instead — then run one without it, and it comes back. Writing under root's own `$HOME`
+is what MIGRATION3's B2 forbids, and it also puts any man page a package ships somewhere no
+other account can read. Here it points at `/usr/local/share/man`, where `man certbot` finds it.
+
+The playbook also clears up the directory earlier runs left behind, with `rmdir` rather than
+`state: absent` so it goes only when empty: anything since put there is somebody's and is left
+alone.
+
+### The plugin is injected, not installed alongside
+
+certbot discovers plugins through the `certbot.plugins` entry point group **inside its own
+virtualenv**, so a separate `pipx install certbot-dns-route53` would leave `certbot plugins`
+unchanged. `pipx inject` puts the plugin in the same venv, which is what makes it loadable.
+Idempotency reads `pipx list --json` — the `--short` form names only the main package, and this
+playbook has to compare injected plugin versions too — and only injects what is missing or at
+the wrong version.
+
+Adding another plugin is one list entry (`certbot_plugins`); it is injected and then verified
+the same way.
+
+### Verification lists the plugins as an unprivileged user
+
+`certbot plugins` enumerates the entry points certbot can actually load, so a plugin appearing
+there is one certbot could really use. The assertion requires the pinned plugins **and**
+certbot's own `standalone`/`webroot` authenticators, so a truncated or empty listing cannot
+pass. certbot insists on writable config, work and log directories even for read-only
+subcommands, and its real ones are root-only by design, so the check points all three at a
+scratch directory it removes afterwards.
+
+One quirk: task 11 (the recursive mode fix on the pipx tree) reports `changed` under `--check`
+while reporting nothing on a real run — with `recurse`, the `file` module cannot walk a tree it
+is not allowed to touch and answers conservatively.
+
+Version overrides — plugins track `certbot_version` unless pinned individually:
+
+```bash
+ansible-playbook misc/certbot.yml -e host=ws01 -e certbot_version=5.7.0
+```
