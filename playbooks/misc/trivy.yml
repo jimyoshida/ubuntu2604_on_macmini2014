@@ -48,12 +48,27 @@
       ansible.builtin.command: dpkg-query -W -f='${Version}' trivy
       register: trivy_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state, and on the scratch directory the unprivileged checks
+      # need: without it a dry run skips them and the checks then run
+      # against a directory that was never created.
+      check_mode: false
       failed_when: false
 
     - name: 3. Decide whether trivy needs installing
       ansible.builtin.set_fact:
         trivy_install_needed: >-
           {{ trivy_installed.rc != 0 or trivy_installed.stdout != trivy_version }}
+        trivy_can_verify: >-
+          {{ not (ansible_check_mode and (trivy_installed.rc != 0 or trivy_installed.stdout != trivy_version)) }}
+
+    - name: 3a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install trivy {{ trivy_version }}, so the version
+          check and the unprivileged scan below are skipped rather than
+          failed. Re-run without --check to verify.
+      when: not (trivy_can_verify | bool)
 
     - name: 4. Download the Aqua Security apt signing key
       ansible.builtin.get_url:
@@ -100,7 +115,9 @@
       ansible.builtin.command: trivy --version
       register: trivy_version_out
       changed_when: false
+      check_mode: false
       failed_when: trivy_version not in trivy_version_out.stdout
+      when: trivy_can_verify | bool
 
     - name: 11. Create a scratch directory for the unprivileged verification
       # Disk-backed rather than /tmp: on hosts where /tmp is a size-capped
@@ -112,6 +129,8 @@
         owner: root
         group: root
         mode: '1777'
+      check_mode: false
+      when: trivy_can_verify | bool
 
     - name: 12. Scan a directory for vulnerabilities as an unprivileged user
       # Downloads Trivy's vulnerability database into this throwaway HOME,
@@ -128,11 +147,15 @@
         TMPDIR: /var/tmp/trivy-verify
       register: trivy_smoke
       changed_when: false
+      check_mode: false
+      when: trivy_can_verify | bool
 
     - name: 13. Remove the scratch directory used for unprivileged verification
       ansible.builtin.file:
         path: /var/tmp/trivy-verify
         state: absent
+      check_mode: false
+      when: trivy_can_verify | bool
 
     - name: 14. Display installation summary
       ansible.builtin.debug:
@@ -146,3 +169,4 @@
           - "Usage:"
           - "  trivy image nginx:latest    # Scan a container image"
           - "  trivy fs .                  # Scan a directory for vulnerabilities and secrets"
+      when: trivy_can_verify | bool

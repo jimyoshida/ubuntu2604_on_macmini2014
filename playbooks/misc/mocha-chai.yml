@@ -60,6 +60,11 @@
       ansible.builtin.command: dpkg -s nodejs
       register: mocha_chai_nodejs_dpkg
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced -- the
+      # node guard in particular failed with "node resolved to ''".
+      check_mode: false
       failed_when: false
 
     - name: 2. Fail if Node.js is not installed as a system package
@@ -73,6 +78,7 @@
       ansible.builtin.command: which node
       register: mocha_chai_node_path
       changed_when: false
+      check_mode: false
 
     - name: 4. Fail if node in PATH is not a system-wide install
       # Guards against a per-user version manager (nvm, fnm, ...) shadowing
@@ -90,6 +96,7 @@
       ansible.builtin.command: npm config get prefix
       register: mocha_chai_npm_prefix
       changed_when: false
+      check_mode: false
 
     - name: 6. Check whether mocha and chai are already installed at the pinned versions
       ansible.builtin.command: "npm ls -g {{ item.name }}@{{ item.version }} --depth=0"

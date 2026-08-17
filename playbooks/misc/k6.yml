@@ -56,12 +56,26 @@
       ansible.builtin.command: dpkg-query -W -f='${Version}' k6
       register: k6_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them and the checks below
+      # act on output that was never produced.
+      check_mode: false
       failed_when: false
 
     - name: 4. Decide whether k6 needs installing
       ansible.builtin.set_fact:
         k6_install_needed: >-
           {{ k6_installed.rc != 0 or k6_installed.stdout != k6_version }}
+        k6_can_verify: >-
+          {{ not (ansible_check_mode and (k6_installed.rc != 0 or k6_installed.stdout != k6_version)) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install k6 {{ k6_version }}, so the version check
+          and the unprivileged script run below are skipped rather than
+          failed. Re-run without --check to verify.
+      when: not (k6_can_verify | bool)
 
     - name: 5. Download the k6 apt signing key
       ansible.builtin.get_url:
@@ -69,12 +83,22 @@
         dest: /tmp/k6-public.key
         mode: '0644'
         force: true
-      when: k6_install_needed | bool
+      when:
+        - k6_install_needed | bool
+        # A dry run cannot fetch the key, so nothing downstream of it can be
+        # attempted either: without this, --check on a host without k6 fails
+        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
+        - not ansible_check_mode
 
     - name: 6. Dearmor the signing key into the apt keyring
       ansible.builtin.command:
         cmd: "gpg --batch --yes --dearmor --output {{ k6_keyring }} /tmp/k6-public.key"
-      when: k6_install_needed | bool
+      when:
+        - k6_install_needed | bool
+        # A dry run cannot fetch the key, so nothing downstream of it can be
+        # attempted either: without this, --check on a host without k6 fails
+        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
+        - not ansible_check_mode
 
     - name: 7. Ensure the apt keyring is world-readable
       ansible.builtin.file:
@@ -82,13 +106,23 @@
         owner: root
         group: root
         mode: 'u=rwX,go=rX'
-      when: k6_install_needed | bool
+      when:
+        - k6_install_needed | bool
+        # A dry run cannot fetch the key, so nothing downstream of it can be
+        # attempted either: without this, --check on a host without k6 fails
+        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
+        - not ansible_check_mode
 
     - name: 8. Remove the downloaded key file
       ansible.builtin.file:
         path: /tmp/k6-public.key
         state: absent
-      when: k6_install_needed | bool
+      when:
+        - k6_install_needed | bool
+        # A dry run cannot fetch the key, so nothing downstream of it can be
+        # attempted either: without this, --check on a host without k6 fails
+        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
+        - not ansible_check_mode
 
     - name: 9. Add the k6 apt repository
       ansible.builtin.apt_repository:
@@ -96,19 +130,31 @@
         filename: k6
         state: present
         update_cache: true
-      when: k6_install_needed | bool
+      when:
+        - k6_install_needed | bool
+        # A dry run cannot fetch the key, so nothing downstream of it can be
+        # attempted either: without this, --check on a host without k6 fails
+        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
+        - not ansible_check_mode
 
     - name: 10. Install k6 via apt
       ansible.builtin.apt:
         name: "k6={{ k6_version }}"
         state: present
-      when: k6_install_needed | bool
+      when:
+        - k6_install_needed | bool
+        # A dry run cannot fetch the key, so nothing downstream of it can be
+        # attempted either: without this, --check on a host without k6 fails
+        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
+        - not ansible_check_mode
 
     - name: 11. Verify the installed k6 version
       ansible.builtin.command: k6 version
       register: k6_version_out
       changed_when: false
+      check_mode: false
       failed_when: k6_version not in k6_version_out.stdout
+      when: k6_can_verify | bool
 
     - name: 12. Write a script for the unprivileged smoke test
       ansible.builtin.copy:
@@ -120,6 +166,8 @@
           export default function () {
             check(1 + 1, { 'math checks out': (v) => v === 2 });
           }
+      check_mode: false
+      when: k6_can_verify | bool
 
     - name: 13. Run the script as an unprivileged user
       # K6_NO_USAGE_REPORT disables the anonymous usage ping k6 sends by
@@ -136,12 +184,16 @@
         K6_NO_USAGE_REPORT: "true"
       register: k6_smoke
       changed_when: false
+      check_mode: false
+      when: k6_can_verify | bool
       failed_when: "'✓ math checks out' not in k6_smoke.stdout"
 
     - name: 14. Remove the smoke test script
       ansible.builtin.file:
         path: /tmp/k6-multiuser-smoke.js
         state: absent
+      check_mode: false
+      when: k6_can_verify | bool
 
     - name: 15. Display installation summary
       ansible.builtin.debug:
@@ -155,3 +207,4 @@
           - "Usage:"
           - "  k6 run script.js            # Run a load test script"
           - "  k6 run --vus 10 --duration 30s script.js"
+      when: k6_can_verify | bool

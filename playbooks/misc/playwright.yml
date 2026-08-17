@@ -62,6 +62,11 @@
       ansible.builtin.command: dpkg -s nodejs
       register: playwright_nodejs_dpkg
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced -- the
+      # node guard in particular failed with "node resolved to ''".
+      check_mode: false
       failed_when: false
 
     - name: 3. Fail if Node.js is not installed as a system package
@@ -75,6 +80,7 @@
       ansible.builtin.command: which node
       register: playwright_node_path
       changed_when: false
+      check_mode: false
 
     - name: 5. Fail if node in PATH is not a system-wide install
       # Guards against a per-user version manager (nvm, fnm, ...) shadowing
@@ -92,6 +98,7 @@
       ansible.builtin.command: npm config get prefix
       register: playwright_npm_prefix
       changed_when: false
+      check_mode: false
 
     - name: 7. Check the currently installed playwright version
       ansible.builtin.command: "{{ playwright_npm_prefix.stdout }}/bin/playwright --version"
@@ -105,6 +112,16 @@
       ansible.builtin.set_fact:
         playwright_install_needed: >-
           {{ playwright_version not in (playwright_installed.stdout | default('')) }}
+        playwright_can_verify: >-
+          {{ not (ansible_check_mode and (playwright_version not in (playwright_installed.stdout | default('')))) }}
+
+    - name: 8a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install playwright {{ playwright_version }}, so the
+          browser install, the version check and the unprivileged screenshot
+          below are skipped rather than failed. Re-run without --check.
+      when: not (playwright_can_verify | bool)
 
     - name: 9. Install playwright via npm as root
       ansible.builtin.command: "npm install -g playwright@{{ playwright_version }}"
@@ -125,6 +142,7 @@
       ansible.builtin.command: "{{ playwright_npm_prefix.stdout }}/bin/playwright --version"
       register: playwright_version_out
       changed_when: false
+      check_mode: false
       failed_when: playwright_version not in playwright_version_out.stdout
 
     - name: 12. Create the shared browser binaries directory
@@ -156,6 +174,8 @@
         PLAYWRIGHT_BROWSERS_PATH: "{{ playwright_browsers_path }}"
       register: playwright_browsers_install
       changed_when: "'Downloading' in playwright_browsers_install.stdout"
+      check_mode: false
+      when: playwright_can_verify | bool
 
     - name: 15. Ensure the shared browser binaries are world-readable
       ansible.builtin.file:
@@ -184,17 +204,23 @@
         PLAYWRIGHT_BROWSERS_PATH: "{{ playwright_browsers_path }}"
       register: playwright_smoke
       changed_when: false
+      check_mode: false
+      when: playwright_can_verify | bool
 
     - name: 17. Confirm the screenshot was produced
       ansible.builtin.stat:
         path: /tmp/playwright-multiuser-smoke.png
       register: playwright_smoke_file
+      check_mode: false
       failed_when: not playwright_smoke_file.stat.exists or playwright_smoke_file.stat.size == 0
+      when: playwright_can_verify | bool
 
     - name: 18. Remove the smoke test screenshot
       ansible.builtin.file:
         path: /tmp/playwright-multiuser-smoke.png
         state: absent
+      check_mode: false
+      when: playwright_can_verify | bool
 
     - name: 19. Display installation summary
       ansible.builtin.debug:
@@ -211,3 +237,4 @@
           - "  playwright screenshot https://example.com out.png   # Capture a page screenshot"
           - "  playwright pdf https://example.com out.pdf          # Save a page as PDF"
           - "  playwright codegen https://example.com              # Record actions and generate code"
+      when: playwright_can_verify | bool

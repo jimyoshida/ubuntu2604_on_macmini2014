@@ -54,8 +54,41 @@
       loop: "{{ grype_syft_tools }}"
       loop_control:
         label: "{{ item.name }}"
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state, and on the scratch directory the unprivileged checks
+      # need: without it a dry run skips them and the checks then run
+      # against a directory that was never created.
+      check_mode: false
       changed_when: false
       failed_when: false
+
+    - name: 2a. Collect the tools whose pinned version is not installed
+      # There is no single install_needed here -- tasks 3 and 4 decide per
+      # tool -- so the same question is asked once for the pair, and the
+      # answer drives the check-mode gate below.
+      ansible.builtin.set_fact:
+        grype_syft_pending: >-
+          {{ grype_syft_pending | default([])
+             + ([item.0.name]
+                if item.0.version not in (item.1.stdout | default(''))
+                else []) }}
+      loop: "{{ grype_syft_tools | zip(grype_syft_installed.results) | list }}"
+      loop_control:
+        label: "{{ item.0.name }}"
+
+    - name: 2b. Decide whether this run can verify
+      ansible.builtin.set_fact:
+        grype_syft_can_verify: >-
+          {{ not (ansible_check_mode and ((grype_syft_pending | default([])) | length > 0)) }}
+
+    - name: 2c. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install
+          {{ (grype_syft_pending | default([])) | join(', ') }}, so the version
+          checks and the unprivileged SBOM and scan below are skipped rather
+          than failed. Re-run without --check to verify.
+      when: not (grype_syft_can_verify | bool)
 
     - name: 3. Download the install script for tools that need installing
       # Pinned to the release tag rather than the `main` branch, so the script
@@ -108,7 +141,9 @@
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
+      check_mode: false
       failed_when: item.version not in grype_syft_version_out.stdout
+      when: grype_syft_can_verify | bool
 
     - name: 8. Create a scratch directory for the unprivileged verification
       # Disk-backed rather than /tmp: on hosts where /tmp is a size-capped
@@ -120,6 +155,8 @@
         owner: root
         group: root
         mode: '1777'
+      check_mode: false
+      when: grype_syft_can_verify | bool
 
     - name: 9. Generate an SBOM for a directory as an unprivileged user
       ansible.builtin.command:
@@ -132,6 +169,8 @@
         TMPDIR: /var/tmp/grype-syft-verify
       register: syft_smoke
       changed_when: false
+      check_mode: false
+      when: grype_syft_can_verify | bool
 
     - name: 10. Update the grype vulnerability database and scan a directory as an unprivileged user
       # HOME is left pointing at a throwaway directory rather than a persistent
@@ -148,11 +187,15 @@
         TMPDIR: /var/tmp/grype-syft-verify
       register: grype_smoke
       changed_when: false
+      check_mode: false
+      when: grype_syft_can_verify | bool
 
     - name: 11. Remove the scratch directory used for unprivileged verification
       ansible.builtin.file:
         path: /var/tmp/grype-syft-verify
         state: absent
+      check_mode: false
+      when: grype_syft_can_verify | bool
 
     - name: 12. Display installation summary
       ansible.builtin.debug:
@@ -165,3 +208,4 @@
           - "Usage:"
           - "  grype dir:.                 # Scan current directory for vulnerabilities"
           - "  syft packages dir:.         # Generate a Software Bill of Materials"
+      when: grype_syft_can_verify | bool

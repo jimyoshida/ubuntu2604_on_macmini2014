@@ -57,6 +57,11 @@
       ansible.builtin.command: "{{ kube_score_bin }} version"
       register: kube_score_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the checks below
+      # then fail on output that was never produced rather than reporting
+      # what is installed.
+      check_mode: false
       failed_when: false
 
     - name: 4. Decide whether kube-score needs installing
@@ -65,12 +70,25 @@
       ansible.builtin.set_fact:
         kube_score_install_needed: >-
           {{ kube_score_version not in (kube_score_installed.stdout | default('')) }}
+        kube_score_can_verify: >-
+          {{ not (ansible_check_mode and (kube_score_version not in (kube_score_installed.stdout | default('')))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install kube-score {{ kube_score_version }}, so the
+          version check and the unprivileged smoke test below are skipped
+          rather than failed. Re-run without --check to verify.
+      when: not (kube_score_can_verify | bool)
 
     - name: 5. Fetch the published checksums for kube-score v{{ kube_score_version }}
       ansible.builtin.uri:
         url: "{{ kube_score_release_url }}/checksums.txt"
         return_content: true
       register: kube_score_checksums
+      # Fetching a published checksum changes nothing on the host, so a dry
+      # run really does validate the version pin against upstream.
+      check_mode: false
       when: kube_score_install_needed | bool
 
     - name: 6. Resolve the SHA-256 for the linux/{{ kube_score_arch }} binary
@@ -99,7 +117,9 @@
       ansible.builtin.command: "{{ kube_score_bin }} version"
       register: kube_score_version_out
       changed_when: false
+      check_mode: false
       failed_when: kube_score_version not in kube_score_version_out.stdout
+      when: kube_score_can_verify | bool
 
     - name: 9. Write a manifest with known issues for the unprivileged smoke test
       ansible.builtin.copy:
@@ -123,6 +143,8 @@
                 containers:
                   - name: smoke
                     image: nginx:latest
+      check_mode: false
+      when: kube_score_can_verify | bool
 
     - name: 10. Score the manifest as an unprivileged user
       # kube-score exits non-zero when it finds CRITICAL issues, which the
@@ -135,12 +157,16 @@
           {{ kube_score_bin }} score /tmp/kube-score-multiuser-smoke.yml
       register: kube_score_smoke
       changed_when: false
+      check_mode: false
       failed_when: "'Container Image Tag' not in kube_score_smoke.stdout"
+      when: kube_score_can_verify | bool
 
     - name: 11. Remove the smoke test manifest
       ansible.builtin.file:
         path: /tmp/kube-score-multiuser-smoke.yml
         state: absent
+      check_mode: false
+      when: kube_score_can_verify | bool
 
     - name: 12. Display installation summary
       ansible.builtin.debug:
@@ -154,3 +180,4 @@
           - "Usage:"
           - "  kube-score score deployment.yaml   # Score a manifest and print recommendations"
           - "  kube-score score --output-format ci manifests/*.yaml"
+      when: kube_score_can_verify | bool

@@ -52,6 +52,11 @@
       ansible.builtin.command: "{{ hadolint_bin }} --version"
       register: hadolint_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the checks below
+      # then fail on output that was never produced rather than reporting
+      # what is installed.
+      check_mode: false
       failed_when: false
 
     - name: 4. Decide whether hadolint needs installing
@@ -60,12 +65,25 @@
       ansible.builtin.set_fact:
         hadolint_install_needed: >-
           {{ hadolint_version not in (hadolint_installed.stdout | default('')) }}
+        hadolint_can_verify: >-
+          {{ not (ansible_check_mode and (hadolint_version not in (hadolint_installed.stdout | default('')))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install hadolint {{ hadolint_version }}, so the
+          version check and the unprivileged smoke test below are skipped
+          rather than failed. Re-run without --check to verify.
+      when: not (hadolint_can_verify | bool)
 
     - name: 5. Fetch the published checksums for hadolint v{{ hadolint_version }}
       ansible.builtin.uri:
         url: "{{ hadolint_release_url }}/checksums.sha256"
         return_content: true
       register: hadolint_checksums
+      # Fetching a published checksum changes nothing on the host, so a dry
+      # run really does validate the version pin against upstream.
+      check_mode: false
       when: hadolint_install_needed | bool
 
     - name: 6. Resolve the SHA-256 for the {{ hadolint_arch }} binary
@@ -93,7 +111,9 @@
       ansible.builtin.command: "{{ hadolint_bin }} --version"
       register: hadolint_version_out
       changed_when: false
+      check_mode: false
       failed_when: hadolint_version not in hadolint_version_out.stdout
+      when: hadolint_can_verify | bool
 
     - name: 9. Lint a Dockerfile from stdin as an unprivileged user
       # Read from stdin rather than a file on disk, and HOME is deliberately
@@ -106,6 +126,8 @@
           {{ hadolint_bin }} -
       register: hadolint_smoke
       changed_when: false
+      check_mode: false
+      when: hadolint_can_verify | bool
 
     - name: 10. Display installation summary
       ansible.builtin.debug:
@@ -118,3 +140,4 @@
           - ""
           - "Usage:"
           - "  hadolint Dockerfile         # Lint a Dockerfile"
+      when: hadolint_can_verify | bool
