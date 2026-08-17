@@ -594,3 +594,83 @@ Version overrides:
 ```bash
 ansible-playbook misc/zap.yml -e host=ws01 -e zap_version=2.17.0
 ```
+
+## mongodb-tools.yml
+
+Installs the MongoDB client tooling: the [Database Tools](https://www.mongodb.com/docs/database-tools/)
+and the [MongoDB Shell](https://www.mongodb.com/docs/mongodb-shell/). Clients only — no `mongod`,
+nothing listening.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/bsondump`, `mongodump`, `mongorestore`, `mongoexport`, `mongoimport`, `mongofiles`, `mongostat`, `mongotop` | `mongodb-database-tools`, from MongoDB's apt repository |
+| `/usr/bin/mongosh`, `/usr/lib/mongosh_crypt_v1.so` | `mongodb-mongosh`, from its own release `.deb` |
+| `/etc/apt/sources.list.d/mongodb.sources` | repository definition, key by URL, fingerprint pinned |
+
+No per-user setup: mongosh creates `~/.mongodb/mongosh` (config, history, logs) for each account
+on first use, which is per-account state a shared workstation should keep per-account. Nothing
+here writes into anyone's `$HOME` — a plain `mongosh --version` writes nothing, checked with a
+fresh `HOME`, which is why the version check can stay a `dpkg-query`.
+
+### The 26.04 build of the Database Tools does not run on this repo's hosts
+
+This is why the repository points at **`noble`** (24.04) rather than this release's own
+`resolute`. MongoDB's resolute build of `mongodb-database-tools` 100.18.0 declares:
+
+```
+x86 ISA needed: x86-64-baseline, x86-64-v2, x86-64-v3
+```
+
+and every binary in it dies with `CPU ISA level is lower than required` on ws01 (Core i7-3615QM,
+Ivy Bridge) and ws02 (Core i5-2520M, Sandy Bridge) — neither CPU has the AVX2-era instructions
+`x86-64-v3` needs. MongoDB's noble build of the *identical* 100.18.0 is `x86-64-baseline`, runs on
+both, is byte-for-byte the same file as the `ubuntu2404` package on `fastdl.mongodb.org` (same
+SHA-256), and depends only on `libc6` and the krb5 libraries, all present on 26.04. Set
+`mongodb_tools_release` to `resolute` once MongoDB ships a baseline build there, or on a fleet
+that is uniformly `x86-64-v3`.
+
+Note that MongoDB folds the server release series into the apt **suite**, not the component:
+the sources line is `<release>/mongodb-org/<series> multiverse`, and apt fetches
+`dists/noble/mongodb-org/8.0/InRelease`. Series 8.0 is used because it is the one whose signing
+key MongoDB publishes — `server-9.0.asc` is a 404 at both of MongoDB's key URLs as of
+2026-08-17 — and `mongodb-database-tools` is identical in both series.
+
+### The package installs its binaries owned by uid 1000
+
+`dpkg-deb -c` on MongoDB's `.deb` shows every file recorded as `ubuntu/ubuntu`, uid and gid
+1000, and dpkg honours that: a plain install leaves `/usr/bin/mongodump` and its seven siblings
+owned by whoever is uid 1000 on the host. On these workstations that is a real login account,
+which would then be free to rewrite binaries every other account runs — and that root runs too,
+under `sudo`. The playbook corrects ownership to `root:root` on **every** run, not only after an
+install, so a host that already took the package the plain way is repaired as well. The
+closing assertion that every tool is a root-owned executable is not a formality here: without
+that fix, it fails.
+
+### mongosh comes from its release `.deb`, not from apt
+
+mongosh is not in the resolute repository at all, and the only suite that carries it
+(`noble/mongodb-org/9.0`) is signed by the unpublished 9.0 key, so that repository's key cannot
+be pinned. The `.deb` attached to mongosh's own GitHub release is used instead, verified against
+the SHA-256 GitHub computes per asset — the [`core/yq.yml`](../core/README.md#yqyml) source. The
+plain package is the one chosen deliberately: unlike the `shared-openssl11`/`shared-openssl3`
+variants it bundles its own OpenSSL and depends on nothing but `libc6`, which is what makes it
+safe to install outside a repository.
+
+### Verification is two pieces of real offline work
+
+- **`bsondump`** decodes a hand-written twelve-byte BSON document (`{"a": 1}`: int32 length,
+  element type `0x10`, key `a\0`, value, terminator) written with `printf` and octal escapes,
+  since a `copy:` block cannot carry NUL bytes. That exercises the same BSON reader
+  `mongorestore` uses, with no server involved.
+- **`mongosh --nodb`** evaluates JavaScript with no server to connect to, asserting arithmetic,
+  the EJSON serialiser's date encoding, and the version the process reports about itself. It
+  runs through `shell` with the expression single-quoted: `command` tokenises shlex-style
+  without a shell, which eats the quotes around a JavaScript string literal and splits on the
+  spaces inside one — mongosh answers either mistake with a `SyntaxError`.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/mongodb-tools.yml -e host=ws01 -e mongodb_tools_version=100.18.0
+ansible-playbook misc/mongodb-tools.yml -e host=ws01 -e mongosh_version=2.10.0
+```

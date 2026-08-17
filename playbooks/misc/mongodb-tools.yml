@@ -1,0 +1,461 @@
+---
+# Install the MongoDB client tooling system-wide on a multi-user workstation:
+# the MongoDB Database Tools and the MongoDB Shell.
+#
+#   /usr/bin/bsondump, mongodump, mongorestore, mongoexport, mongoimport,
+#   mongofiles, mongostat, mongotop     mongodb-database-tools, from apt
+#   /usr/bin/mongosh                    mongodb-mongosh, from its .deb
+#   /usr/lib/mongosh_crypt_v1.so        mongosh's in-use-encryption library
+#   /etc/apt/sources.list.d/mongodb.sources   repository definition
+#
+# Clients only: no mongod, no server, nothing listening. There is no per-user
+# state to set up either -- mongosh creates ~/.mongodb/mongosh (config,
+# history, logs) for each account on first use, which is per-account state a
+# shared workstation should keep per-account, and nothing here writes into
+# anyone's $HOME.
+#
+# THE UBUNTU 26.04 BUILD OF THE DATABASE TOOLS DOES NOT RUN ON THIS REPO'S
+# HOSTS, which is the whole reason the repository below points at `noble`
+# (24.04) rather than this release's own `resolute`. MongoDB's resolute build
+# of mongodb-database-tools 100.18.0 declares
+#
+#   x86 ISA needed: x86-64-baseline, x86-64-v2, x86-64-v3
+#
+# and every binary in it dies with "CPU ISA level is lower than required" on
+# ws01 (Core i7-3615QM, Ivy Bridge) and ws02 (Core i5-2520M, Sandy Bridge) --
+# neither CPU has the AVX2-era instructions x86-64-v3 requires. MongoDB's
+# noble build of the identical 100.18.0 is x86-64-baseline and runs on both;
+# it was checked byte for byte against the ubuntu2404 tarball published on
+# fastdl.mongodb.org (same SHA-256), and it depends only on libc6 and the
+# krb5 libraries, all present on 26.04. Set mongodb_tools_release to
+# resolute once MongoDB ships a baseline build there, or on a fleet whose
+# CPUs are all x86-64-v3.
+#
+# Both packages are pinned, and the .deb for mongosh is checksum-verified.
+# mongosh is not in the resolute repository at all, and the only suite that
+# carries it (noble/mongodb-org/9.0) is signed by a key MongoDB
+# does not publish -- https://pgp.mongodb.com/server-9.0.asc and
+# https://www.mongodb.org/static/pgp/server-9.0.asc are both 404 as of
+# 2026-08-17 -- so pinning that repository's key is not possible. mongosh is
+# therefore installed from the .deb attached to its own GitHub release,
+# verified against the SHA-256 GitHub computes per asset, the way
+# core/yq.yml and misc/zap.yml verify theirs.
+#
+# Usage:
+#   ansible-playbook misc/mongodb-tools.yml -e host=<inventory host or group>
+#   ansible-playbook misc/mongodb-tools.yml -e host=ws01 -e mongosh_version=2.10.0
+
+- name: Install the MongoDB Database Tools and Shell system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current version in MongoDB's repository, checked 2026-08-17.
+    mongodb_tools_version: "100.18.0"
+    mongodb_repo_uri: "https://repo.mongodb.org/apt/ubuntu"
+    # NOT ansible_distribution_release: see the header on the ISA level of
+    # the resolute build.
+    mongodb_tools_release: noble
+    # MongoDB folds the server release series into the apt SUITE rather than
+    # the component -- the sources line is "<release>/mongodb-org/<series>
+    # multiverse", and dists/noble/mongodb-org/8.0/InRelease is what apt
+    # fetches. Only the tools package is installed from it;
+    # mongodb-database-tools is identical in the 8.0 and 9.0 series, and 8.0
+    # is used because it is the one whose signing key MongoDB publishes.
+    mongodb_tools_series: "8.0"
+    mongodb_tools_suite: "{{ mongodb_tools_release }}/mongodb-org/{{ mongodb_tools_series }}"
+    # MongoDB's 8.0 release signing key carries no expiry (checked
+    # 2026-08-17), and it signs the InRelease of this suite. It is fetched by
+    # URL each run -- the module compares by checksum, so that stays
+    # idempotent -- with the fingerprint pinned and asserted below.
+    mongodb_key_url: "https://pgp.mongodb.com/server-8.0.asc"
+    mongodb_key_fingerprint: "4B0752C1BCA238C0B4EE14DC41DE058A4E7DCA05"
+    # Current mongosh release as of 2026-08-17:
+    #   curl -sS https://api.github.com/repos/mongodb-js/mongosh/releases/latest \
+    #     | jq -r .tag_name
+    mongosh_version: "2.10.0"
+    mongosh_repo: mongodb-js/mongosh
+    # ansible_facts['architecture'] -> apt/asset architecture name. The
+    # mongosh release carries amd64 and arm64 .debs; the MongoDB repository
+    # publishes both architectures for this suite.
+    mongodb_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    mongodb_arch: "{{ mongodb_arch_map.get(ansible_facts['architecture'], '') }}"
+    mongosh_asset: "mongodb-mongosh_{{ mongosh_version }}_{{ mongodb_arch }}.deb"
+    # Everything the tools package ships, from `dpkg -L`: eight binaries
+    # and a documentation directory.
+    mongodb_tools_doc_dir: /usr/share/doc/mongodb-database-tools
+    mongodb_tools_binaries:
+      - /usr/bin/bsondump
+      - /usr/bin/mongodump
+      - /usr/bin/mongoexport
+      - /usr/bin/mongofiles
+      - /usr/bin/mongoimport
+      - /usr/bin/mongorestore
+      - /usr/bin/mongostat
+      - /usr/bin/mongotop
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts.
+    mongodb_stage_dir: "/var/tmp/mongodb-tools-install-{{ mongosh_version }}"
+    mongodb_smoke_dir: /var/tmp/mongodb-tools-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    mongodb_verify_uid: 65534    # nobody
+    mongodb_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 5.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No MongoDB architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to mongodb_arch_map.
+      when: mongodb_arch | length == 0
+
+    - name: 3. Add the MongoDB apt repository
+      ansible.builtin.deb822_repository:
+        name: mongodb
+        types:
+          - deb
+        uris:
+          - "{{ mongodb_repo_uri }}"
+        suites:
+          - "{{ mongodb_tools_suite }}"
+        components:
+          - multiverse
+        architectures:
+          - "{{ mongodb_arch }}"
+        signed_by: "{{ mongodb_key_url }}"
+        state: present
+        mode: '0644'
+      register: mongodb_repo
+
+    - name: 4. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring, and
+      # this tolerates a miss (failed_when: false): on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ mongodb_repo.key_filename | default('/etc/apt/keyrings/mongodb.asc', true) }}
+      register: mongodb_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Confirm the keyring holds MongoDB's 8.0 signing key
+      ansible.builtin.fail:
+        msg: >-
+          The keyring for {{ mongodb_repo_uri }} does not contain MongoDB's
+          8.0 release signing key {{ mongodb_key_fingerprint }}. Verify any
+          replacement against MongoDB's published keys and update
+          mongodb_key_fingerprint deliberately -- do not delete this check.
+      when:
+        - mongodb_key_fingerprint not in (mongodb_fpr.stdout | default(''))
+        - not (ansible_check_mode and mongodb_fpr.rc | default(1) != 0)
+
+    - name: 6. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: mongodb_repo.changed
+
+    - name: 7. Check the currently installed package versions
+      # One dpkg-query for both packages. It exits non-zero when either is
+      # absent while still printing the one that is present, hence
+      # failed_when: false. check_mode: false because this reads state that
+      # already exists.
+      ansible.builtin.command:
+        cmd: >-
+          dpkg-query -W -f='${Package} ${Version}\n'
+          mongodb-database-tools mongodb-mongosh
+      register: mongodb_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 8. Decide what needs installing
+      ansible.builtin.set_fact:
+        mongodb_tools_install_needed: >-
+          {{ ('mongodb-database-tools ' ~ mongodb_tools_version)
+             not in (mongodb_installed.stdout | default('')) }}
+        mongosh_install_needed: >-
+          {{ ('mongodb-mongosh ' ~ mongosh_version)
+             not in (mongodb_installed.stdout | default('')) }}
+        mongodb_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (('mongodb-database-tools ' ~ mongodb_tools_version)
+                       not in (mongodb_installed.stdout | default(''))
+                       or ('mongodb-mongosh ' ~ mongosh_version)
+                          not in (mongodb_installed.stdout | default('')))) }}
+
+    - name: 8a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install mongodb-database-tools
+          {{ mongodb_tools_version }} / mongosh {{ mongosh_version }}, so the
+          version check and the unprivileged checks below are skipped rather
+          than failed. Re-run without --check to verify.
+      when: not (mongodb_can_verify | bool)
+
+    - name: 9. Install the MongoDB Database Tools via apt
+      # allow_downgrade so that moving the pin backwards actually applies:
+      # without it apt refuses, and the pin silently means "this version or
+      # anything newer already present".
+      ansible.builtin.apt:
+        name: "mongodb-database-tools={{ mongodb_tools_version }}"
+        state: present
+        allow_downgrade: true
+      when: mongodb_tools_install_needed | bool
+
+    - name: 10. Take ownership of the binaries the tools package ships
+      # MongoDB's .deb records its own build user as the owner of every file
+      # it contains -- `dpkg-deb -c` shows ubuntu/ubuntu, uid and gid 1000 --
+      # and dpkg honours that, so a plain install leaves /usr/bin/mongodump
+      # and its seven siblings owned by whoever is uid 1000 on this host. On
+      # a workstation that is a real login account, which would be free to
+      # rewrite binaries every other account runs, and that root runs too
+      # under sudo. Ownership is therefore corrected here, and on every run
+      # rather than only after an install, so a host that already took the
+      # package the plain way is repaired as well.
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: root
+        group: root
+        mode: '0755'
+      loop: "{{ mongodb_tools_binaries }}"
+
+    - name: 11. Take ownership of the documentation the tools package ships
+      # Same defect, same fix, for the rest of the package's files.
+      ansible.builtin.file:
+        path: "{{ mongodb_tools_doc_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 12. Create the staging directory for the mongosh package
+      ansible.builtin.file:
+        path: "{{ mongodb_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: mongosh_install_needed | bool
+
+    - name: 13. Fetch the GitHub release metadata for mongosh v{{ mongosh_version }}
+      # check_mode: false because reading release metadata changes nothing on
+      # the host, so a dry run still validates the pin against upstream.
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ mongosh_repo }}/releases/tags/v{{ mongosh_version }}"
+        return_content: true
+      register: mongosh_release
+      check_mode: false
+      when: mongosh_install_needed | bool
+
+    - name: 14. Resolve the SHA-256 digest for the mongosh package
+      # The release also carries mongodb-mongosh-shared-openssl11/3 builds,
+      # which link against the system OpenSSL. The plain package selected
+      # here bundles its own, so it depends on nothing but libc6 -- confirmed
+      # with dpkg -I -- which is what makes it safe to install outside a
+      # repository. The digest arrives as "sha256:<hex>", exactly the format
+      # get_url's checksum option expects.
+      ansible.builtin.set_fact:
+        mongosh_checksum: >-
+          {{ mongosh_release.json.assets
+             | selectattr('name', 'equalto', mongosh_asset)
+             | map(attribute='digest') | first | default('') }}
+      when: mongosh_install_needed | bool
+
+    - name: 15. Fail if the release does not carry this package
+      ansible.builtin.fail:
+        msg: >-
+          The mongosh v{{ mongosh_version }} release has no asset named
+          {{ mongosh_asset }}, or GitHub published no digest for it. Check the
+          version pin against https://github.com/{{ mongosh_repo }}/releases.
+      when:
+        - mongosh_install_needed | bool
+        - not (mongosh_checksum is match('^sha256:[0-9a-f]{64}$'))
+
+    - name: 16. Download the mongosh package and verify its checksum
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/{{ mongosh_repo }}/releases/download/v{{ mongosh_version }}/{{ mongosh_asset }}
+        dest: "{{ mongodb_stage_dir }}/{{ mongosh_asset }}"
+        checksum: "{{ mongosh_checksum }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - mongosh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 17. Install the mongosh package
+      ansible.builtin.apt:
+        deb: "{{ mongodb_stage_dir }}/{{ mongosh_asset }}"
+      when:
+        - mongosh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 18. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ mongodb_stage_dir }}"
+        state: absent
+
+    - name: 19. Verify the installed package versions
+      ansible.builtin.command:
+        cmd: >-
+          dpkg-query -W -f='${Package} ${Version}\n'
+          mongodb-database-tools mongodb-mongosh
+      register: mongodb_dpkg
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('mongodb-database-tools ' ~ mongodb_tools_version) not in mongodb_dpkg.stdout
+        or ('mongodb-mongosh ' ~ mongosh_version) not in mongodb_dpkg.stdout
+      when: mongodb_can_verify | bool
+
+    - name: 20. Stat every tool the database-tools package ships
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ mongodb_tools_binaries }}"
+      register: mongodb_bin_stat
+      when: mongodb_can_verify | bool
+
+    - name: 21. Confirm every tool is a root-owned executable
+      # Not a formality: without task 10 this assertion fails, because the
+      # package installs its binaries owned by uid 1000.
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.xusr
+        fail_msg: >-
+          {{ item.item }} is missing or is not a root-owned executable, so
+          the database-tools install is not usable by every account here.
+      loop: "{{ mongodb_bin_stat.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when: mongodb_can_verify | bool
+
+    - name: 22. Create the scratch directory for the unprivileged checks
+      # Owned by the verifying uid: mongosh creates ~/.mongodb/mongosh
+      # (config, history, logs) the moment it evaluates anything, so it is
+      # given a scratch HOME rather than being allowed near a real one. A
+      # plain `mongosh --version` writes nothing -- checked with a fresh
+      # HOME -- which is why the version check above can stay a dpkg-query.
+      ansible.builtin.file:
+        path: "{{ mongodb_smoke_dir }}"
+        state: directory
+        owner: "{{ mongodb_verify_uid }}"
+        group: "{{ mongodb_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: mongodb_can_verify | bool
+
+    - name: 23. Write a BSON document for the unprivileged bsondump check
+      # Twelve bytes of hand-written BSON for {"a": 1}: int32 length 0x0c,
+      # element type 0x10 (int32), key "a\0", value 1 as int32, terminator.
+      # printf with octal escapes because the content has NUL bytes in it,
+      # which a copy: content: block cannot carry.
+      ansible.builtin.shell:
+        cmd: >-
+          printf '\014\000\000\000\020a\000\001\000\000\000\000'
+          > {{ mongodb_smoke_dir }}/doc.bson
+      args:
+        creates: "{{ mongodb_smoke_dir }}/doc.bson"
+      check_mode: false
+      when: mongodb_can_verify | bool
+
+    - name: 24. Convert BSON to JSON as an unprivileged user
+      # Real work with no server involved: bsondump parses the document with
+      # the same BSON reader mongorestore uses and prints extended JSON, so
+      # this exercises the installed tools rather than a version string.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ mongodb_verify_uid }} --regid={{ mongodb_verify_gid }} --clear-groups
+          bsondump {{ mongodb_smoke_dir }}/doc.bson
+        chdir: "{{ mongodb_smoke_dir }}"
+      register: mongodb_smoke_bsondump
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        '{"a":{"$numberInt":"1"}}' not in mongodb_smoke_bsondump.stdout
+        or '1 objects found' not in mongodb_smoke_bsondump.stderr
+      when: mongodb_can_verify | bool
+
+    - name: 25. Evaluate JavaScript in mongosh as an unprivileged user
+      # --nodb runs the shell's whole JavaScript environment with no server
+      # to connect to, so this proves the interpreter, the bundled Node
+      # runtime and the EJSON serialiser all work for an account that did no
+      # setup of its own -- and the version it reports is read back from the
+      # same process, not from dpkg.
+      #
+      # shell rather than command, and the expression in single quotes:
+      # `command` tokenises its cmd shlex-style without running a shell, so
+      # the quotes around a JavaScript string literal are eaten and the
+      # spaces inside one split it into separate arguments -- mongosh
+      # answers either mistake with a SyntaxError.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ mongodb_verify_uid }} --regid={{ mongodb_verify_gid }} --clear-groups
+          env HOME={{ mongodb_smoke_dir }}
+          mongosh --nodb --quiet --eval
+          'JSON.stringify({answer:6*7,version:version(),epoch:EJSON.stringify({d:new Date(0)})})'
+        chdir: "{{ mongodb_smoke_dir }}"
+      register: mongodb_smoke_mongosh
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        '"answer":42' not in mongodb_smoke_mongosh.stdout
+        or ('"version":"' ~ mongosh_version ~ '"') not in mongodb_smoke_mongosh.stdout
+        or '1970-01-01T00:00:00Z' not in mongodb_smoke_mongosh.stdout
+      when: mongodb_can_verify | bool
+
+    - name: 26. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ mongodb_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 27. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            MongoDB Database Tools {{ mongodb_tools_version }} and mongosh
+            {{ mongosh_version }} installed system-wide.
+          - ""
+          - "  {{ mongodb_tools_binaries | join(', ') }}"
+          - "  /usr/bin/mongosh"
+          - ""
+          - >-
+            {{ mongodb_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ mongodb_verify_uid
+            ~ '): bsondump decoded a BSON document, and mongosh --nodb evaluated'
+            ~ ' JavaScript and reported its own version.',
+            'Not verified: this was a --check run against a host without these versions.') }}
+          - ""
+          - "Clients only -- no mongod runs here. Each account gets its own"
+          - "~/.mongodb/mongosh (config, history, logs) on first use."
+          - ""
+          - "Usage:"
+          - "  mongosh 'mongodb://host/db'              # connect a shell"
+          - "  mongosh --nodb                           # shell with no server"
+          - "  mongodump --uri=... --out=dump/          # dump a database"
+          - "  mongorestore --uri=... dump/             # restore one"
+          - "  mongoexport --uri=... -c coll --out=x.json   # collection to JSON"
+          - "  bsondump dump/db/coll.bson               # BSON to JSON, offline"
