@@ -113,6 +113,20 @@
     # and pnpm, both as real npm-global installs -- see the header comment.
     yarn_version: "1.22.22"
     pnpm_version: "11.21.0"
+    # Corepack installs one shim per package-manager ENTRY POINT, not one per
+    # package manager: Yarn Classic also ships `yarnpkg`, pnpm also ships
+    # `pnpx`. Cleaning only yarn/pnpm leaves the others behind and npm's
+    # install still aborts on them -- ws02 failed first on `yarn`, then on
+    # `yarnpkg`. `corepack` itself is deliberately NOT in this list: it is
+    # NodeSource's own binary, and its symlink target contains "corepack" too,
+    # so including it here would delete a working part of the nodejs package.
+    nodejs_corepack_shim_names: [yarn, yarnpkg, pnpm, pnpx]
+    # Checked one package per `npm ls` call, never both in one -- see task 15.
+    nodejs_npm_globals:
+      - name: yarn
+        version: "{{ yarn_version }}"
+      - name: pnpm
+        version: "{{ pnpm_version }}"
     nodejs_smoke_home: /var/tmp/nodejs-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
     nodejs_verify_uid: 65534    # nobody
@@ -287,8 +301,18 @@
       # npm ls inspects install metadata; it does not execute the package's
       # binary, so this is safe to run even while a Corepack shim occupies
       # the same path.
+      #
+      # ONE PACKAGE PER CALL, deliberately. `npm ls -g yarn@X pnpm@Y` exits 0
+      # when EITHER spec matches, so a host with the pinned yarn and a stale
+      # pnpm reports "nothing to do". Found on ws01, where pnpm sat at 11.1.0
+      # against a pin of 11.21.0: this guard and task 19's verification both
+      # passed it, and only task 22's per-binary --version caught it. A single
+      # non-matching spec does exit 1, which is why it looked correct.
       ansible.builtin.command:
-        cmd: "npm ls -g yarn@{{ yarn_version }} pnpm@{{ pnpm_version }} --depth=0"
+        cmd: "npm ls -g {{ item.name }}@{{ item.version }} --depth=0"
+      loop: "{{ nodejs_npm_globals }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: nodejs_npm_ls
       changed_when: false
       failed_when: false
@@ -298,7 +322,8 @@
       ansible.builtin.set_fact:
         nodejs_yarn_pnpm_install_needed: >-
           {{ 'corepack' in (nodejs_corepack_check.stdout | default(''))
-             or nodejs_npm_ls.rc | default(1) != 0 }}
+             or ((nodejs_npm_ls.results | default([]))
+                 | selectattr('rc', 'ne', 0) | list | length > 0) }}
       when: nodejs_can_verify | bool
 
     - name: 17. Disable Corepack's dispatcher shims
@@ -311,6 +336,42 @@
         - nodejs_can_verify | bool
         - nodejs_yarn_pnpm_install_needed | bool
 
+    - name: 17a. Stat the Corepack shim paths without following symlinks
+      ansible.builtin.stat:
+        path: "{{ nodejs_npm_prefix.stdout }}/bin/{{ item }}"
+        follow: false
+      loop: "{{ nodejs_corepack_shim_names }}"
+      register: nodejs_shim_stat
+      when:
+        - nodejs_can_verify | bool
+        - nodejs_yarn_pnpm_install_needed | bool
+
+    - name: 17b. Remove Corepack shims that `corepack disable` did not
+      # `corepack disable` only removes shims the CURRENTLY installed Corepack
+      # manages. Where the distro's nodejs package shipped Corepack (Ubuntu
+      # puts it under /usr/share/nodejs) and NodeSource's package later
+      # replaced it, /usr/bin/yarn survives as a DANGLING symlink into a
+      # directory that no longer exists, owned by no package at all --
+      # `dpkg -S` finds nothing for it. `npm install -g` then refuses the
+      # entire install with EEXIST rather than overwriting it, so task 18
+      # fails on a host that is otherwise exactly what this playbook is for.
+      # Found on ws02, whose archive node 22 was replaced by NodeSource
+      # node 24 by this playbook's own task 10.
+      #
+      # Matches on the RESOLVED target containing "corepack", so it removes
+      # only a Corepack shim -- live or orphaned. A real npm-managed binary is
+      # left alone: npm overwrites its own files without complaint, and
+      # deleting one would be this playbook reaching outside what it installed.
+      ansible.builtin.file:
+        path: "{{ nodejs_npm_prefix.stdout }}/bin/{{ item.item }}"
+        state: absent
+      loop: "{{ nodejs_shim_stat.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - item.stat.islnk | default(false)
+        - "'corepack' in (item.stat.lnk_source | default(''))"
+
     - name: 18. Install pinned Yarn and pnpm via npm as root
       # The mechanism core/markdownlint.yml already established for a
       # root-owned global npm install (decision-order mechanism 6).
@@ -321,7 +382,10 @@
 
     - name: 19. Verify yarn and pnpm are real npm-managed packages, not Corepack shims
       ansible.builtin.command:
-        cmd: "npm ls -g yarn@{{ yarn_version }} pnpm@{{ pnpm_version }} --depth=0"
+        cmd: "npm ls -g {{ item.name }}@{{ item.version }} --depth=0"
+      loop: "{{ nodejs_npm_globals }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: nodejs_npm_ls_verify
       changed_when: false
       failed_when: nodejs_npm_ls_verify.rc != 0
