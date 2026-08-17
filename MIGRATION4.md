@@ -3,14 +3,18 @@
 Policy and procedure for migrating the last three playbooks — `core/core-tools.yml`,
 `core/mise.yml`, `core/nodejs.yml` — from `core/` to `_multi-user/core/`.
 
-**Status: complete.** All three playbooks are migrated, verified against `localhost`, and
+**Status: complete.** All three playbooks are migrated, verified against `localhost`, `ws01` and
+`ws02`, and
 retired — the originals and `core/README.md` were deleted on 2026-08-16 and `core/` is gone with
 them, the same as `tool/`, `cloud-cli/` and `container/` before it. `_multi-user/core/` now holds
 `core-tools.yml`, `nodejs.yml` and `mise.yml`, each run to `failed=0` against `localhost`, re-run
 idempotently, and checked clean under `--check` — see [Migration status](#migration-status).
-**Read [what the retirement gate did and did not cover](#known-follow-ups) before relying on the
-deletion**: it is the same `localhost`-only, ansible-core 2.20-only evidence `container/` was
-retired on, and the 24.04-control-node-over-SSH run this plan called for was never performed.
+The [retirement gate](#known-follow-ups) was narrower than the word suggests when it was taken —
+the same `localhost`-only, ansible-core 2.20-only evidence `container/` was retired on — but the
+24.04-control-node-over-SSH run this plan called for **has since been performed: all three
+playbooks run `failed=0` against `ws01` and `ws02`**, and it found four defects, three of them in
+playbooks this document had already marked verified. See
+[the `ws01`/`ws02` run](#the-ws01ws02-run-2026-08-17--and-the-four-defects-localhost-could-not-find).
 
 This document is the fourth in the series and the last: `core/` was the whole of what remained
 of the original single-user tree (`tool/`, `cloud-cli/` and `container/` were already gone — see
@@ -349,9 +353,9 @@ additions apply unchanged, with one more specific to this directory:
 
 | Source playbook | Old mechanism | Target mechanism | Pinned | Status |
 | --- | --- | --- | --- | --- |
-| `core-tools.yml` | apt, unpinned | apt, pinned, per-package verify | 19 packages, see the playbook's `vars` | Verified (localhost) |
-| `nodejs.yml` | NodeSource setup script, unpinned; Corepack shims mistaken for Yarn/pnpm | `deb822_repository`, pinned; Yarn/pnpm via `npm install -g` per decision (a) | nodejs 24.19.0-1nodesource1, yarn 1.22.22, pnpm 11.21.0 | Verified (localhost) |
-| `mise.yml` | vendor apt repo (`.list` + shell dearmor), unpinned; `mise activate` in `~/.bashrc` | `deb822_repository` (URL key form), pinned; activation in `/etc/profile.d/mise.sh` | 2026.8.6 | Verified (localhost) |
+| `core-tools.yml` | apt, unpinned | apt, pinned, per-package verify | 19 packages, see the playbook's `vars` | Verified (localhost, ws01, ws02) |
+| `nodejs.yml` | NodeSource setup script, unpinned; Corepack shims mistaken for Yarn/pnpm | `deb822_repository`, pinned; Yarn/pnpm via `npm install -g` per decision (a) | nodejs 24.19.0-1nodesource1, yarn 1.22.22, pnpm 11.21.0 | Verified (localhost, ws01, ws02) |
+| `mise.yml` | vendor apt repo (`.list` + shell dearmor), unpinned; `mise activate` in `~/.bashrc` | `deb822_repository` (URL key form), pinned; activation in `/etc/profile.d/mise.sh` | 2026.8.6 | Verified (localhost, ws01, ws02) |
 
 Every row is also **retired**: none of the source playbooks named in the first column still
 exists, each having been deleted on 2026-08-16 once its successor was verified, and `core/` was
@@ -414,6 +418,150 @@ confirmed working inside a `>-` scalar with no escaping needed at all. Worth app
 already-"Verified" playbooks named above the next time one of them is touched; none of their
 summary text affects `failed=`, so this was never going to surface as a run failure.
 
+### The `ws01`/`ws02` run (2026-08-17) — and the four defects `localhost` could not find
+
+**All three playbooks run `failed=0` against both real workstations, from a 24.04 control node
+(ansible-core 2.16) against Ubuntu 26.04 / Python 3.14 targets**, re-run idempotently at
+`core-tools.yml ok=11 changed=2`, `nodejs.yml ok=20 changed=2`, `mise.yml ok=15 changed=2` —
+every `changed` the scratch `HOME` created and removed, both hosts identical, `/var/tmp` clean.
+All three were then re-run under **ansible-core 2.20.1 on `ws01` itself**, `failed=0`, so the
+fixes below hold on both engines the [scope](#scope) requires.
+
+This directory is the one where remote verification paid for itself several times over. The
+`container/` run turned up one defect; this turned up four, and **three of them were in the
+"Verified (localhost)" rows above** — not in the migration's design, but in the checks that were
+supposed to prove it.
+
+The two hosts diverged in exactly the ways that mattered: `ws01` ran NodeSource node 24.18.0 with
+real npm-installed yarn/pnpm and a legacy `mise.list`; `ws02` ran the *Ubuntu archive's* node 22
+with an npm prefix of `/usr/local` and Corepack shims at `/usr/bin/{yarn,yarnpkg}`. `localhost`
+is only ever one of those.
+
+**1. `core-tools.yml`'s install guard could not see an uninstalled package.** Tasks 1 and 4 both
+read `dpkg-query -W -f='${Version}'`, and dpkg reports a version for a package in `deinstall ok
+config-files` state — removed, binary gone, only conffiles left. So the guard read "already at
+the pin" and skipped it, and task 4 then *verified* the same phantom and printed it in the
+summary. Reproduced deliberately by removing `figlet` on `ws02`: the playbook reported
+`failed=0`, listed `figlet 2.2.5-3.1` as installed, and left the host with no `figlet` binary.
+Fixed by reading `${Status}|${Version}` in both tasks and comparing against
+`install ok installed|<version>`.
+
+**2. Three of `core-tools.yml`'s eighteen verify commands passed when the binary was absent.**
+This is the one worth carrying into the next migration. A check shaped
+
+```bash
+<tool> --version 2>&1 | grep -qi '<tool>'
+```
+
+**succeeds when the tool is not installed**, because the shell's own
+`bash: <tool>: command not found` contains the tool's name and `2>&1` feeds it straight into the
+grep. `ncat`, `figlet` and `dos2unix` all had that shape and were vacuous; the other fifteen were
+safe only because they grep for a version string (`'git version 2.53.0'`) rather than the name.
+Combined with defect 1, `ws02` could report a fully successful run while missing a tool the
+summary claimed to have installed. Fixed by greping for version-bearing output and redirecting
+stderr only for `ncat`, which is the one of the three that genuinely writes its version there.
+The rule, stated for whoever writes the next per-package verification table: **a verify command
+must be tested against the binary being absent, not only against it being present** — MIGRATION4
+checked every command in that table against a working install, which is exactly the half that
+cannot catch this.
+
+**3. `nodejs.yml`'s Yarn/pnpm guard ORed across packages instead of ANDing.** `npm ls -g
+yarn@1.22.22 pnpm@11.21.0 --depth=0` exits **0 when either spec matches**. On `ws01`, yarn was
+correct and pnpm sat at 11.1.0 against a pin of 11.21.0; the guard reported nothing to do, and
+task 19 — the task whose name is "Verify yarn and pnpm are real npm-managed packages" — ran the
+identical command and passed it too. Only task 22's per-binary `--version` comparison caught it.
+A single non-matching spec *does* exit 1, which is why the idiom looks correct and why
+`localhost`, with both packages already right, never exercised it. Fixed by running one
+`npm ls` per package and requiring every one to succeed.
+
+**4. `corepack disable` does not remove shims a *previous* Corepack owned.** Decision (a) assumes
+`corepack disable` clears the paths before `npm install -g` writes them. On `ws02` it did not:
+Ubuntu's nodejs package ships Corepack under `/usr/share/nodejs`, this playbook's own task 10
+replaced that package with NodeSource's, and `/usr/bin/yarn` survived as a **dangling symlink
+into a directory that no longer existed, owned by no package at all** (`dpkg -S` finds nothing).
+`npm install -g` refuses the entire install with `EEXIST` rather than overwriting a file it does
+not own, so task 18 failed on a host that is precisely what this playbook is for. Fixed with a
+`stat`/`file` pair that removes only symlinks resolving into a corepack tree — and the shim list
+is **four names, not two**: the first fix cleared `yarn` and the run then failed again on
+`yarnpkg`, because Corepack installs one shim per package-manager *entry point* (`yarn`,
+`yarnpkg`, `pnpm`, `pnpx`). `corepack` itself is deliberately excluded from that list: it is
+NodeSource's own binary and its symlink target contains the same string.
+
+This is the defect MIGRATION4 half-predicted and mis-scoped. The plan said a `creates:` guard
+"cannot distinguish 'this repo's pinned install' from 'something else happened to leave a file at
+this path'" and treated that as a *guard* problem decision (a) would retire. The same blind spot
+turned out to sit in the *install*.
+
+**A cross-playbook interaction, not a defect in either playbook.** `nodejs.yml` moved `ws02`'s
+npm global prefix from `/usr/local` (archive node) to `/usr` (NodeSource), which orphaned the
+`devcontainer` CLI that `container/devcontainers.yml` had installed at the old prefix. Because
+`/usr/local/bin` precedes `/usr/bin` on the default `PATH`, the stale copy would have **shadowed**
+the correct one — the same precedence trap this repo has been tracking since MIGRATION.md's
+Homebrew finding.
+
+The guard itself is not at fault, and this is worth stating precisely because the opposite is the
+natural guess: `devcontainers.yml` resolves the prefix at run time and checks
+`<prefix>/bin/devcontainer --version` by absolute path, so on the moved prefix it correctly saw
+nothing installed and installed to `/usr`. Every npm playbook in this repo does the same. What no
+npm playbook does is *notice the copy it left at a prefix it no longer uses* — nothing tracks
+where a previous run installed. Resolved by hand (`npm uninstall -g --prefix /usr/local`) and
+re-running, leaving both hosts with `/usr/bin/devcontainer` alone.
+
+**All five npm-based playbooks were then checked against these same failure modes and run on both
+hosts**, since `nodejs.yml` moves the prefix out from under every one of them:
+`core/markdownlint.yml`, `core/nodejs.yml`, `container/devcontainers.yml`,
+`misc/mocha-chai.yml` and `misc/playwright.yml`. All five pass `failed=0` and re-run idempotently
+(`markdownlint ok=12 changed=2`, `mocha-chai ok=13 changed=2`, `playwright ok=17 changed=1`,
+`devcontainers ok=12 changed=2`). Three points came out of it:
+
+- **`markdownlint.yml` hit the orphan too, and it is the case that shows why it matters.**
+  `ws02` had markdownlint-cli at `/usr/local` from before the prefix moved. The playbook installed
+  0.49.1 to `/usr` and verified it — by absolute path, correctly — while `command -v markdownlint`
+  still resolved to the `/usr/local` copy. Both happened to be 0.49.1, so nothing looked wrong; had
+  the pin moved, the host would have been *running* one version while the playbook *reported*
+  another, and the reported one would have been right. Cleaned up the same way. This is the
+  precedence trap in its quietest form: not a failure, a silently wrong answer.
+- **The `npm ls` OR-bug was already known in this repo, and written down.** `misc/mocha-chai.yml`
+  carries a header comment stating that `npm ls -g` exits 0 "as soon as ANY one of several
+  name@version arguments matches" and checks its two packages separately for exactly that reason.
+  So defect 3 was not an unknown; it was a finding made while writing a later playbook and never
+  carried back to the earlier one. `mocha-chai.yml` and every other npm playbook here install a
+  single package per call and are unaffected.
+- **No other npm playbook shares defect 4.** Corepack only owns `yarn`/`yarnpkg`/`pnpm`/`pnpx`,
+  so nothing else can collide with a shim; and every one of the five resolves the prefix at run
+  time rather than assuming it, which is MIGRATION.md's original `markdownlint` finding holding up
+  across five playbooks and two hosts that genuinely disagreed about the answer.
+
+What remains open is narrow and shared by all five: nothing tracks where a *previous* run
+installed, so none of them removes a copy left at a prefix they no longer use. Whether they should
+sweep the other plausible prefix is the one npm-global question this run leaves unanswered.
+
+**`deb822_repository` is not idempotent *across* control-node versions, which affects every A5
+playbook in this repo.** Running a `.sources` playbook from 2.16 and then from 2.20 rewrites the
+file each way, so `deb822_repository` reports `changed` and the "refresh the cache when the
+repository changed" task fires with it — `+2 changed` per playbook, per switch. The two engines
+write materially different files for identical input:
+
+```console
+# ansible-core 2.16                  # ansible-core 2.20
+X-Repolib-Name: mise                 Architectures: amd64
+Types: deb                           Components: main
+URIs: https://mise.jdx.dev/deb       Install-Python-Debian: no
+Suites: stable                       X-Repolib-Name: mise
+Components: main                     Signed-By: /etc/apt/keyrings/mise.asc
+Architectures: amd64                 Suites: stable
+Signed-By: /etc/apt/keyrings/mise.asc  Types: deb
+                                     URIs: https://mise.jdx.dev/deb
+```
+
+2.20 sorts the fields alphabetically **and emits a spurious `Install-Python-Debian: no`** — a
+module parameter leaking into the file it writes. apt does not care (`apt-get update` against the
+file is clean and silent, confirmed), so this is not a correctness problem, and no playbook is
+changed for it. It is a *measurement* problem, and this repo measures with exactly this
+instrument: **"the second run reports `changed=0`" only holds when both runs came from the same
+control node.** Every "re-ran idempotently" claim in all four migration documents should be read
+that way. Steady state is reached again on the second run from either engine.
+
 ## Known follow-ups
 
 - ~~**Retiring `core/`.**~~ **Done 2026-08-16.** All three originals and the directory's README
@@ -433,6 +581,18 @@ summary text affects `failed=`, so this was never going to surface as a run fail
   playbooks (all of `_multi-user/tools/`, `_multi-user/cloud-cli/`, `_multi-user/container/` and
   `_multi-user/core/` — see [the count](README.md#multi-user-34)), and the cheapest way to
   discharge it is still one playbook, one 24.04 control node, one remote host.
+
+  **Closed for this directory 2026-08-17:** all three playbooks now run `failed=0` against both
+  `ws01` and `ws02` over SSH from a 2.16 control node, and again under 2.20 on `ws01` itself. It
+  found four defects — see [the `ws01`/`ws02`
+  run](#the-ws01ws02-run-2026-08-17--and-the-four-defects-localhost-could-not-find) — three of
+  them in checks these rows had already called "Verified", which is the strongest evidence in the
+  series that the gate was worth closing rather than inheriting. `cloud-cli/` and `container/`
+  closed the same way on the same day, so the remainder is `misc/` alone. **The cheapest-way
+  advice above is now known to be wrong**: one playbook on one host would have found none of
+  these four. Two hosts in genuinely different states found all of them, and the difference that
+  mattered was not the SSH path but the *starting state* — an archive Node versus a NodeSource
+  one, a package half-removed, a stale pin.
 - **Renaming `_multi-user/`.** The underscore has meant *staging*, sorting the tree apart from
   the live single-user directories it would replace, since MIGRATION.md. Those directories are
   gone now — the legacy tree does not exist at all — so the prefix marks a distinction that no
