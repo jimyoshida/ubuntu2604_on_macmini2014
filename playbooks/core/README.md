@@ -1,7 +1,7 @@
 # Core Playbooks (multi-user workstations)
 
-Standalone playbooks that install the base CLI toolset, Node.js, mise, ansible-core and the
-.NET SDK on a **shared** Ubuntu workstation. They are the multi-user successors to `core/`. See
+Standalone playbooks that install the base CLI toolset, Node.js, mise, ansible-core, the .NET
+SDK and PowerShell on a **shared** Ubuntu workstation. They are the multi-user successors to `core/`. See
 [MIGRATION4.md](../../MIGRATION4.md) for the policy and the per-tool plan.
 
 Run from `playbooks/`:
@@ -214,6 +214,55 @@ Version overrides:
 
 ```bash
 ansible-playbook core/dotnet.yml -e host=ws01 -e dotnet_version=10.0.110-0ubuntu1~26.04.1
+```
+
+## pwsh.yml
+
+Installs [PowerShell](https://learn.microsoft.com/powershell/) 7.6.5 from the upstream binary
+archive, in the versioned-directory-plus-symlink shape
+[`misc/maven.yml`](../misc/README.md#mavenyml) uses.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/powershell/<version>/` | the unpacked release (~171 MB) |
+| `/usr/local/bin/pwsh` | symlink to that version's `pwsh` |
+
+**Not apt, and the reason is measured.** Microsoft publishes **no `powershell` package for
+Ubuntu 26.04 at all** — its 26.04 repository (`packages.microsoft.com/ubuntu/26.04/prod`, suite
+`resolute`) carries none at any version, checked 2026-08-17. Installing from apt would mean
+pointing a 26.04 host at the 24.04 `noble` suite and hoping the dependencies line up. The binary
+archive Microsoft publishes for exactly this case is self-contained: `libicu` is its only real
+system dependency, and `ldd` reports nothing missing for `pwsh`. The pin can then be the current
+release, verified against the SHA-256 GitHub publishes for the asset.
+
+### Root never runs pwsh here
+
+PowerShell writes `~/.cache/powershell` (including `telemetry.uuid` and startup profile data),
+`~/.config/powershell` and `~/.local/share/powershell` — confirmed live, the cache appears on the
+plainest possible invocation. Running it as root would leave that under `/root`, which
+MIGRATION3's B2 forbids, so the idempotency check reads the filesystem (the versioned path and
+the symlink target) and every `pwsh` invocation is unprivileged with a scratch `HOME`.
+
+### The AllUsers module scope is asserted, not assumed
+
+No modules are installed — which set a workstation needs is not this playbook's decision — but
+the check does assert that `/usr/local/share/powershell/Modules` is on `PSModulePath` for an
+unprivileged account. That is what makes a later `Install-Module -Scope AllUsers` land somewhere
+every account can read rather than in one account's `~/.local/share/powershell`, and a tarball
+install could plausibly have left it off.
+
+The rest of the unprivileged check is real work: a script builds an object, round-trips it
+through `ConvertTo-Json`/`ConvertFrom-Json` and reports the version, so the cmdlet pipeline and
+the type system are exercised rather than a version string. It runs from a file rather than
+`-Command`, which keeps PowerShell source out of four layers of YAML, Jinja and shell quoting.
+
+Telemetry is left to each account (`POWERSHELL_TELEMETRY_OPTOUT`), the same way
+[`misc/dvc.yml`](../misc/README.md#dvcyml) leaves DVC's analytics alone.
+
+Version overrides:
+
+```bash
+ansible-playbook core/pwsh.yml -e host=ws01 -e pwsh_version=7.6.5
 ```
 
 ## modern-tools.yml

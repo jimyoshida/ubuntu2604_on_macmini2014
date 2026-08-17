@@ -1,0 +1,360 @@
+---
+# Install PowerShell system-wide on a multi-user workstation.
+#
+#   /usr/local/lib/powershell/<version>/   the unpacked release, root-owned
+#   /usr/local/bin/pwsh                    symlink to that version's pwsh
+#
+# From the upstream tar.gz rather than apt, and that is a deliberate choice
+# with a measured reason: Microsoft publishes no powershell package for
+# Ubuntu 26.04 at all. Its 26.04 repository (packages.microsoft.com/ubuntu/
+# 26.04/prod, suite resolute) carries no `powershell` at any version --
+# checked 2026-08-17 -- so an apt install here means pointing a 26.04 host at
+# the 24.04 `noble` suite and hoping the dependencies line up. The binary
+# archive Microsoft publishes for exactly this case is self-contained: it
+# needs only libicu, which this host already has, and `ldd` reports nothing
+# missing for pwsh itself.
+#
+# It also lets the pin be the current release. This installs 7.6.5, verified
+# against the SHA-256 GitHub publishes for the asset (the core/yq.yml
+# source), in the versioned-directory-plus-symlink shape misc/maven.yml and
+# misc/zap.yml use.
+#
+# PER-USER STATE, AND WHY ROOT NEVER RUNS pwsh HERE. PowerShell writes
+# ~/.cache/powershell (including telemetry.uuid and startup profile data),
+# ~/.config/powershell (profiles) and ~/.local/share/powershell (modules
+# installed with -Scope CurrentUser) -- confirmed live, the cache appears on
+# the plainest possible invocation. Running it as root would leave that under
+# /root, which MIGRATION3's B2 forbids, so the idempotency check reads the
+# filesystem and every pwsh invocation below is unprivileged with a scratch
+# HOME.
+#
+# Telemetry: PowerShell reports usage by default. This playbook turns that
+# off for nobody -- per account, or site-wide with POWERSHELL_TELEMETRY_OPTOUT
+# in /etc/environment, which this repository does not write for anyone. It
+# does set it for its own checks, as azure-cli.yml does.
+#
+# Modules: none are installed. The AllUsers scope
+# (/usr/local/share/powershell/Modules) is on PSModulePath for every account
+# -- task 15 asserts that, since it is what makes a later
+# `Install-Module -Scope AllUsers` land somewhere everyone can read -- but
+# which modules a workstation needs is not this playbook's decision.
+#
+# Usage:
+#   ansible-playbook core/pwsh.yml -e host=<inventory host or group>
+#   ansible-playbook core/pwsh.yml -e host=ws01 -e pwsh_version=7.6.5
+
+- name: Install PowerShell system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current stable release as of 2026-08-17:
+    #   curl -sS https://api.github.com/repos/PowerShell/PowerShell/releases/latest \
+    #     | jq -r .tag_name
+    # Preview builds (7.7.0-preview.*) are published too and deliberately not
+    # tracked here.
+    pwsh_version: "7.6.5"
+    pwsh_repo: PowerShell/PowerShell
+    # ansible_facts['architecture'] -> upstream asset suffix.
+    pwsh_arch_map:
+      x86_64: x64
+      aarch64: arm64
+    pwsh_arch: "{{ pwsh_arch_map.get(ansible_facts['architecture'], '') }}"
+    pwsh_asset: "powershell-{{ pwsh_version }}-linux-{{ pwsh_arch }}.tar.gz"
+    pwsh_lib_dir: /usr/local/lib/powershell
+    pwsh_install_dir: "/usr/local/lib/powershell/{{ pwsh_version }}"
+    pwsh_script: "/usr/local/lib/powershell/{{ pwsh_version }}/pwsh"
+    pwsh_bin: /usr/local/bin/pwsh
+    # The AllUsers module scope, asserted in task 15 but not created here.
+    pwsh_allusers_modules: /usr/local/share/powershell/Modules
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts, the
+    # download is ~73 MB and the unpacked tree ~171 MB.
+    pwsh_stage_dir: "/var/tmp/pwsh-install-{{ pwsh_version }}"
+    pwsh_smoke_dir: /var/tmp/pwsh-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    pwsh_verify_uid: 65534    # nobody
+    pwsh_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # libicu is PowerShell's one real system dependency; the rest of the
+      # archive is self-contained. The metapackage tracks whichever soname
+      # this release carries (libicu78 here).
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - libicu-dev
+          - tar
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No PowerShell release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to pwsh_arch_map.
+      when: pwsh_arch | length == 0
+
+    - name: 3. Inspect the current install
+      # Filesystem state, not `pwsh --version`: see the header on why root
+      # never runs pwsh here. follow: false on the symlink -- what matters is
+      # where it points, not whether the target happens to resolve.
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: pwsh_stat
+      loop:
+        - "{{ pwsh_script }}"
+        - "{{ pwsh_bin }}"
+      loop_control:
+        label: "{{ item }}"
+      check_mode: false
+
+    - name: 4. Decide whether PowerShell needs installing
+      ansible.builtin.set_fact:
+        pwsh_install_needed: >-
+          {{ not (pwsh_stat.results[0].stat.exists
+                  and pwsh_stat.results[1].stat.islnk | default(false)
+                  and pwsh_stat.results[1].stat.lnk_target | default('') == pwsh_script) }}
+        pwsh_can_verify: >-
+          {{ not (ansible_check_mode
+                  and not (pwsh_stat.results[0].stat.exists
+                           and pwsh_stat.results[1].stat.islnk | default(false)
+                           and pwsh_stat.results[1].stat.lnk_target | default('') == pwsh_script)) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install PowerShell {{ pwsh_version }}, so the
+          version check and the unprivileged script below are skipped rather
+          than failed. Re-run without --check to verify.
+      when: not (pwsh_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ pwsh_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: pwsh_install_needed | bool
+
+    - name: 6. Fetch the GitHub release metadata for PowerShell v{{ pwsh_version }}
+      # check_mode: false because reading release metadata changes nothing on
+      # the host, so a dry run still validates the pin against upstream.
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ pwsh_repo }}/releases/tags/v{{ pwsh_version }}"
+        return_content: true
+      register: pwsh_release
+      check_mode: false
+      when: pwsh_install_needed | bool
+
+    - name: 7. Resolve the SHA-256 digest for the linux-{{ pwsh_arch }} archive
+      ansible.builtin.set_fact:
+        pwsh_checksum: >-
+          {{ pwsh_release.json.assets
+             | selectattr('name', 'equalto', pwsh_asset)
+             | map(attribute='digest') | first | default('') }}
+      when: pwsh_install_needed | bool
+
+    - name: 8. Fail if the release does not carry this asset
+      ansible.builtin.fail:
+        msg: >-
+          The v{{ pwsh_version }} release has no asset named {{ pwsh_asset }},
+          or GitHub published no digest for it. Check the pin against
+          https://github.com/{{ pwsh_repo }}/releases.
+      when:
+        - pwsh_install_needed | bool
+        - not (pwsh_checksum is match('^sha256:[0-9a-f]{64}$'))
+
+    - name: 9. Download the archive and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check. Not under --check: get_url is
+      # not skipped in check mode and would validate a destination directory
+      # task 5 has not really created.
+      ansible.builtin.get_url:
+        url: "https://github.com/{{ pwsh_repo }}/releases/download/v{{ pwsh_version }}/{{ pwsh_asset }}"
+        dest: "{{ pwsh_stage_dir }}/{{ pwsh_asset }}"
+        checksum: "{{ pwsh_checksum }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - pwsh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Create the versioned install directory
+      ansible.builtin.file:
+        path: "{{ pwsh_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - pwsh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Unpack the archive
+      # The archive has no top-level directory of its own -- pwsh, the DLLs
+      # and Modules/ sit at its root -- so it unpacks straight into the
+      # versioned directory with no --strip-components.
+      ansible.builtin.unarchive:
+        src: "{{ pwsh_stage_dir }}/{{ pwsh_asset }}"
+        dest: "{{ pwsh_install_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - pwsh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Make the install tree world-readable and pwsh executable
+      # The tarball's own modes do not survive as a usable install: 'X' keeps
+      # directories traversable and leaves the DLLs non-executable, and pwsh
+      # itself is set explicitly below.
+      ansible.builtin.file:
+        path: "{{ pwsh_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when:
+        - pwsh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 13. Ensure the pwsh binary is executable
+      ansible.builtin.file:
+        path: "{{ pwsh_script }}"
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - pwsh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 14. Point /usr/local/bin/pwsh at the pinned version
+      # force: true so an existing plain file at that path is replaced rather
+      # than causing a "refusing to convert" failure.
+      ansible.builtin.file:
+        src: "{{ pwsh_script }}"
+        dest: "{{ pwsh_bin }}"
+        state: link
+        owner: root
+        group: root
+        force: true
+      when:
+        - pwsh_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 15. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ pwsh_stage_dir }}"
+        state: absent
+      when: pwsh_install_needed | bool
+
+    - name: 16. Create the scratch HOME for the unprivileged checks
+      # pwsh writes ~/.cache/powershell on any invocation, and uid 65534's
+      # home is /nonexistent, so the checks below get this instead.
+      ansible.builtin.file:
+        path: "{{ pwsh_smoke_dir }}"
+        state: directory
+        owner: "{{ pwsh_verify_uid }}"
+        group: "{{ pwsh_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: pwsh_can_verify | bool
+
+    - name: 17. Write the script the unprivileged check will run
+      # A file rather than -Command, so the PowerShell source survives YAML,
+      # Jinja and the shell without four layers of quoting. It does real
+      # work: builds an object, round-trips it through the JSON cmdlets, and
+      # reports the AllUsers module path so task 19 can assert on it.
+      ansible.builtin.copy:
+        dest: "{{ pwsh_smoke_dir }}/smoke.ps1"
+        owner: "{{ pwsh_verify_uid }}"
+        group: "{{ pwsh_verify_gid }}"
+        mode: '0644'
+        content: |
+          $ErrorActionPreference = 'Stop'
+          $round = [pscustomobject]@{ name = 'pwsh-smoke'; value = 6 * 7 } |
+            ConvertTo-Json -Compress | ConvertFrom-Json
+          if ($round.value -ne 42) { throw "JSON round-trip returned $($round.value)" }
+          Write-Output "version=$($PSVersionTable.PSVersion.ToString())"
+          Write-Output "round=$($round.name):$($round.value)"
+          foreach ($p in $env:PSModulePath -split ':') { Write-Output "modulepath=$p" }
+      check_mode: false
+      when: pwsh_can_verify | bool
+
+    - name: 18. Run the script as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ pwsh_verify_uid }} --regid={{ pwsh_verify_gid }} --clear-groups
+          env HOME={{ pwsh_smoke_dir }} POWERSHELL_TELEMETRY_OPTOUT=1
+          {{ pwsh_bin }} -NoProfile -NonInteractive -File {{ pwsh_smoke_dir }}/smoke.ps1
+        chdir: "{{ pwsh_smoke_dir }}"
+      register: pwsh_smoke
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('version=' ~ pwsh_version) not in pwsh_smoke.stdout
+        or 'round=pwsh-smoke:42' not in pwsh_smoke.stdout
+      when: pwsh_can_verify | bool
+
+    - name: 19. Confirm the AllUsers module scope is on PSModulePath
+      # This is what makes a later `Install-Module -Scope AllUsers` land
+      # somewhere every account can read, rather than in one account's
+      # ~/.local/share/powershell. Asserted rather than assumed, because a
+      # tarball install could plausibly have left it off.
+      ansible.builtin.assert:
+        that:
+          - ('modulepath=' ~ pwsh_allusers_modules) in pwsh_smoke.stdout
+        fail_msg: >-
+          {{ pwsh_allusers_modules }} is not on PSModulePath for an
+          unprivileged account: {{ pwsh_smoke.stdout }}
+        success_msg: "{{ pwsh_allusers_modules }} is on PSModulePath"
+      when: pwsh_can_verify | bool
+
+    - name: 20. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ pwsh_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 21. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "PowerShell {{ pwsh_version }} installed system-wide."
+          - ""
+          - "  {{ pwsh_install_dir }}"
+          - "  {{ pwsh_bin }} -> {{ pwsh_script }}"
+          - ""
+          - >-
+            {{ pwsh_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ pwsh_verify_uid
+            ~ '): a script round-tripped an object through the JSON cmdlets, and '
+            ~ pwsh_allusers_modules ~ ' is on PSModulePath.',
+            'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "No modules are installed. For every account, root-owned:"
+          - "  sudo pwsh -Command 'Install-Module <name> -Scope AllUsers -Force'"
+          - "For one account only:"
+          - "  pwsh -Command 'Install-Module <name> -Scope CurrentUser -Force'"
+          - ""
+          - "Each account gets its own ~/.cache/powershell, ~/.config/powershell"
+          - "and ~/.local/share/powershell on first use."
+          - ""
+          - "PowerShell reports telemetry by default. Per account:"
+          - "  export POWERSHELL_TELEMETRY_OPTOUT=1"
+          - "For every account, add that line to /etc/environment."
+          - ""
+          - "Usage:"
+          - "  pwsh                          # interactive shell"
+          - "  pwsh -File script.ps1         # run a script"
+          - "  pwsh -NoProfile -Command ...  # one-off, ignoring profiles"
+      when: pwsh_can_verify | bool
