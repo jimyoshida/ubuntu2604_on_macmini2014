@@ -121,12 +121,17 @@
 
     - name: 5. Parse the installed certbot and plugin versions
       # An empty PIPX_HOME makes `pipx list --json` print nothing at all
-      # rather than an empty object, hence the default.
+      # rather than an empty object, hence the default -- and the default has
+      # to come BEFORE from_json rather than as the other branch of a
+      # ternary: Jinja evaluates both branches of ternary before choosing, so
+      # `'' | from_json` still runs and still raises. That is how this was
+      # written first, and it fails on exactly the host this playbook is for:
+      # one where pipx has installed nothing yet.
       ansible.builtin.set_fact:
         certbot_venv: >-
-          {{ (certbot_pipx_list.stdout | default('') | trim | length > 0)
-             | ternary((certbot_pipx_list.stdout | default('{}') | from_json)
-                       .get('venvs', {}).get('certbot', {}), {}) }}
+          {{ (certbot_pipx_list.stdout | default('') | trim
+              | default('{}', true) | from_json)
+             .get('venvs', {}).get('certbot', {}) }}
 
     - name: 6. Decide what needs installing
       ansible.builtin.set_fact:
