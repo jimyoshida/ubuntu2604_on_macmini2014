@@ -477,3 +477,60 @@ Version overrides:
 ```bash
 ansible-playbook misc/maven.yml -e host=ws01 -e maven_version=3.9.16
 ```
+
+## testssl.yml
+
+Installs [testssl.sh](https://testssl.sh/), the TLS/SSL scanner, from its upstream git tree —
+versioned directory plus a symlink, the same shape as [`maven.yml`](#mavenyml).
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/testssl.sh/<version>/` | the upstream tree: script, `etc/` data files, bundled OpenSSL |
+| `/usr/local/bin/testssl.sh` | symlink to that version's script |
+
+testssl.sh is not a single binary — it reads its cipher mappings and CA bundles from `etc/`
+and prefers the OpenSSL build in `bin/`, both resolved relative to the script's own location.
+So the whole tree is installed and only the entry point goes on `PATH`; confirmed live that
+invoking it through the symlink, from a directory the caller cannot read, still finds both.
+No per-user state, nothing in a shell profile: scans write where the caller asks
+(`--htmlfile`, `--jsonfile`) and temporary files to `$TMPDIR`.
+
+**Not the apt package, deliberately.** apt carries `testssl.sh` 3.2.2+dfsg-1, and the `+dfsg`
+repack exists precisely because it strips the bundled OpenSSL binaries — the build testssl.sh's
+own output calls *"OpenSSL 1.0.2-bad"*, kept deliberately broken so it still speaks SSLv2,
+SSLv3 and export ciphers. This host's OpenSSL is 3.5.5, which refuses all of them, so the
+stripped package cannot detect the weak protocols the scanner exists to find.
+
+### What is pinned is a tag *and* a commit
+
+Checking out a branch — or even a tag by name alone — installs whatever it points at on the
+day and records nothing about what that was. This pins the `v3.2.4` tag **and** the commit that
+tag pointed at when the pin was taken, since tags are mutable on GitHub and commit ids are not.
+The commit is re-checked on **every** run, not just at install time, so a moved tag or an
+edited tree is caught rather than silently inherited.
+
+The versioned directory plus symlink is also what makes `depth: 1` safe: a per-version
+directory is never re-pointed at another tag, which is the thing shallow clones make awkward
+(`bats.yml` clones in full for exactly that reason). Worth having here — 22 MB against 145 MB
+of history.
+
+### The smoke test scans a real TLS endpoint
+
+An `openssl s_server` with a throwaway certificate is started on `127.0.0.1`, scanned by uid
+65534 through the published symlink, and killed by a trap whatever happens. Both directions are
+asserted — TLS 1.2 reported as **offered** and SSLv2 as **not offered** — so neither a
+testssl.sh that printed a fixed table nor one that never reached the server can pass. About six
+seconds; `--protocols` keeps it to the protocol section rather than a full scan.
+
+One quirk worth knowing if you touch the version check: `--version` must be the *only* option
+on the command line (`Fatal error: --version is a standalone command line option`), so colours
+cannot be disabled with `--color 0` and are stripped with `sed` instead. Its first line names
+the program *as invoked* — through a differently-named symlink it prints that name — so the
+assertion anchors on `version <x> from https://testssl.sh/`, never on the program name.
+
+Version overrides — bump the tag and the commit together:
+
+```bash
+git ls-remote https://github.com/testssl/testssl.sh.git 'refs/tags/v3.2.4^{}'
+ansible-playbook misc/testssl.yml -e host=ws01 -e testssl_version=3.2.4 -e testssl_commit=<sha>
+```

@@ -1,0 +1,314 @@
+---
+# Install testssl.sh system-wide on a multi-user workstation.
+#
+#   /usr/local/lib/testssl.sh/<version>/   the upstream tree, root-owned
+#   /usr/local/bin/testssl.sh              symlink to that version's script
+#
+# testssl.sh is not a single binary: the script reads its cipher mappings and
+# CA bundles out of etc/ and prefers the OpenSSL build shipped in bin/, both
+# resolved relative to the script's own location. So the whole tree is
+# installed and only the entry point is published on PATH -- confirmed live
+# that invoking it through the symlink, from a directory the caller cannot
+# read, still finds etc/ and bin/.
+#
+# There is no per-user state and nothing to add to a shell profile. Scans
+# write their output where the caller asks (--htmlfile, --jsonfile, ...) and
+# temporary files to $TMPDIR; nothing here touches any account's $HOME.
+#
+# The tree is fetched with git, which makes three things worth stating:
+#
+# 1. What is pinned is a tag AND a commit. Checking out a branch -- or even a
+#    tag by name alone -- installs whatever it points at on the day, and
+#    records nothing about what that was. This pins the v3.2.4 tag and the
+#    commit that tag pointed to when the pin was taken (tags are mutable on
+#    GitHub, commit ids are not), and task 6 re-checks that commit on every
+#    run, not just at install time.
+# 2. A versioned directory plus a symlink, the maven.yml/influx-cli.yml
+#    shape, is also what makes the shallow clone safe: a per-version
+#    directory is never re-pointed at another tag, which is the thing
+#    depth: 1 makes awkward (see bats.yml, which clones in full for exactly
+#    that reason). Shallow is worth having here -- 22 MB against 145 MB for
+#    this history.
+# 3. Verification does not run --version: the playbook stands up a throwaway
+#    TLS server on the loopback interface and scans it as an arbitrary uid
+#    (see task 12).
+#
+# NOT the Ubuntu package, deliberately. apt carries testssl.sh 3.2.2+dfsg-1,
+# and the +dfsg repack exists precisely because it strips the bundled OpenSSL
+# binaries -- the ones testssl.sh's own output calls "OpenSSL 1.0.2-bad", a
+# build kept deliberately broken so that it still speaks SSLv2, SSLv3 and the
+# export ciphers a current OpenSSL refuses to. Ubuntu's openssl here is 3.5.5,
+# which cannot test any of that. Installing the upstream tree keeps the
+# scanner able to detect the weak protocols it exists to find.
+#
+# Usage:
+#   ansible-playbook misc/testssl.yml -e host=<inventory host or group>
+#   ansible-playbook misc/testssl.yml -e host=ws01 -e testssl_version=3.2.4
+
+- name: Install testssl.sh system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current stable release as of 2026-08-17. The 3.3dev snapshots upstream
+    # also publishes are prereleases and deliberately not tracked here:
+    #   curl -sS https://api.github.com/repos/testssl/testssl.sh/releases \
+    #     | jq -r '.[] | select(.prerelease | not) | .tag_name' | head -1
+    testssl_version: "3.2.4"
+    # The commit v3.2.4 pointed at when this pin was taken. A tag can be
+    # moved; this cannot. Bump it together with testssl_version:
+    #   git ls-remote https://github.com/testssl/testssl.sh.git refs/tags/v<x>^{}
+    testssl_commit: "97763a411c525720a5f9bd9d2cded416b10f210a"
+    testssl_repo: https://github.com/testssl/testssl.sh.git
+    testssl_lib_dir: /usr/local/lib/testssl.sh
+    testssl_home: "/usr/local/lib/testssl.sh/{{ testssl_version }}"
+    testssl_script: "/usr/local/lib/testssl.sh/{{ testssl_version }}/testssl.sh"
+    testssl_bin: /usr/local/bin/testssl.sh
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts, and
+    # this directory holds the smoke test's key, certificate and TMPDIR.
+    testssl_smoke_dir: /var/tmp/testssl-smoke
+    # Loopback only, and above 1024 so the scanned server needs no privilege.
+    testssl_smoke_port: 14433
+    # uid/gid used to prove the install is usable by an arbitrary user
+    testssl_verify_uid: 65534    # nobody
+    testssl_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # openssl is the system build, used for the smoke test's throwaway
+      # certificate and server -- testssl.sh itself prefers its own bundled
+      # one. bind9-dnsutils provides the dig testssl.sh uses for forward and
+      # reverse lookups; without it every scan degrades to a warning.
+      ansible.builtin.apt:
+        name:
+          - bind9-dnsutils
+          - ca-certificates
+          - git
+          - openssl
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Inspect the current install
+      # follow: false on the symlink -- what matters is where it points, not
+      # whether the target happens to resolve. check_mode: false because
+      # these read state that already exists.
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: testssl_stat
+      loop:
+        - "{{ testssl_script }}"
+        - "{{ testssl_bin }}"
+      loop_control:
+        label: "{{ item }}"
+      check_mode: false
+
+    - name: 3. Decide whether testssl.sh needs installing
+      # The pinned version's own tree must exist AND /usr/local/bin/testssl.sh
+      # must be the symlink into it. A stray plain file at that path -- a
+      # leftover from apt's testssl.sh or from an /opt-style install -- is
+      # replaced rather than trusted.
+      ansible.builtin.set_fact:
+        testssl_install_needed: >-
+          {{ not (testssl_stat.results[0].stat.exists
+                  and testssl_stat.results[1].stat.islnk | default(false)
+                  and testssl_stat.results[1].stat.lnk_target | default('') == testssl_script) }}
+        testssl_can_verify: >-
+          {{ not (ansible_check_mode
+                  and not (testssl_stat.results[0].stat.exists
+                           and testssl_stat.results[1].stat.islnk | default(false)
+                           and testssl_stat.results[1].stat.lnk_target | default('') == testssl_script)) }}
+
+    - name: 3a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install testssl.sh {{ testssl_version }}, so the
+          commit check, the version check and the loopback scan below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (testssl_can_verify | bool)
+
+    - name: 4. Fetch the pinned testssl.sh tree
+      # depth: 1 is safe here in a way it is not in bats.yml: this
+      # destination belongs to one version and is never re-pointed at another
+      # tag -- a bump clones a new directory beside it and moves the symlink.
+      ansible.builtin.git:
+        repo: "{{ testssl_repo }}"
+        dest: "{{ testssl_home }}"
+        version: "v{{ testssl_version }}"
+        depth: 1
+        force: true
+      when:
+        - testssl_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 5. Read the commit actually checked out
+      ansible.builtin.command:
+        cmd: git -C {{ testssl_home }} rev-parse HEAD
+      register: testssl_head
+      changed_when: false
+      check_mode: false
+      when: testssl_can_verify | bool
+
+    - name: 6. Confirm the checked-out commit is the pinned one
+      # Runs on every play, not only after an install: the tag is fetched by
+      # name, so this is what turns "whatever v3.2.4 points at today" into a
+      # pin, and it keeps noticing if the installed tree is ever changed
+      # underneath.
+      ansible.builtin.assert:
+        that:
+          - testssl_head.stdout | trim == testssl_commit
+        fail_msg: >-
+          {{ testssl_home }} is at commit {{ testssl_head.stdout | default('')
+          | trim }}, not the pinned {{ testssl_commit }}. If upstream moved
+          the v{{ testssl_version }} tag, verify the new commit deliberately
+          and update testssl_commit -- do not delete this check.
+        success_msg: "v{{ testssl_version }} is {{ testssl_commit }}"
+      when: testssl_can_verify | bool
+
+    - name: 7. Make the install tree world-readable
+      # git clones with root's umask; this is explicit so every account can
+      # read the tree, and X (not x) leaves the data files under etc/
+      # non-executable while keeping directories traversable.
+      ansible.builtin.file:
+        path: "{{ testssl_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when:
+        - testssl_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 8. Point /usr/local/bin/testssl.sh at the pinned version
+      # force: true so an existing plain file at that path is replaced rather
+      # than causing a "refusing to convert" failure.
+      ansible.builtin.file:
+        src: "{{ testssl_script }}"
+        dest: "{{ testssl_bin }}"
+        state: link
+        owner: root
+        group: root
+        force: true
+      when:
+        - testssl_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 9. Verify the installed version and the OpenSSL it will use
+      # --version must be the only option on the command line ("Fatal error:
+      # --version is a standalone command line option"), so the colours
+      # cannot be turned off with --color 0 and are stripped here instead.
+      #
+      # The program name in that output is the name it was INVOKED as -- run
+      # through the symlink it prints "testssl.sh version 3.2.4", run through
+      # any other symlink name it prints that name -- so the assertion below
+      # anchors on "version <x> from https://testssl.sh/", not on the name.
+      ansible.builtin.shell:
+        cmd: >-
+          {{ testssl_bin }} --version |
+          sed -e 's/\x1b\[[0-9;]*m//g'
+      register: testssl_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('version ' ~ testssl_version ~ ' from https://testssl.sh/')
+        not in testssl_version_out.stdout
+        or (testssl_home ~ '/bin/openssl.Linux.') not in testssl_version_out.stdout
+      when: testssl_can_verify | bool
+
+    - name: 10. Create the scratch directory for the loopback scan
+      # World-readable and owned by the scanning uid: it holds the throwaway
+      # certificate the server presents and doubles as TMPDIR for the scan.
+      ansible.builtin.file:
+        path: "{{ testssl_smoke_dir }}"
+        state: directory
+        owner: "{{ testssl_verify_uid }}"
+        group: "{{ testssl_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: testssl_can_verify | bool
+
+    - name: 11. Generate a throwaway certificate for the loopback server
+      # Not a secret: it exists for the length of one task, is presented only
+      # on 127.0.0.1, and is deleted in task 13. Mode 0644 so the scanning
+      # uid can read it too.
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1
+          -subj /CN=testssl-smoke
+          -keyout {{ testssl_smoke_dir }}/key.pem
+          -out {{ testssl_smoke_dir }}/cert.pem
+      args:
+        creates: "{{ testssl_smoke_dir }}/cert.pem"
+      check_mode: false
+      when: testssl_can_verify | bool
+
+    - name: 12. Scan a real TLS endpoint as an unprivileged user
+      # Far stronger than --version, and the only way to exercise what this
+      # tool actually does: an `openssl s_server` is started on the loopback
+      # interface, scanned by uid 65534 through the published symlink, and
+      # killed again by the trap whatever happens. The assertions check both
+      # directions -- TLS 1.2 must be reported as offered and SSLv2 as not
+      # offered -- so a testssl.sh that printed a fixed table, or one that
+      # never reached the server at all, cannot pass.
+      #
+      # ~6 seconds on these hosts. --protocols keeps it to the protocol
+      # section rather than a full scan.
+      ansible.builtin.shell:
+        cmd: >-
+          set -e;
+          openssl s_server -accept 127.0.0.1:{{ testssl_smoke_port }}
+          -cert {{ testssl_smoke_dir }}/cert.pem
+          -key {{ testssl_smoke_dir }}/key.pem -www >/dev/null 2>&1 &
+          srv=$!;
+          trap "kill $srv 2>/dev/null" EXIT;
+          sleep 1;
+          setpriv --reuid={{ testssl_verify_uid }} --regid={{ testssl_verify_gid }} --clear-groups
+          env HOME={{ testssl_smoke_dir }} TMPDIR={{ testssl_smoke_dir }}
+          {{ testssl_bin }} --color 0 --protocols 127.0.0.1:{{ testssl_smoke_port }}
+        chdir: "{{ testssl_smoke_dir }}"
+      register: testssl_smoke
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        testssl_smoke.stdout is not search('TLS 1.2\s+offered')
+        or testssl_smoke.stdout is not search('SSLv2\s+not offered')
+      when: testssl_can_verify | bool
+
+    - name: 13. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ testssl_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 14. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            testssl.sh {{ testssl_version }} ({{ testssl_commit[:12] }})
+            installed system-wide.
+          - ""
+          - "  {{ testssl_home }}"
+          - "  {{ testssl_bin }} -> {{ testssl_script }}"
+          - ""
+          - >-
+            {{ testssl_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ testssl_verify_uid
+            ~ '): a throwaway TLS server on 127.0.0.1 was scanned through the'
+            ~ ' published symlink, reporting TLS 1.2 offered and SSLv2 not offered.',
+            'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "Scans use the OpenSSL bundled with testssl.sh, not the system one,"
+          - "so SSLv2/SSLv3 and export ciphers are detectable."
+          - ""
+          - "Usage:"
+          - "  testssl.sh example.com                 # full scan"
+          - "  testssl.sh --protocols example.com     # protocols only, fast"
+          - "  testssl.sh -U --sneaky example.com     # all vulnerabilities, quieter UA"
+          - "  testssl.sh --jsonfile out.json host    # machine-readable output"
+      when: testssl_can_verify | bool
