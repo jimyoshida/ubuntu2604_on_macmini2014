@@ -195,12 +195,23 @@
 
     - name: 13. Create a scratch HOME for the unprivileged checks
       # glab reads and writes ~/.config/glab-cli.
+      #
+      # It doubles as the working directory for the smoke tests below (chdir):
+      # uid 65534 cannot necessarily traverse the directory ansible happens to
+      # run from, and glab reads a repository-level .git/glab-cli/config.yml
+      # out of the cwd -- an unreadable one is fatal, not skipped. Ubuntu
+      # 26.04 creates home directories mode 0750, so over SSH the cwd is a
+      # directory nobody cannot enter and every smoke test here died on it.
+      # check_mode: false because `command` validates chdir *before* check
+      # mode skips the task, so a directory that exists only in simulation
+      # fails the dry run -- the defect opentofu.yml hit in wave 2.
       ansible.builtin.file:
         path: "{{ gitlab_cli_smoke_home }}"
         state: directory
         owner: "{{ gitlab_cli_verify_uid }}"
         group: "{{ gitlab_cli_verify_gid }}"
         mode: '0700'
+      check_mode: false
       when: gitlab_cli_can_verify | bool
 
     - name: 14. Report the glab version as an unprivileged user
@@ -208,6 +219,7 @@
         cmd: >-
           setpriv --reuid={{ gitlab_cli_verify_uid }} --regid={{ gitlab_cli_verify_gid }} --clear-groups
           env HOME={{ gitlab_cli_smoke_home }} glab --version
+        chdir: "{{ gitlab_cli_smoke_home }}"
       register: gitlab_cli_smoke_version
       changed_when: false
       failed_when: gitlab_cli_version not in gitlab_cli_smoke_version.stdout
@@ -222,6 +234,7 @@
         cmd: >-
           setpriv --reuid={{ gitlab_cli_verify_uid }} --regid={{ gitlab_cli_verify_gid }} --clear-groups
           env HOME={{ gitlab_cli_smoke_home }} glab config get git_protocol
+        chdir: "{{ gitlab_cli_smoke_home }}"
       register: gitlab_cli_smoke_config
       changed_when: false
       failed_when: (gitlab_cli_smoke_config.stdout | trim) | length == 0
@@ -231,6 +244,7 @@
       ansible.builtin.file:
         path: "{{ gitlab_cli_smoke_home }}"
         state: absent
+      check_mode: false
 
     - name: 17. Display installation summary
       ansible.builtin.debug:
