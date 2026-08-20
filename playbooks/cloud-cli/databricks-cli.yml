@@ -1,0 +1,319 @@
+---
+# Install the Databricks CLI system-wide on a multi-user workstation.
+#
+#   /usr/local/bin/databricks              the binary, root-owned, mode 0755
+#   /etc/bash_completion.d/databricks      shell completions, generated at install time
+#
+# Databricks publishes no apt package or vendor apt repository for this tool,
+# so decision-order point 3 applies: a single static Go binary from the
+# upstream GitHub release, the same shape as jira-cli.yml and gcx-cli.yml.
+#
+# The identity stays per-user: `databricks auth login` (OAuth) or
+# `databricks configure` (personal access token) writes ~/.databrickscfg, and
+# DATABRICKS_TOKEN / DATABRICKS_CLIENT_SECRET are secrets belonging in each
+# user's own environment. Nothing here touches either.
+#
+# Usage:
+#   ansible-playbook cloud-cli/databricks-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/databricks-cli.yml -e host=ws01 -e databricks_cli_version=1.12.1
+
+- name: Install the Databricks CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    databricks_cli_version: "1.12.1"
+    databricks_cli_base_url: "https://github.com/databricks/cli/releases/download/v{{ databricks_cli_version }}"
+    # ansible_facts['architecture'] -> upstream asset name.
+    databricks_cli_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    databricks_cli_arch: "{{ databricks_cli_arch_map.get(ansible_facts['architecture'], '') }}"
+    databricks_cli_tarball: "databricks_cli_{{ databricks_cli_version }}_linux_{{ databricks_cli_arch }}.tar.gz"
+    databricks_cli_bin: /usr/local/bin/databricks
+    databricks_cli_completion: /etc/bash_completion.d/databricks
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts (see
+    # MIGRATION.md).
+    databricks_cli_stage_dir: "/var/tmp/databricks-cli-install-{{ databricks_cli_version }}"
+    databricks_cli_smoke_home: /var/tmp/databricks-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    databricks_cli_verify_uid: 65534    # nobody
+    databricks_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion provides the loader that reads /etc/bash_completion.d,
+      # so the completion file task 15 writes is inert without it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - tar
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No Databricks CLI release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to databricks_cli_arch_map.
+      when: databricks_cli_arch | length == 0
+
+    - name: 3. Check the currently installed databricks version
+      # check_mode: false because this reads state that already exists. A
+      # skipped command task registers rc 0 and an empty stdout, which task 4
+      # would read as a version merely different from the pin.
+      ansible.builtin.command: "{{ databricks_cli_bin }} --version"
+      register: databricks_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether databricks-cli needs installing
+      # The version is compared, not the presence of the binary, so bumping
+      # databricks_cli_version actually replaces the install. `databricks
+      # --version` prints "Databricks CLI v1.12.1", and the leading v anchors
+      # the match so a pin of 1.12.1 cannot be satisfied by a hypothetical
+      # 1.12.10.
+      ansible.builtin.set_fact:
+        databricks_cli_install_needed: >-
+          {{ ('CLI v' ~ databricks_cli_version) not in (databricks_cli_installed.stdout | default('')) }}
+        databricks_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and ('CLI v' ~ databricks_cli_version) not in (databricks_cli_installed.stdout | default(''))) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install databricks-cli {{ databricks_cli_version }}, so the
+          version check and the unprivileged smoke tests below are skipped rather
+          than failed. Re-run without --check to verify the install.
+      when: not (databricks_cli_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ databricks_cli_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: databricks_cli_install_needed | bool
+
+    - name: 6. Fetch the release checksums
+      # The hash is resolved from the release's own SHA256SUMS at run time
+      # rather than hardcoded, so overriding databricks_cli_version stays a
+      # one-flag change (policy point 7).
+      #
+      # check_mode: false because uri skips itself under --check and registers
+      # no content, which task 7 reduces to an empty checksum and task 8 then
+      # reports as "SHA256SUMS has no entry for this asset" -- a dry run
+      # accusing a good version pin of not existing. Fetching a published
+      # checksums file changes nothing, and running it means --check genuinely
+      # validates the pin against upstream.
+      ansible.builtin.uri:
+        url: "{{ databricks_cli_base_url }}/databricks_cli_{{ databricks_cli_version }}_SHA256SUMS"
+        return_content: true
+      register: databricks_cli_checksums
+      check_mode: false
+      when: databricks_cli_install_needed | bool
+
+    - name: 7. Extract the expected checksum for this architecture
+      # Anchored at both ends against the exact filename, with the dots in the
+      # version escaped. This release's SHA256SUMS lists twelve assets (three
+      # OSes, two architectures, two archive formats each), differing only by
+      # platform and format.
+      ansible.builtin.set_fact:
+        databricks_cli_sha256: >-
+          {{ (databricks_cli_checksums.content | default('')
+              | regex_search('(?m)^([0-9a-f]{64})\s+' ~ (databricks_cli_tarball | regex_escape) ~ '$', '\1')
+              | first | default('')) }}
+      when: databricks_cli_install_needed | bool
+
+    - name: 8. Fail if the checksums file does not list this asset
+      ansible.builtin.fail:
+        msg: >-
+          SHA256SUMS for databricks-cli {{ databricks_cli_version }} has no entry for
+          {{ databricks_cli_tarball }}. Check the version pin and the asset naming.
+      when:
+        - databricks_cli_install_needed | bool
+        - (databricks_cli_sha256 | default('')) | length != 64
+
+    - name: 9. Download the databricks-cli tarball and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check.
+      #
+      # Not under --check: get_url is not skipped in check mode, it validates
+      # its destination, and task 5 has not really created the staging
+      # directory -- so a dry run would fail on "Destination ... does not
+      # exist" rather than report the download it would make.
+      ansible.builtin.get_url:
+        url: "{{ databricks_cli_base_url }}/{{ databricks_cli_tarball }}"
+        dest: "{{ databricks_cli_stage_dir }}/{{ databricks_cli_tarball }}"
+        checksum: "sha256:{{ databricks_cli_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - databricks_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Unpack the tarball
+      # The archive is flat -- databricks, CHANGELOG.md, LICENSE and README.md
+      # sit at its top level, no versioned subdirectory to path into (unlike
+      # jira-cli.yml's tarball).
+      ansible.builtin.unarchive:
+        src: "{{ databricks_cli_stage_dir }}/{{ databricks_cli_tarball }}"
+        dest: "{{ databricks_cli_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - databricks_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Install the databricks binary
+      # Explicit mode rather than whatever the tarball carried: the binary
+      # must be executable by every account, not only by the one that
+      # unpacked it.
+      ansible.builtin.copy:
+        src: "{{ databricks_cli_stage_dir }}/databricks"
+        dest: "{{ databricks_cli_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - databricks_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ databricks_cli_stage_dir }}"
+        state: absent
+
+    - name: 13. Verify the installed databricks version
+      ansible.builtin.command: "{{ databricks_cli_bin }} --version"
+      register: databricks_cli_version_out
+      changed_when: false
+      failed_when: ('CLI v' ~ databricks_cli_version) not in databricks_cli_version_out.stdout
+      when: databricks_cli_can_verify | bool
+
+    - name: 14. Generate the bash completion script
+      # databricks ships no completion file; it generates one on demand.
+      # Generated here and written to /etc/bash_completion.d rather than to
+      # any $HOME: that directory is read by the bash-completion loader for
+      # every account and needs no /etc/profile.d bootstrap.
+      ansible.builtin.command: "{{ databricks_cli_bin }} completion bash"
+      register: databricks_cli_completion_out
+      changed_when: false
+      when: databricks_cli_can_verify | bool
+
+    - name: 15. Install the bash completion script
+      ansible.builtin.copy:
+        content: "{{ databricks_cli_completion_out.stdout }}\n"
+        dest: "{{ databricks_cli_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: databricks_cli_can_verify | bool
+
+    - name: 16. Create a scratch HOME for the unprivileged checks
+      # databricks reads ~/.databrickscfg. /var/tmp rather than /tmp, which is
+      # a size-capped tmpfs on these hosts.
+      #
+      # It doubles as the working directory for the smoke tests below (chdir):
+      # uid 65534 cannot necessarily traverse the directory ansible happens to
+      # run from. check_mode: false because `command` validates chdir *before*
+      # check mode skips the task, so a directory that exists only in
+      # simulation fails the dry run -- the defect opentofu.yml hit in wave 2.
+      ansible.builtin.file:
+        path: "{{ databricks_cli_smoke_home }}"
+        state: directory
+        owner: "{{ databricks_cli_verify_uid }}"
+        group: "{{ databricks_cli_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: databricks_cli_can_verify | bool
+
+    - name: 17. Report the databricks version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ databricks_cli_verify_uid }} --regid={{ databricks_cli_verify_gid }} --clear-groups
+          env HOME={{ databricks_cli_smoke_home }} {{ databricks_cli_bin }} --version
+        chdir: "{{ databricks_cli_smoke_home }}"
+      register: databricks_cli_smoke_version
+      changed_when: false
+      failed_when: ('CLI v' ~ databricks_cli_version) not in databricks_cli_smoke_version.stdout
+      when: databricks_cli_can_verify | bool
+
+    - name: 18. Confirm the zero-configuration reachability check as an unprivileged user
+      # A4 tier 1: real offline work rather than a version string.
+      # `databricks auth describe` walks the CLI's own credential-provider
+      # chain (profile, environment variables, OAuth token cache, cloud
+      # metadata services) and reports what it found -- confirmed on the
+      # target to run in ~20ms and touch the network not at all when nothing
+      # is configured, unlike `auth env`/`auth login`. It exits 0 either way,
+      # reporting failure in its own text rather than the exit code, so the
+      # assertion is on that text.
+      #
+      # `env -i`, not plain `env`: confirmed on the target that
+      # DATABRICKS_HOST and DATABRICKS_TOKEN are read directly from the
+      # environment, and with both set this same command instead attempts a
+      # real DNS lookup against the given host. Rule 3 in the README
+      # ("discovery variables left unset so that default discovery is what
+      # gets tested") means this check has to force them unset, not just
+      # leave them unset by convention -- a DATABRICKS_HOST/DATABRICKS_TOKEN
+      # exported in whatever shell ran ansible-playbook would otherwise leak
+      # in and make the check non-deterministic.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ databricks_cli_verify_uid }} --regid={{ databricks_cli_verify_gid }} --clear-groups
+          env -i HOME={{ databricks_cli_smoke_home }} {{ databricks_cli_bin }} auth describe
+        chdir: "{{ databricks_cli_smoke_home }}"
+      register: databricks_cli_smoke_auth
+      changed_when: false
+      failed_when: >-
+        databricks_cli_smoke_auth.rc != 0
+        or 'cannot configure default credentials' not in databricks_cli_smoke_auth.stdout
+        or 'Current configuration:' not in databricks_cli_smoke_auth.stdout
+      when: databricks_cli_can_verify | bool
+
+    - name: 19. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ databricks_cli_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 20. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Databricks CLI {{ databricks_cli_version }} ({{ databricks_cli_arch }})
+            {{ databricks_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ databricks_cli_bin }}"
+          - "  {{ databricks_cli_completion }}"
+          - ""
+          - "The tarball is checked against the sha256 published in the release's SHA256SUMS."
+          - >-
+            {{ databricks_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ databricks_cli_verify_uid
+                         ~ '), correctly reporting its own unconfigured credential state offline.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  databricks auth login --host https://<workspace>.cloud.databricks.com   # OAuth, browser"
+          - "  databricks configure --host https://<workspace>.cloud.databricks.com    # PAT, reads token from stdin"
+          - "  databricks auth describe                     # confirm which credentials would be used"
+          - ""
+          - "Both write ~/.databrickscfg. DATABRICKS_TOKEN and DATABRICKS_CLIENT_SECRET are"
+          - "SECRETS: keep them in your own environment at mode 0600, never in"
+          - "/etc/environment, which is shared and world-readable. DATABRICKS_HOST is read"
+          - "the same way but is not a secret; this playbook sets it nowhere, since there is"
+          - "no site-wide Databricks workspace here."

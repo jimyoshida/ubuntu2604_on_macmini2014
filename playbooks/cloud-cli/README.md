@@ -45,8 +45,8 @@ in it.
 | Kind | Example | Goes in |
 | --- | --- | --- |
 | Shared, non-secret endpoint | `VAULT_ADDR`, `INFLUX_HOST` | `/etc/environment`, *only* if every account really should point at the same server. Nothing here writes it for you. |
-| Per-identity, non-secret | `AWS_PROFILE`, `CLOUDSDK_CORE_PROJECT`, `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` | your own shell, or the tool's own config (`gcloud config set project`) |
-| **Secret** | every `*_TOKEN`, `*_PAT`, `*_SECRET_ACCESS_KEY`, `AUTH0_CLIENT_SECRET` | your own `$HOME` at mode `0600` — **never** `/etc/environment`, which is world-readable |
+| Per-identity, non-secret | `AWS_PROFILE`, `CLOUDSDK_CORE_PROJECT`, `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `DATABRICKS_HOST` | your own shell, or the tool's own config (`gcloud config set project`) |
+| **Secret** | every `*_TOKEN`, `*_PAT`, `*_SECRET_ACCESS_KEY`, `AUTH0_CLIENT_SECRET`, `DATABRICKS_CLIENT_SECRET` | your own `$HOME` at mode `0600` — **never** `/etc/environment`, which is world-readable |
 
 For the secrets, keep a file only you can read and source it from your own `~/.bashrc`:
 
@@ -84,6 +84,8 @@ be used to interpolate an instruction into a closing message.
 | `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION`, `AZURE_DEVOPS_EXT__DEFAULTS_PROJECT` | `az devops` | shared | read (double underscore — knack's prefix plus the section separator) |
 | `AZURE_DEVOPS_EXT_PAT` | `az devops` | secret | read |
 | `CLOUDSDK_CORE_PROJECT` | `gcloud` | per-identity | read |
+| `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID` | `databricks` | per-identity | read — `auth describe` names each as "from ... environment variable" |
+| `DATABRICKS_TOKEN`, `DATABRICKS_CLIENT_SECRET` | `databricks` | secret | read, same evidence |
 | `GH_TOKEN` / `GITHUB_TOKEN` | `gh` | secret | read, in that precedence |
 | `GITLAB_TOKEN` | `glab` | secret | read — `glab auth status` says so explicitly |
 | `GRAFANA_SERVER` | `gcx` | shared | read |
@@ -408,6 +410,57 @@ a shared default under an unread name is invisible, since the variable is set,
 `/etc/environment` looks right, and every user still gets an error.
 
 Note how close `AZURE_DEVOPS_EXT__DEFAULTS_*` sits to the secret `AZURE_DEVOPS_EXT_PAT`.
+
+## databricks-cli.yml
+
+Installs the [Databricks CLI](https://docs.databricks.com/dev-tools/cli/index.html) from its
+GitHub release tarball.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/databricks` | the binary, root-owned, mode 0755 |
+| `/etc/bash_completion.d/databricks` | completions, generated at install time |
+
+The upstream release tarball is pinned (`databricks_cli_version`) and verified against the
+sha256 in the release's own `SHA256SUMS`, which — unlike `jira-cli.yml`'s `checksums.txt` —
+covers all three OSes and both archive formats in one shared file. The tarball itself is
+flat: `databricks` sits at its top level with no versioned subdirectory to path into.
+Architecture comes from facts, with the same `x86_64`→`amd64` / `aarch64`→`arm64` map
+`vault-cli.yml` and `gomplate.yml` use — not `jira-cli.yml`'s `x86_64`/`arm64` spelling.
+
+Version override:
+
+```bash
+ansible-playbook cloud-cli/databricks-cli.yml -e host=ws01 -e databricks_cli_version=1.12.1
+```
+
+### The reachability check is `auth describe`, not a version string
+
+`databricks auth describe` walks the CLI's own credential-provider chain (profile, environment
+variables, OAuth token cache, cloud metadata services) and reports what it found in its own
+output rather than its exit code — confirmed on the target to always exit 0, run in about
+20ms, and touch the network not at all when nothing is configured. With
+`DATABRICKS_HOST`/`DATABRICKS_TOKEN` (or `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET`)
+actually set, the same command instead performs a real DNS lookup against the given host —
+confirmed live, which is why the unprivileged check runs it under `env -i`: rule 3's
+"discovery variables left unset" has to be enforced, not assumed, since any of those four
+names happening to be set in the shell `ansible-playbook` was launched from would otherwise
+leak in and make the check attempt a real request. `auth env`, the more obvious-looking
+candidate, was rejected: it prints a deprecation warning and exits 1, which is Databricks'
+own opinion about the subcommand rather than a property of this playbook's install.
+
+### Per-user setup
+
+```bash
+databricks auth login --host https://<workspace>.cloud.databricks.com   # OAuth, browser
+databricks configure --host https://<workspace>.cloud.databricks.com    # PAT, reads token from stdin
+databricks auth describe                                                # confirm which credentials would be used
+```
+
+Both write `~/.databrickscfg`. `DATABRICKS_TOKEN` and `DATABRICKS_CLIENT_SECRET` are secrets
+and must never go in `/etc/environment`. `DATABRICKS_HOST` and `DATABRICKS_CLIENT_ID` are read
+the same way but are not secrets; this playbook sets neither, since there is no site-wide
+Databricks workspace here.
 
 ## gcloud-cli.yml
 
