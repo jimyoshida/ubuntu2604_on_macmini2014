@@ -1,0 +1,188 @@
+---
+# Install OpenJDK system-wide on a multi-user workstation.
+#
+#   /usr/bin/java, /usr/bin/javac              via update-alternatives
+#   /usr/lib/jvm/java-<major>-openjdk-<arch>/  the JDK itself
+#
+# default-jdk, not a specific openjdk-<N>-jdk package: it is Debian/Ubuntu's
+# metapackage for "whichever OpenJDK major this release recommends," so the
+# major version bumps with the release rather than with this file.
+#
+# NOT HEADLESS, AND THE FULL JDK RATHER THAN JUST A JRE -- DELIBERATELY. This
+# is the one JDK/JRE install for every Java-based playbook in this repository
+# to share, and its three consumers do not all need the same subset:
+#   * misc/maven.yml needs javac -- a JDK, not a JRE.
+#   * cloud-cli/jenkins-cli.yml only ever runs `java -jar` -- a JRE is enough.
+#   * misc/zap.yml needs a non-headless JRE: ZAP's default invocation with no
+#     arguments is its desktop UI, which throws HeadlessException on a
+#     headless one.
+# default-jdk's own dependency chain covers the union with one pinned package
+# rather than three: it depends on default-jre (full, non-headless) and
+# default-jdk-headless, which in turn depends on default-jre-headless and
+# openjdk-<N>-jdk -- confirmed with `apt-cache depends default-jdk`. Installing
+# it here means none of the three playbooks above has to choose a subset, or
+# keep its own pin in sync with the other two on the same host.
+#
+# Each of those playbooks used to install its own JDK or JRE package inline --
+# maven.yml's default-jdk-headless, jenkins-cli.yml's default-jre-headless,
+# zap.yml's default-jre. That worked, but it meant the same underlying package
+# could end up pinned three different ways across three files on one host.
+# This playbook is now the one place OpenJDK is installed and pinned; each of
+# the three checks for it and fails with instructions to run this playbook
+# first, the shape misc/dotnet-tools.yml and cloud-cli/azure-pwsh.yml use for
+# core/dotnet.yml and core/pwsh.yml.
+#
+# NO SCRATCH HOME IN THE VERIFICATION BELOW, UNLIKE EVERY OTHER JAVA-BASED
+# PLAYBOOK IN THIS REPOSITORY. The JVM reads user.home from the OS user
+# database, not from $HOME -- confirmed live, `HOME=/nonexistent java ...`
+# still resolves user.home to the real account's passwd entry -- which is
+# exactly the trap misc/maven.yml and misc/zap.yml document for their own
+# per-tool state (~/.m2, ~/.ZAP). A plain compile-and-run never touches
+# user.home at all, so this check needs no scratch HOME to dodge it; a chdir
+# into a writable scratch directory is enough for javac to write its .class
+# file.
+#
+# Usage:
+#   ansible-playbook core/openjdk.yml -e host=<inventory host or group>
+#   ansible-playbook core/openjdk.yml -e host=ws01 -e openjdk_version=2:1.25-77
+
+- name: Install OpenJDK system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # apt candidate on Ubuntu 26.04 (resolute), checked 2026-08-20:
+    #   apt-cache policy default-jdk
+    # This metapackage currently resolves to OpenJDK 25 (openjdk-25-jdk
+    # 25.0.3+9-2~26.04.2); bumping this pin follows whatever default-jdk
+    # points at on the target release, not a per-major package name the way
+    # core/dotnet.yml or core/nodejs.yml have to track.
+    openjdk_package: default-jdk
+    openjdk_version: "2:1.25-77"
+    openjdk_java_bin: /usr/bin/java
+    openjdk_javac_bin: /usr/bin/javac
+    openjdk_smoke_dir: /var/tmp/openjdk-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    openjdk_verify_uid: 65534    # nobody
+    openjdk_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed {{ openjdk_package }} version
+      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ openjdk_package }}"
+      register: openjdk_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide whether OpenJDK needs installing
+      ansible.builtin.set_fact:
+        openjdk_install_needed: >-
+          {{ openjdk_installed.rc != 0 or openjdk_installed.stdout != openjdk_version }}
+        openjdk_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (openjdk_installed.rc != 0
+                       or openjdk_installed.stdout != openjdk_version)) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install {{ openjdk_package }} {{ openjdk_version }},
+          so the version check and the unprivileged compile-and-run below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (openjdk_can_verify | bool)
+
+    - name: 3. Install {{ openjdk_package }} via apt
+      ansible.builtin.apt:
+        name: "{{ openjdk_package }}={{ openjdk_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        allow_downgrade: true
+      when: openjdk_install_needed | bool
+
+    - name: 4. Verify the installed {{ openjdk_package }} package version
+      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ openjdk_package }}"
+      register: openjdk_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: openjdk_version != openjdk_version_out.stdout
+      when: openjdk_can_verify | bool
+
+    - name: 5. Create the scratch directory for the unprivileged check
+      ansible.builtin.file:
+        path: "{{ openjdk_smoke_dir }}"
+        state: directory
+        owner: "{{ openjdk_verify_uid }}"
+        group: "{{ openjdk_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: openjdk_can_verify | bool
+
+    - name: 6. Write the Java program the check will compile
+      ansible.builtin.copy:
+        dest: "{{ openjdk_smoke_dir }}/Hello.java"
+        owner: "{{ openjdk_verify_uid }}"
+        group: "{{ openjdk_verify_gid }}"
+        mode: '0644'
+        content: |
+          public class Hello {
+              public static void main(String[] args) {
+                  System.out.println("openjdk-smoke:" + (6 * 7));
+              }
+          }
+      check_mode: false
+      when: openjdk_can_verify | bool
+
+    - name: 7. Compile and run it as an unprivileged user
+      # Real work end to end: javac (the JDK half) compiles a class, then
+      # java (the JRE half) loads and runs it, both invoked by an account
+      # that did no setup of its own. No scratch HOME -- see the header.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ openjdk_verify_uid }} --regid={{ openjdk_verify_gid }} --clear-groups
+          bash -c "set -e; javac Hello.java; java Hello"
+        chdir: "{{ openjdk_smoke_dir }}"
+      register: openjdk_smoke
+      changed_when: false
+      check_mode: false
+      failed_when: "'openjdk-smoke:42' not in openjdk_smoke.stdout"
+      when: openjdk_can_verify | bool
+
+    - name: 8. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ openjdk_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 9. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            OpenJDK ({{ openjdk_package }}
+            {{ openjdk_version_out.stdout | default(openjdk_version, true) | trim }})
+            installed system-wide.
+          - ""
+          - "  {{ openjdk_java_bin }}"
+          - "  {{ openjdk_javac_bin }}"
+          - "  /usr/lib/jvm/   the installed JDK, via update-alternatives"
+          - ""
+          - >-
+            {{ openjdk_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ openjdk_verify_uid
+            ~ '): a real program was compiled with javac and run with java.',
+            'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "This is the prerequisite for:"
+          - "  misc/maven.yml               Apache Maven -- needs javac"
+          - "  cloud-cli/jenkins-cli.yml    Jenkins CLI -- needs a java runtime"
+          - "  misc/zap.yml                 OWASP ZAP -- needs the non-headless runtime"
+          - ""
+          - "Usage:"
+          - "  java -version"
+          - "  javac -version"
+          - "  java -jar some.jar"
+      when: openjdk_can_verify | bool

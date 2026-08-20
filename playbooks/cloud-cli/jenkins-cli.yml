@@ -36,7 +36,13 @@
 # at whatever this file last said.
 #
 # No architecture map here, unlike every other playbook in this directory: a jar
-# is a jar. The JRE is the only native dependency and comes from apt.
+# is a jar. The JRE is the only native dependency, and it is a declared
+# prerequisite provisioned by core/openjdk.yml rather than something this
+# playbook installs itself: this only checks for java and fails with that
+# instruction if it is missing, the shape misc/dotnet-tools.yml uses for the
+# .NET SDK. core/openjdk.yml installs and pins OpenJDK once, for every
+# Java-based playbook in this repository to share -- see misc/maven.yml and
+# misc/zap.yml.
 #
 # The identity stays per-user: JENKINS_USER_ID and JENKINS_API_TOKEN are read
 # from each account's own environment by the wrapper at run time, and nothing
@@ -74,9 +80,9 @@
     jenkins_cli_stage_dir: "/var/tmp/jenkins-cli-install-{{ jenkins_cli_version }}"
     jenkins_cli_smoke_home: /var/tmp/jenkins-cli-smoke-home
     # A port nothing listens on. The smoke test asserts the CLI gets as far as
-    # failing to connect -- see task 17 for why that is the right assertion.
+    # failing to connect -- see task 19 for why that is the right assertion.
     jenkins_cli_smoke_url: "http://127.0.0.1:1"
-    # Seconds. The CLI can block indefinitely (see task 17), so every
+    # Seconds. The CLI can block indefinitely (see task 19), so every
     # invocation below is wrapped in `timeout`.
     jenkins_cli_smoke_timeout: 60
     # uid/gid used to prove the install is usable by an arbitrary user
@@ -85,25 +91,38 @@
 
   tasks:
     - name: 1. Install prerequisites
-      # default-jre-headless is what runs the jar; unzip reads the version out
-      # of the jar's manifest in task 3. No bash-completion: the Jenkins CLI
-      # ships no completion script, and its subcommands come from the server.
+      # unzip reads the version out of the jar's manifest in task 5. No
+      # bash-completion: the Jenkins CLI ships no completion script, and its
+      # subcommands come from the server.
       ansible.builtin.apt:
         name:
           - ca-certificates
-          - default-jre-headless
           - unzip
         state: present
         update_cache: true
         cache_valid_time: 3600
 
-    - name: 2. Check whether the CLI jar is present
+    - name: 2. Check that a JRE is present
+      ansible.builtin.stat:
+        path: /usr/bin/java
+      register: jenkins_cli_jre_stat
+      check_mode: false
+
+    - name: 3. Fail with the prerequisite if the JRE is missing
+      ansible.builtin.fail:
+        msg: >-
+          /usr/bin/java is not installed, and the CLI jar is run as `java -jar`.
+          Run core/openjdk.yml against this host first:
+          ansible-playbook core/openjdk.yml -e host={{ inventory_hostname }}
+      when: not jenkins_cli_jre_stat.stat.exists
+
+    - name: 4. Check whether the CLI jar is present
       ansible.builtin.stat:
         path: "{{ jenkins_cli_jar }}"
       register: jenkins_cli_stat
       check_mode: false
 
-    - name: 3. Read the installed jar's version from its manifest
+    - name: 5. Read the installed jar's version from its manifest
       # The jar carries Implementation-Version in META-INF/MANIFEST.MF, so the
       # artifact is asked what it is rather than the filesystem being asked to
       # remember -- no versioned directory and symlink needed, unlike
@@ -116,7 +135,7 @@
       failed_when: false
       when: jenkins_cli_stat.stat.exists
 
-    - name: 4. Decide whether the CLI needs installing
+    - name: 6. Decide whether the CLI needs installing
       ansible.builtin.set_fact:
         jenkins_cli_install_needed: >-
           {{ not jenkins_cli_stat.stat.exists
@@ -128,7 +147,7 @@
                        or ('Implementation-Version: ' ~ jenkins_cli_version)
                           not in (jenkins_cli_manifest.stdout | default('')))) }}
 
-    - name: 4a. Note that verification is deferred in this dry run
+    - name: 6a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
         msg: >-
           --check did not install jenkins-cli {{ jenkins_cli_version }}, so the
@@ -136,7 +155,7 @@
           rather than failed. Re-run without --check to verify the install.
       when: not (jenkins_cli_can_verify | bool)
 
-    - name: 5. Create the staging directory
+    - name: 7. Create the staging directory
       ansible.builtin.file:
         path: "{{ jenkins_cli_stage_dir }}"
         state: directory
@@ -145,7 +164,7 @@
         mode: '0700'
       when: jenkins_cli_install_needed | bool
 
-    - name: 6. Fetch the published checksum for this release
+    - name: 8. Fetch the published checksum for this release
       # Resolved at run time from the repository's own .sha256 sibling rather
       # than hardcoded, so overriding jenkins_cli_version stays a one-flag
       # change. Unlike the GitHub-hosted tools there is no shared checksums
@@ -153,7 +172,7 @@
       # filename beside it.
       #
       # check_mode: false because uri skips itself under --check and registers
-      # no content, which task 8 would then report as a missing release --
+      # no content, which task 10 would then report as a missing release --
       # a dry run accusing a good version pin of not existing.
       ansible.builtin.uri:
         url: "{{ jenkins_cli_base_url }}/{{ jenkins_cli_artifact }}.sha256"
@@ -162,7 +181,7 @@
       check_mode: false
       when: jenkins_cli_install_needed | bool
 
-    - name: 7. Extract the expected checksum
+    - name: 9. Extract the expected checksum
       ansible.builtin.set_fact:
         jenkins_cli_sha256: >-
           {{ (jenkins_cli_checksum_file.content | default('')
@@ -170,7 +189,7 @@
               | first | default('')) }}
       when: jenkins_cli_install_needed | bool
 
-    - name: 8. Fail if no checksum was published for this version
+    - name: 10. Fail if no checksum was published for this version
       ansible.builtin.fail:
         msg: >-
           No sha256 published for {{ jenkins_cli_artifact }} at
@@ -180,7 +199,7 @@
         - jenkins_cli_install_needed | bool
         - (jenkins_cli_sha256 | default('')) | length != 64
 
-    - name: 9. Download the CLI jar and verify its checksum
+    - name: 11. Download the CLI jar and verify its checksum
       # get_url fails the task when the hash does not match, so this is both the
       # download and the integrity check. The repository answers with a 302 to a
       # presigned object-store URL; get_url follows redirects by default, which
@@ -188,7 +207,7 @@
       # empty file here.
       #
       # Not under --check: get_url is not skipped in check mode and validates
-      # its destination, which task 5 has not really created.
+      # its destination, which task 7 has not really created.
       ansible.builtin.get_url:
         url: "{{ jenkins_cli_base_url }}/{{ jenkins_cli_artifact }}"
         dest: "{{ jenkins_cli_stage_dir }}/{{ jenkins_cli_artifact }}"
@@ -200,7 +219,7 @@
         - jenkins_cli_install_needed | bool
         - not ansible_check_mode
 
-    - name: 10. Install the CLI jar
+    - name: 12. Install the CLI jar
       # World-readable and not executable: it is run as `java -jar`, never
       # directly, and every account must be able to read it.
       ansible.builtin.copy:
@@ -214,12 +233,12 @@
         - jenkins_cli_install_needed | bool
         - not ansible_check_mode
 
-    - name: 11. Remove the staging directory
+    - name: 13. Remove the staging directory
       ansible.builtin.file:
         path: "{{ jenkins_cli_stage_dir }}"
         state: absent
 
-    - name: 12. Install the jenkins-cli wrapper
+    - name: 14. Install the jenkins-cli wrapper
       # The one behavioural change versus the source playbook: the default URL
       # comes from the jenkins_url play var, not from the environment of
       # whoever ran the playbook. A user's own $JENKINS_URL still wins at run
@@ -244,7 +263,7 @@
           exec java -jar {{ jenkins_cli_jar }} \
             -s "${JENKINS_URL:-{{ jenkins_url }}}" "${AUTH_ARGS[@]}" "$@"
 
-    - name: 13. Publish the shared default JENKINS_URL
+    - name: 15. Publish the shared default JENKINS_URL
       # A1: JENKINS_URL is shared, non-secret endpoint configuration, so it is
       # allowed in /etc -- unlike the two credential variables, which are not.
       # /etc/profile.d rather than /etc/environment so the assignment can be
@@ -266,7 +285,7 @@
           : "${JENKINS_URL:={{ jenkins_url }}}"
           export JENKINS_URL
 
-    - name: 14. Create the 'jenkins' alias symlink
+    - name: 16. Create the 'jenkins' alias symlink
       ansible.builtin.file:
         src: "{{ jenkins_cli_wrapper }}"
         dest: "{{ jenkins_cli_alias }}"
@@ -275,7 +294,7 @@
         group: root
         force: true
 
-    - name: 15. Verify the installed jar's version
+    - name: 17. Verify the installed jar's version
       ansible.builtin.command:
         cmd: "unzip -p {{ jenkins_cli_jar }} META-INF/MANIFEST.MF"
       register: jenkins_cli_installed_manifest
@@ -285,7 +304,7 @@
         not in jenkins_cli_installed_manifest.stdout
       when: jenkins_cli_can_verify | bool
 
-    - name: 16. Create a scratch HOME for the unprivileged checks
+    - name: 18. Create a scratch HOME for the unprivileged checks
       # Java writes nothing to $HOME for this workload, but it is given a
       # writable one anyway so no code path can fall over on an unwritable one,
       # and it doubles as the working directory (chdir) -- uid 65534 cannot
@@ -301,7 +320,7 @@
       check_mode: false
       when: jenkins_cli_can_verify | bool
 
-    - name: 17. Run the CLI as an unprivileged user against a closed port
+    - name: 19. Run the CLI as an unprivileged user against a closed port
       # A4, adapted to a tool that genuinely cannot do anything offline: every
       # jenkins-cli subcommand is executed by the server, and the command list
       # itself is fetched from it. So the assertion is that an arbitrary uid
@@ -330,7 +349,7 @@
       failed_when: "'Connection failed' not in (jenkins_cli_smoke.stderr | default(''))"
       when: jenkins_cli_can_verify | bool
 
-    - name: 18. Confirm the wrapper carries the configured default server
+    - name: 20. Confirm the wrapper carries the configured default server
       # The regression the source playbook had: this line used to come from the
       # installing account's environment. Asserting the file content is the
       # deterministic way to check it -- running the wrapper with JENKINS_URL
@@ -343,7 +362,7 @@
       failed_when: jenkins_cli_wrapper_check.rc != 0
       when: jenkins_cli_can_verify | bool
 
-    - name: 19. Confirm a login shell resolves jenkins-cli and the shared default
+    - name: 21. Confirm a login shell resolves jenkins-cli and the shared default
       # Proves both /etc drop-ins land for an account that is not the connecting
       # user: the wrapper is on PATH, and /etc/profile.d supplies JENKINS_URL.
       # env -i so PATH and the environment come purely from /etc/profile.
@@ -361,13 +380,13 @@
         or jenkins_url not in jenkins_cli_smoke_path.stdout
       when: jenkins_cli_can_verify | bool
 
-    - name: 20. Remove the scratch HOME
+    - name: 22. Remove the scratch HOME
       ansible.builtin.file:
         path: "{{ jenkins_cli_smoke_home }}"
         state: absent
       check_mode: false
 
-    - name: 21. Display installation summary
+    - name: 23. Display installation summary
       ansible.builtin.debug:
         msg:
           - >-

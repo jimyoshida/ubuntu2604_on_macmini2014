@@ -28,9 +28,12 @@
 #    here to configure nothing is the kind of dead config MIGRATION2's A2/A3
 #    removed elsewhere. A host that genuinely needs a proxy or a mirror sets
 #    it in that file or in each account's ~/.m2/settings.xml.
-# 4. The JDK is a declared prerequisite rather than an assumption: this
-#    installs default-jdk-headless itself, the same way jenkins-cli.yml
-#    installs the JRE it needs.
+# 4. The JDK itself is provisioned by core/openjdk.yml, not by this playbook:
+#    this only checks for javac and fails with that instruction if it is
+#    missing, the shape misc/dotnet-tools.yml uses for the .NET SDK.
+#    core/openjdk.yml installs and pins OpenJDK once, for every Java-based
+#    playbook in this repository to share -- see cloud-cli/jenkins-cli.yml
+#    and misc/zap.yml.
 #
 # `mvn --version` writes nothing to $HOME -- confirmed live with a scratch
 # HOME as root, no ~/.m2 created -- so the post-install check may simply run
@@ -87,20 +90,29 @@
 
   tasks:
     - name: 1. Install prerequisites
-      # A JDK, not a JRE: Maven's whole purpose here is compiling, and
-      # javac lives in the -jdk- package. Unpinned like jenkins-cli.yml's
-      # default-jre-headless -- default-jdk-headless is a metapackage that
-      # tracks the release's default JDK, which is the point of using it.
       ansible.builtin.apt:
         name:
           - ca-certificates
-          - default-jdk-headless
           - tar
         state: present
         update_cache: true
         cache_valid_time: 3600
 
-    - name: 2. Inspect the current install
+    - name: 2. Check that a JDK is present
+      ansible.builtin.stat:
+        path: /usr/bin/javac
+      register: maven_jdk_stat
+      check_mode: false
+
+    - name: 3. Fail with the prerequisite if the JDK is missing
+      ansible.builtin.fail:
+        msg: >-
+          /usr/bin/javac is not installed, and Maven's whole purpose here is
+          compiling. Run core/openjdk.yml against this host first:
+          ansible-playbook core/openjdk.yml -e host={{ inventory_hostname }}
+      when: not maven_jdk_stat.stat.exists
+
+    - name: 4. Inspect the current install
       # follow: false on the symlink -- what matters is where it points, not
       # whether the target happens to resolve. check_mode: false because
       # these read state that already exists.
@@ -115,7 +127,7 @@
         label: "{{ item }}"
       check_mode: false
 
-    - name: 3. Decide whether Maven needs installing
+    - name: 5. Decide whether Maven needs installing
       # The pinned version's own tree must exist AND /usr/local/bin/mvn must
       # be the symlink into it. A stray plain binary at that path -- a
       # leftover from apt's maven or from the source role's /opt layout -- is
@@ -131,7 +143,7 @@
                            and maven_stat.results[1].stat.islnk | default(false)
                            and maven_stat.results[1].stat.lnk_target | default('') == maven_versioned_bin)) }}
 
-    - name: 3a. Note that verification is deferred in this dry run
+    - name: 5a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
         msg: >-
           --check did not install Maven {{ maven_version }}, so the version
@@ -139,7 +151,7 @@
           failed. Re-run without --check to verify the install.
       when: not (maven_can_verify | bool)
 
-    - name: 4. Create the staging directory
+    - name: 6. Create the staging directory
       ansible.builtin.file:
         path: "{{ maven_stage_dir }}"
         state: directory
@@ -148,7 +160,7 @@
         mode: '0700'
       when: maven_install_needed | bool
 
-    - name: 5. Fetch the published checksum for this artifact
+    - name: 7. Fetch the published checksum for this artifact
       # check_mode: false -- fetching a checksum changes nothing on the host,
       # so a dry run still validates the version pin against upstream.
       ansible.builtin.uri:
@@ -158,7 +170,7 @@
       check_mode: false
       when: maven_install_needed | bool
 
-    - name: 6. Extract the expected checksum
+    - name: 8. Extract the expected checksum
       # Apache's .sha512 holds the bare hash and nothing else -- no filename
       # column, unlike the SHA256SUMS-style files loki-cli.yml and
       # gomplate.yml parse -- so this is a trim, not a regex over entries.
@@ -166,7 +178,7 @@
         maven_sha512: "{{ maven_checksum_file.content | default('') | trim }}"
       when: maven_install_needed | bool
 
-    - name: 7. Fail if the published checksum is not a SHA-512 digest
+    - name: 9. Fail if the published checksum is not a SHA-512 digest
       ansible.builtin.fail:
         msg: >-
           {{ maven_tarball }}.sha512 did not return a 128-character hex
@@ -176,11 +188,11 @@
         - maven_install_needed | bool
         - not (maven_sha512 is match('^[0-9a-f]{128}$'))
 
-    - name: 8. Download the Maven distribution and verify its checksum
+    - name: 10. Download the Maven distribution and verify its checksum
       # get_url fails the task when the hash does not match, so this is both
       # the download and the integrity check. Not under --check: get_url is
       # not skipped in check mode and would validate a destination directory
-      # task 4 has not really created.
+      # task 6 has not really created.
       ansible.builtin.get_url:
         url: "{{ maven_base_url }}/{{ maven_tarball }}"
         dest: "{{ maven_stage_dir }}/{{ maven_tarball }}"
@@ -192,7 +204,7 @@
         - maven_install_needed | bool
         - not ansible_check_mode
 
-    - name: 9. Create the versioned install directory
+    - name: 11. Create the versioned install directory
       ansible.builtin.file:
         path: "{{ maven_home }}"
         state: directory
@@ -203,7 +215,7 @@
         - maven_install_needed | bool
         - not ansible_check_mode
 
-    - name: 10. Unpack the distribution into its versioned directory
+    - name: 12. Unpack the distribution into its versioned directory
       # --strip-components=1 drops the archive's own apache-maven-<version>/
       # top level, so the tree lands directly under maven_home and the path
       # carries the version exactly once.
@@ -219,7 +231,7 @@
         - maven_install_needed | bool
         - not ansible_check_mode
 
-    - name: 11. Make the install tree world-readable
+    - name: 13. Make the install tree world-readable
       # The published tarball is already 0644/0755 root-owned, but this is
       # asserted rather than assumed: every account on the host has to be
       # able to read the whole tree, and X (not x) keeps directories
@@ -235,7 +247,7 @@
         - maven_install_needed | bool
         - not ansible_check_mode
 
-    - name: 12. Point /usr/local/bin/mvn at the pinned version
+    - name: 14. Point /usr/local/bin/mvn at the pinned version
       # force: true so an existing plain file at that path is replaced rather
       # than causing a "refusing to convert" failure. Only mvn is published:
       # mvnDebug and the rest of the distribution's scripts stay in the
@@ -251,12 +263,12 @@
         - maven_install_needed | bool
         - not ansible_check_mode
 
-    - name: 13. Remove the staging directory
+    - name: 15. Remove the staging directory
       ansible.builtin.file:
         path: "{{ maven_stage_dir }}"
         state: absent
 
-    - name: 14. Verify the installed Maven version
+    - name: 16. Verify the installed Maven version
       # Running mvn as root is safe here: --version writes nothing to $HOME
       # (see the header comment). This also proves the symlink resolves and
       # that Maven found a JDK, since it prints both.
@@ -269,7 +281,7 @@
         or ('Maven home: ' ~ maven_home) not in maven_version_out.stdout
       when: maven_can_verify | bool
 
-    - name: 15. Create the scratch projects for the unprivileged builds
+    - name: 17. Create the scratch projects for the unprivileged builds
       # Owned by the verifying uid: Maven writes target/ and the local
       # repository below, and both have to be writable by that account.
       ansible.builtin.file:
@@ -285,7 +297,7 @@
       check_mode: false
       when: maven_can_verify | bool
 
-    - name: 16. Write the POMs the unprivileged builds read
+    - name: 18. Write the POMs the unprivileged builds read
       # The good one is minimal but complete; the broken one is the same
       # thing with <version> removed, so the failure below is a specific,
       # predictable model error rather than any old non-zero exit.
@@ -310,7 +322,7 @@
       check_mode: false
       when: maven_can_verify | bool
 
-    - name: 17. Build a project offline as an unprivileged user
+    - name: 19. Build a project offline as an unprivileged user
       # Stronger than --version per A4: -o forbids every network call, so a
       # BUILD SUCCESS here means Maven read the POM, resolved the super POM
       # and the lifecycle mapping, and ran the validate phase entirely from
@@ -331,7 +343,7 @@
         or 'Building smoke 1.0' not in maven_smoke_good.stdout
       when: maven_can_verify | bool
 
-    - name: 18. Confirm Maven rejects an invalid POM as an unprivileged user
+    - name: 20. Confirm Maven rejects an invalid POM as an unprivileged user
       # The negative half: without it, a build that never parsed anything
       # would still report BUILD SUCCESS above. A missing <version> must
       # produce that exact model error, not merely a non-zero exit.
@@ -350,13 +362,13 @@
         or "'version' is missing" not in maven_smoke_broken.stdout
       when: maven_can_verify | bool
 
-    - name: 19. Remove the scratch projects
+    - name: 21. Remove the scratch projects
       ansible.builtin.file:
         path: "{{ maven_smoke_dir }}"
         state: absent
       check_mode: false
 
-    - name: 20. Display installation summary
+    - name: 22. Display installation summary
       ansible.builtin.debug:
         msg:
           - >-

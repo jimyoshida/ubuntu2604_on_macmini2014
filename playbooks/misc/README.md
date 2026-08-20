@@ -443,10 +443,11 @@ tree.
 | `/usr/local/lib/maven/<version>/` | the unpacked distribution |
 | `/usr/local/bin/mvn` | symlink to that version's `bin/mvn` |
 
-A JDK (`default-jdk-headless`) is installed as a prerequisite, unpinned — the same way
-`cloud-cli/jenkins-cli.yml` installs the JRE it needs. Nothing is written to any `$HOME`:
-each account gets its own `~/.m2` (local artifact repository, and optionally a personal
-`settings.xml` holding repository credentials) the first time it runs a build, which is
+A JDK is a prerequisite, provisioned by [`core/openjdk.yml`](../core/README.md#openjdkyml) —
+this playbook only checks for `javac` and fails with that instruction if it is missing, the
+shape [`misc/dotnet-tools.yml`](#dotnet-toolsyml) uses for the .NET SDK. Nothing is written to
+any `$HOME`: each account gets its own `~/.m2` (local artifact repository, and optionally a
+personal `settings.xml` holding repository credentials) the first time it runs a build, which is
 exactly the per-user state a shared workstation should keep per-user.
 
 **Not the apt package, deliberately.** Ubuntu 26.04 carries `maven` 3.9.12-1, four patch
@@ -465,7 +466,8 @@ are both still release candidates as of 2026-08-17, so the 3.9.x line is the sta
   as shipped — writing a copy here to configure nothing is the dead config MIGRATION2's A2/A3
   removed elsewhere. A host that needs a proxy or a mirror sets it there or in each account's
   own `~/.m2/settings.xml`.
-- **A declared JDK prerequisite** rather than an assumption that something else installed one.
+- **A checked JDK prerequisite**, [`core/openjdk.yml`](../core/README.md#openjdkyml), rather than
+  installing one inline — the version pin for OpenJDK now lives in one file, not three.
 
 ### The JVM reads `user.home` from the passwd database, not `$HOME`
 
@@ -562,9 +564,11 @@ versioned tree with a symlink, the same shape as [`maven.yml`](#mavenyml) and
 ZAP is a tree, not a binary: `zap.sh` resolves everything else relative to its own location, so
 the whole distribution is installed and only the launcher goes on `PATH` — confirmed that
 invoking it through the symlink works, which is why nothing here touches `PATH` in
-`/etc/environment`. `default-jre` is a prerequisite rather than the `-headless` variant every
-other Java playbook here installs: ZAP with no arguments *is* its desktop UI, which throws
-`HeadlessException` on a headless JRE, and on these desktop workstations that is a real use.
+`/etc/environment`. A non-headless JRE is a checked prerequisite, provisioned by
+[`core/openjdk.yml`](../core/README.md#openjdkyml), rather than installed inline: ZAP with no
+arguments *is* its desktop UI, which throws `HeadlessException` on a headless JRE, and on these
+desktop workstations that is a real use. `core/openjdk.yml`'s `default-jdk` pulls in the full
+`default-jre` (not `-headless`), which is what makes it the right shared prerequisite here too.
 
 ### ZAP's "home" is per-user state, and this playbook creates none of it
 

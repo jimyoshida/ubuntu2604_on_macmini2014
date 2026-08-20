@@ -34,7 +34,15 @@
 # That single invocation doubles as the version check. `zap.sh -version`
 # takes ~35 seconds because it starts the JVM and initialises every add-on,
 # so running it separately would only buy a slower play: the scan's own JSON
-# report carries "@version", which is what task 16 asserts against the pin.
+# report carries "@version", which is what task 18 asserts against the pin.
+#
+# THE JRE ITSELF IS A DECLARED PREREQUISITE, PROVISIONED BY core/openjdk.yml,
+# NOT INSTALLED HERE. ZAP with no arguments is its desktop UI, which throws
+# HeadlessException on a headless JRE, so it specifically needs the
+# non-headless one -- core/openjdk.yml's default-jdk pulls in default-jre
+# (full, non-headless) rather than the -headless variant, which is what makes
+# it the right shared prerequisite for this playbook as well as
+# misc/maven.yml and cloud-cli/jenkins-cli.yml.
 #
 # Usage:
 #   ansible-playbook misc/zap.yml -e host=<inventory host or group>
@@ -75,21 +83,34 @@
 
   tasks:
     - name: 1. Install prerequisites
-      # default-jre, not the -headless variant every other Java playbook
-      # here installs: ZAP's default invocation with no arguments is its
-      # desktop UI, which throws HeadlessException on a headless JRE. On
-      # these desktop workstations that is a real use, and the full JRE is
-      # two packages more.
       ansible.builtin.apt:
         name:
           - ca-certificates
-          - default-jre
           - tar
         state: present
         update_cache: true
         cache_valid_time: 3600
 
-    - name: 2. Inspect the current install
+    - name: 2. Check that a non-headless JRE is present
+      # ZAP's default invocation with no arguments is its desktop UI, which
+      # throws HeadlessException on a headless JRE -- a real use on these
+      # desktop workstations. core/openjdk.yml installs default-jdk, which
+      # pulls in the full default-jre (not -headless), so this checks for
+      # java rather than installing a JRE itself.
+      ansible.builtin.stat:
+        path: /usr/bin/java
+      register: zap_jre_stat
+      check_mode: false
+
+    - name: 3. Fail with the prerequisite if the JRE is missing
+      ansible.builtin.fail:
+        msg: >-
+          /usr/bin/java is not installed, and ZAP needs a non-headless JRE.
+          Run core/openjdk.yml against this host first:
+          ansible-playbook core/openjdk.yml -e host={{ inventory_hostname }}
+      when: not zap_jre_stat.stat.exists
+
+    - name: 4. Inspect the current install
       # follow: false on the symlink -- what matters is where it points, not
       # whether the target happens to resolve. check_mode: false because
       # these read state that already exists.
@@ -104,7 +125,7 @@
         label: "{{ item }}"
       check_mode: false
 
-    - name: 3. Decide whether ZAP needs installing
+    - name: 5. Decide whether ZAP needs installing
       # Filesystem state, not `zap.sh -version`: see the header on why this
       # playbook never runs ZAP as root, and on the 35 seconds that check
       # would cost on every play.
@@ -119,7 +140,7 @@
                            and zap_stat.results[1].stat.islnk | default(false)
                            and zap_stat.results[1].stat.lnk_target | default('') == zap_script)) }}
 
-    - name: 3a. Note that verification is deferred in this dry run
+    - name: 5a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
         msg: >-
           --check did not install ZAP {{ zap_version }}, so the unprivileged
@@ -127,7 +148,7 @@
           verify the install.
       when: not (zap_can_verify | bool)
 
-    - name: 4. Create the staging directory
+    - name: 6. Create the staging directory
       ansible.builtin.file:
         path: "{{ zap_stage_dir }}"
         state: directory
@@ -136,7 +157,7 @@
         mode: '0700'
       when: zap_install_needed | bool
 
-    - name: 5. Fetch the GitHub release metadata for ZAP v{{ zap_version }}
+    - name: 7. Fetch the GitHub release metadata for ZAP v{{ zap_version }}
       # ZAP publishes no checksums file beside the asset, so the SHA-256
       # GitHub computes and serves per asset is used instead -- the same
       # source core/yq.yml verifies against, and equally authoritative.
@@ -149,7 +170,7 @@
       check_mode: false
       when: zap_install_needed | bool
 
-    - name: 6. Resolve the SHA-256 digest for the Linux asset
+    - name: 8. Resolve the SHA-256 digest for the Linux asset
       # The digest arrives as "sha256:<hex>", which is exactly the format
       # get_url's checksum option expects, so it is passed through as is.
       ansible.builtin.set_fact:
@@ -159,7 +180,7 @@
              | map(attribute='digest') | first | default('') }}
       when: zap_install_needed | bool
 
-    - name: 7. Fail if the release does not carry this asset
+    - name: 9. Fail if the release does not carry this asset
       ansible.builtin.fail:
         msg: >-
           The v{{ zap_version }} release has no asset named {{ zap_asset }},
@@ -169,11 +190,11 @@
         - zap_install_needed | bool
         - not (zap_checksum is match('^sha256:[0-9a-f]{64}$'))
 
-    - name: 8. Download the ZAP distribution and verify its checksum
+    - name: 10. Download the ZAP distribution and verify its checksum
       # ~244 MB. get_url fails the task when the hash does not match, so this
       # is both the download and the integrity check. Not under --check:
       # get_url is not skipped in check mode and would validate a destination
-      # directory task 4 has not really created.
+      # directory task 6 has not really created.
       ansible.builtin.get_url:
         url: "https://github.com/{{ zap_repo }}/releases/download/v{{ zap_version }}/{{ zap_asset }}"
         dest: "{{ zap_stage_dir }}/{{ zap_asset }}"
@@ -185,7 +206,7 @@
         - zap_install_needed | bool
         - not ansible_check_mode
 
-    - name: 9. Create the versioned install directory
+    - name: 11. Create the versioned install directory
       ansible.builtin.file:
         path: "{{ zap_install_dir }}"
         state: directory
@@ -196,7 +217,7 @@
         - zap_install_needed | bool
         - not ansible_check_mode
 
-    - name: 10. Unpack the distribution into its versioned directory
+    - name: 12. Unpack the distribution into its versioned directory
       # --strip-components=1 drops the archive's own ZAP_<version>/ top
       # level, so the tree lands directly under zap_install_dir and the path
       # carries the version exactly once.
@@ -212,7 +233,7 @@
         - zap_install_needed | bool
         - not ansible_check_mode
 
-    - name: 11. Make the install tree world-readable
+    - name: 13. Make the install tree world-readable
       # Every account has to be able to read the tree; X (not x) keeps
       # directories traversable without marking every jar executable.
       ansible.builtin.file:
@@ -226,7 +247,7 @@
         - zap_install_needed | bool
         - not ansible_check_mode
 
-    - name: 12. Point /usr/local/bin/zap.sh at the pinned version
+    - name: 14. Point /usr/local/bin/zap.sh at the pinned version
       # force: true so an existing plain file at that path is replaced rather
       # than causing a "refusing to convert" failure.
       ansible.builtin.file:
@@ -240,12 +261,12 @@
         - zap_install_needed | bool
         - not ansible_check_mode
 
-    - name: 13. Remove the staging directory
+    - name: 15. Remove the staging directory
       ansible.builtin.file:
         path: "{{ zap_stage_dir }}"
         state: absent
 
-    - name: 14. Create the scratch directory for the unprivileged scan
+    - name: 16. Create the scratch directory for the unprivileged scan
       # Owned by the scanning uid: it holds the page to be scanned, ZAP's
       # -dir home for this run, and the JSON report ZAP writes.
       ansible.builtin.file:
@@ -257,7 +278,7 @@
       check_mode: false
       when: zap_can_verify | bool
 
-    - name: 15. Write the page the scan will crawl
+    - name: 17. Write the page the scan will crawl
       ansible.builtin.copy:
         dest: "{{ zap_smoke_dir }}/www/index.html"
         owner: "{{ zap_verify_uid }}"
@@ -271,7 +292,7 @@
       check_mode: false
       when: zap_can_verify | bool
 
-    - name: 16. Scan a real site as an unprivileged user
+    - name: 18. Scan a real site as an unprivileged user
       # The whole point of the tool, rather than a version string: a static
       # page is served on the loopback interface and ZAP crawls, passively
       # scans and reports on it, driven by uid 65534 through the published
@@ -304,13 +325,13 @@
       check_mode: false
       when: zap_can_verify | bool
 
-    - name: 17. Read the report the scan produced
+    - name: 19. Read the report the scan produced
       ansible.builtin.slurp:
         src: "{{ zap_smoke_dir }}/report.json"
       register: zap_report
       when: zap_can_verify | bool
 
-    - name: 18. Confirm the report is this version's, and describes the scanned site
+    - name: 20. Confirm the report is this version's, and describes the scanned site
       # Both halves matter. The version is the pin check -- this is the only
       # ZAP invocation in the play, so it is where the installed version is
       # established. The site name proves ZAP actually reached and crawled
@@ -333,13 +354,13 @@
         zap_report_json: "{{ zap_report.content | b64decode | from_json }}"
       when: zap_can_verify | bool
 
-    - name: 19. Remove the scratch directory
+    - name: 21. Remove the scratch directory
       ansible.builtin.file:
         path: "{{ zap_smoke_dir }}"
         state: absent
       check_mode: false
 
-    - name: 20. Display installation summary
+    - name: 22. Display installation summary
       ansible.builtin.debug:
         msg:
           - "OWASP ZAP {{ zap_version }} installed system-wide."

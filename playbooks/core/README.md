@@ -1,8 +1,8 @@
 # Core Playbooks (multi-user workstations)
 
 Standalone playbooks that install the base CLI toolset, Node.js, mise, ansible-core, the .NET
-SDK and PowerShell on a **shared** Ubuntu workstation. They are the multi-user successors to `core/`. See
-[MIGRATION4.md](../../MIGRATION4.md) for the policy and the per-tool plan.
+SDK, PowerShell and OpenJDK on a **shared** Ubuntu workstation. They are the multi-user successors
+to `core/`. See [MIGRATION4.md](../../MIGRATION4.md) for the policy and the per-tool plan.
 
 Run from `playbooks/`:
 
@@ -263,6 +263,51 @@ Version overrides:
 
 ```bash
 ansible-playbook core/pwsh.yml -e host=ws01 -e pwsh_version=7.6.5
+```
+
+## openjdk.yml
+
+Installs OpenJDK from the Ubuntu archive's `default-jdk` metapackage.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/java`, `/usr/bin/javac` | via `update-alternatives` |
+| `/usr/lib/jvm/java-<major>-openjdk-<arch>/` | the JDK itself |
+
+**One pinned package for every Java-based playbook in this repository to share, not three.**
+`misc/maven.yml`, `cloud-cli/jenkins-cli.yml` and `misc/zap.yml` each used to install their own
+JDK or JRE package inline — `default-jdk-headless`, `default-jre-headless` and `default-jre`
+respectively — which meant the same underlying package could end up pinned three different ways
+across three files on one host. `default-jdk` is not headless, and pulls in the full JDK rather
+than just a JRE, deliberately: its dependency chain (`default-jdk` → `default-jre` +
+`default-jdk-headless`; `default-jdk-headless` → `default-jre-headless` + `openjdk-<N>-jdk`)
+covers the union of what all three consumers need — `javac` for Maven, a runtime for the Jenkins
+CLI, and the non-headless runtime ZAP's desktop UI needs — confirmed with
+`apt-cache depends default-jdk`.
+
+Each of the three downstream playbooks now only checks for the binary it needs (`javac` or
+`java`) and fails with instructions to run this playbook first, the shape
+[`misc/dotnet-tools.yml`](../misc/README.md#dotnet-toolsyml) and
+[`cloud-cli/azure-pwsh.yml`](../cloud-cli/README.md#azure-pwshyml) use for
+[`dotnet.yml`](#dotnetyml) and [`pwsh.yml`](#pwshyml).
+
+**No scratch `HOME` in the verification, unlike every other Java-based playbook here.** The JVM
+reads `user.home` from the OS user database, not from `$HOME` — confirmed live,
+`HOME=/nonexistent java ...` still resolves `user.home` to the real account's passwd entry —
+which is exactly the trap [`misc/maven.yml`](../misc/README.md#mavenyml) and
+[`misc/zap.yml`](../misc/README.md#zapyml) document for their own per-tool state (`~/.m2`,
+`~/.ZAP`). A plain compile-and-run never touches `user.home` at all, so the check needs only a
+writable `chdir`, not a scratch `HOME`: an unprivileged account compiles a real program with
+`javac` and runs it with `java`, end to end.
+
+This is the prerequisite for [`misc/maven.yml`](../misc/README.md#mavenyml),
+[`cloud-cli/jenkins-cli.yml`](../cloud-cli/README.md#jenkins-cliyml) and
+[`misc/zap.yml`](../misc/README.md#zapyml).
+
+Version overrides:
+
+```bash
+ansible-playbook core/openjdk.yml -e host=ws01 -e openjdk_version=2:1.25-77
 ```
 
 ## modern-tools.yml

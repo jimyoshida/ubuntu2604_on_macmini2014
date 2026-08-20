@@ -611,8 +611,11 @@ project's own Maven repository.
 | `/usr/local/bin/jenkins` | alias symlink to the wrapper |
 | `/etc/profile.d/jenkins-cli.sh` | the shared, non-secret default `JENKINS_URL` |
 
-No architecture map, unlike everything else here: a jar is a jar. The JRE
-(`default-jre-headless`) is the only native dependency and comes from apt.
+No architecture map, unlike everything else here: a jar is a jar. The JRE is the only native
+dependency, and it is a checked prerequisite, provisioned by
+[`core/openjdk.yml`](../core/README.md#openjdkyml) — this playbook only checks for `java` and
+fails with that instruction if it is missing, the shape
+[`misc/dotnet-tools.yml`](../misc/README.md#dotnet-toolsyml) uses for the .NET SDK.
 
 The jar is pinned and checksum-verified (`jenkins_cli_version`) from
 `repo.jenkins-ci.org/releases/org/jenkins-ci/main/cli/<version>/`, where each release
