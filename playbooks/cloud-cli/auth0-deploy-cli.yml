@@ -1,0 +1,242 @@
+---
+# Install auth0-deploy-cli system-wide on a multi-user workstation.
+#
+#   <npm prefix>/bin/a0deploy                        npm's bin symlink
+#   <npm prefix>/lib/node_modules/auth0-deploy-cli    the npm package
+#
+# Auth0 publishes no apt package and no vendor apt repository for this tool,
+# so decision-order point 6 applies: `npm install -g`, the same mechanism
+# core/markdownlint.yml uses, with Node.js itself a prerequisite provisioned
+# elsewhere -- this playbook only checks for it, following markdownlint.yml's
+# Node-in-PATH guard.
+#
+# There is no login or init step: a0deploy takes its Auth0 Management API
+# credentials per-invocation, from a -c config.json file or from environment
+# variables it reads directly (confirmed on the target -- see below), never
+# from anything this playbook writes. Per the rules at the top of this
+# directory's README, the binary is shared and the identity is not: no
+# AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, AUTH0_ACCESS_TOKEN or
+# AUTH0_CLIENT_SIGNING_KEY_PATH is set anywhere by this playbook, and the
+# credential ones are secrets that belong in each account's own $HOME at mode
+# 0600, never in /etc/environment.
+#
+# Usage:
+#   ansible-playbook cloud-cli/auth0-deploy-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/auth0-deploy-cli.yml -e host=ws01 -e auth0_deploy_cli_version=8.43.0
+
+- name: Install auth0-deploy-cli system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    auth0_deploy_cli_version: "8.43.0"
+    auth0_deploy_cli_smoke_home: /var/tmp/auth0-deploy-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    auth0_deploy_cli_verify_uid: 65534    # nobody
+    auth0_deploy_cli_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that Node.js is installed as a system package
+      ansible.builtin.command: dpkg -s nodejs
+      register: auth0_deploy_cli_nodejs_dpkg
+      changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Fail if Node.js is not installed as a system package
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Node.js is not installed. Provision it (apt package or
+          the NodeSource repository, see core/nodejs.yml) before running this
+          playbook.
+      when: auth0_deploy_cli_nodejs_dpkg.rc != 0
+
+    - name: 3. Resolve the active node binary path
+      ansible.builtin.command: which node
+      register: auth0_deploy_cli_node_path
+      changed_when: false
+      check_mode: false
+
+    - name: 4. Fail if node in PATH is not a system-wide install
+      # Guards against a per-user version manager (nvm, fnm, ...) shadowing
+      # the system node on PATH for the connecting account: a global npm
+      # install under become would then land wherever that shim points,
+      # which is per-user, not root-owned.
+      ansible.builtin.fail:
+        msg: >-
+          node resolved to '{{ auth0_deploy_cli_node_path.stdout }}', which is
+          not under /usr/bin or /usr/local/bin. It looks like it is managed by
+          a per-user version manager rather than a system package.
+      when: auth0_deploy_cli_node_path.stdout not in ['/usr/bin/node', '/usr/local/bin/node']
+
+    - name: 5. Resolve npm's global install prefix
+      ansible.builtin.command: npm config get prefix
+      register: auth0_deploy_cli_npm_prefix
+      changed_when: false
+      check_mode: false
+
+    - name: 6. Check the currently installed auth0-deploy-cli version
+      ansible.builtin.command: "{{ auth0_deploy_cli_npm_prefix.stdout }}/bin/a0deploy --version"
+      register: auth0_deploy_cli_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 7. Decide whether auth0-deploy-cli needs installing
+      # The version is compared, not merely the presence of the binary, so
+      # that bumping auth0_deploy_cli_version actually replaces the package.
+      ansible.builtin.set_fact:
+        auth0_deploy_cli_install_needed: >-
+          {{ auth0_deploy_cli_version not in (auth0_deploy_cli_installed.stdout | default('')) }}
+        auth0_deploy_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (auth0_deploy_cli_version not in (auth0_deploy_cli_installed.stdout | default('')))) }}
+
+    - name: 7a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install auth0-deploy-cli {{ auth0_deploy_cli_version }},
+          so the version check and the unprivileged smoke tests below are
+          skipped rather than failed. Re-run without --check to verify the
+          install.
+      when: not (auth0_deploy_cli_can_verify | bool)
+
+    - name: 8. Install auth0-deploy-cli via npm as root
+      ansible.builtin.command: "npm install -g auth0-deploy-cli@{{ auth0_deploy_cli_version }}"
+      when: auth0_deploy_cli_install_needed | bool
+
+    - name: 9. Ensure the installed package is world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ auth0_deploy_cli_npm_prefix.stdout }}/lib/node_modules/auth0-deploy-cli"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 10. Verify the installed auth0-deploy-cli version
+      ansible.builtin.command: "{{ auth0_deploy_cli_npm_prefix.stdout }}/bin/a0deploy --version"
+      register: auth0_deploy_cli_version_out
+      changed_when: false
+      failed_when: auth0_deploy_cli_version not in auth0_deploy_cli_version_out.stdout
+      check_mode: false
+      when: auth0_deploy_cli_can_verify | bool
+
+    - name: 11. Create a scratch HOME for the unprivileged checks
+      # a0deploy writes nothing under HOME by itself -- it takes credentials
+      # per-invocation, not from any stored login state -- but the export
+      # command below needs a writable -o directory, and uid 65534 cannot
+      # necessarily traverse the directory ansible happens to run from, so
+      # this doubles as the chdir target for every check below. /var/tmp
+      # rather than /tmp, which is a size-capped tmpfs on these hosts.
+      # check_mode: false because `command` validates chdir *before* check
+      # mode skips the task, so a directory that exists only in simulation
+      # fails the dry run -- the defect opentofu.yml hit in wave 2.
+      ansible.builtin.file:
+        path: "{{ auth0_deploy_cli_smoke_home }}"
+        state: directory
+        owner: "{{ auth0_deploy_cli_verify_uid }}"
+        group: "{{ auth0_deploy_cli_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: auth0_deploy_cli_can_verify | bool
+
+    - name: 12. Report the a0deploy version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ auth0_deploy_cli_verify_uid }} --regid={{ auth0_deploy_cli_verify_gid }} --clear-groups
+          env HOME={{ auth0_deploy_cli_smoke_home }}
+          {{ auth0_deploy_cli_npm_prefix.stdout }}/bin/a0deploy --version
+        chdir: "{{ auth0_deploy_cli_smoke_home }}"
+      register: auth0_deploy_cli_smoke_version
+      changed_when: false
+      failed_when: auth0_deploy_cli_version not in auth0_deploy_cli_smoke_version.stdout
+      when: auth0_deploy_cli_can_verify | bool
+
+    - name: 13. Write a credential-free config file for the reachability check
+      # Empty on purpose: the point of task 14 is that a0deploy is reachable
+      # and correctly identifies which credentials are missing, not that it
+      # can reach Auth0.
+      ansible.builtin.copy:
+        content: "{}\n"
+        dest: "{{ auth0_deploy_cli_smoke_home }}/config.json"
+        owner: "{{ auth0_deploy_cli_verify_uid }}"
+        group: "{{ auth0_deploy_cli_verify_gid }}"
+        mode: '0600'
+      when: auth0_deploy_cli_can_verify | bool
+
+    - name: 14. Confirm the zero-configuration reachability check as an unprivileged user
+      # A4 tier 1: real offline work, not just a version string. `a0deploy
+      # export` with no AUTH0_DOMAIN/AUTH0_CLIENT_ID/AUTH0_CLIENT_SECRET
+      # anywhere reaches its own config-resolution code (nconf merging the
+      # empty file above with the environment) and fails asking for exactly
+      # those names -- proving the npm install, its dependency tree and
+      # Node's module resolution all work for an account that did no setup
+      # of its own, with no network call and no credential ever used.
+      #
+      # `env -i` here, not the plain `env` task 12 uses: this is rule 3 from
+      # the README ("discovery variables left unset so that default
+      # discovery is what gets tested") -- a0deploy reads AUTH0_DOMAIN,
+      # AUTH0_CLIENT_ID and AUTH0_CLIENT_SECRET straight out of the
+      # environment (confirmed on the target), so this check would silently
+      # attempt a real request instead if any of those happened to be set in
+      # the environment ansible-playbook itself was run from.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ auth0_deploy_cli_verify_uid }} --regid={{ auth0_deploy_cli_verify_gid }} --clear-groups
+          env -i HOME={{ auth0_deploy_cli_smoke_home }}
+          {{ auth0_deploy_cli_npm_prefix.stdout }}/bin/a0deploy export
+          -c {{ auth0_deploy_cli_smoke_home }}/config.json -f yaml -o {{ auth0_deploy_cli_smoke_home }}/export
+        chdir: "{{ auth0_deploy_cli_smoke_home }}"
+      register: auth0_deploy_cli_smoke_export
+      changed_when: false
+      failed_when: >-
+        auth0_deploy_cli_smoke_export.rc != 1
+        or 'AUTH0_DOMAIN' not in auth0_deploy_cli_smoke_export.stdout
+        or 'AUTH0_CLIENT_ID' not in auth0_deploy_cli_smoke_export.stdout
+      when: auth0_deploy_cli_can_verify | bool
+
+    - name: 15. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ auth0_deploy_cli_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 16. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            auth0-deploy-cli {{ auth0_deploy_cli_version }}
+            {{ auth0_deploy_cli_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ auth0_deploy_cli_npm_prefix.stdout }}/bin/a0deploy"
+          - "  {{ auth0_deploy_cli_npm_prefix.stdout }}/lib/node_modules/auth0-deploy-cli"
+          - ""
+          - >-
+            {{ auth0_deploy_cli_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ auth0_deploy_cli_verify_uid
+                         ~ '), correctly reporting its own missing credentials with none configured.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "No identity is configured by this playbook. Each user supplies credentials"
+          - "per-invocation, either in their own config.json or as environment variables:"
+          - "  export AUTH0_DOMAIN=your-tenant.us.auth0.com"
+          - "  export AUTH0_CLIENT_ID=...                   # from an M2M app authorized"
+          - "  export AUTH0_CLIENT_SECRET=...                # for the Management API"
+          - "  a0deploy export -c config.json -f yaml -o ./tenant   # confirm which tenant is active"
+          - ""
+          - "AUTH0_CLIENT_SECRET (or AUTH0_CLIENT_SIGNING_KEY_PATH / AUTH0_ACCESS_TOKEN, its"
+          - "alternatives) is a SECRET: keep it, and any config.json containing it, in your"
+          - "own $HOME at mode 0600, never in /etc/environment, which is world-readable."
+          - "AUTH0_DOMAIN and AUTH0_CLIENT_ID are read the same way but are not secrets;"
+          - "this playbook sets neither, since there is no site-wide Auth0 tenant here."

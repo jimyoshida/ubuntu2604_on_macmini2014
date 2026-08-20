@@ -45,8 +45,8 @@ in it.
 | Kind | Example | Goes in |
 | --- | --- | --- |
 | Shared, non-secret endpoint | `VAULT_ADDR`, `INFLUX_HOST` | `/etc/environment`, *only* if every account really should point at the same server. Nothing here writes it for you. |
-| Per-identity, non-secret | `AWS_PROFILE`, `CLOUDSDK_CORE_PROJECT` | your own shell, or the tool's own config (`gcloud config set project`) |
-| **Secret** | every `*_TOKEN`, `*_PAT`, `*_SECRET_ACCESS_KEY` | your own `$HOME` at mode `0600` — **never** `/etc/environment`, which is world-readable |
+| Per-identity, non-secret | `AWS_PROFILE`, `CLOUDSDK_CORE_PROJECT`, `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` | your own shell, or the tool's own config (`gcloud config set project`) |
+| **Secret** | every `*_TOKEN`, `*_PAT`, `*_SECRET_ACCESS_KEY`, `AUTH0_CLIENT_SECRET` | your own `$HOME` at mode `0600` — **never** `/etc/environment`, which is world-readable |
 
 For the secrets, keep a file only you can read and source it from your own `~/.bashrc`:
 
@@ -77,6 +77,8 @@ be used to interpolate an instruction into a closing message.
 
 | Variable | Tool | Kind | Status |
 | --- | --- | --- | --- |
+| `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` | `a0deploy` | per-identity | read — confirmed by its own "missing parameters" error naming both |
+| `AUTH0_CLIENT_SECRET` (or `AUTH0_CLIENT_SIGNING_KEY_PATH` / `AUTH0_ACCESS_TOKEN`) | `a0deploy` | secret | read — one of the three satisfies the same check |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `aws` | secret | read — `aws configure list` names the missing half |
 | `AWS_PROFILE`, `AWS_DEFAULT_REGION` | `aws` | per-identity | read |
 | `AZURE_DEVOPS_EXT__DEFAULTS_ORGANIZATION`, `AZURE_DEVOPS_EXT__DEFAULTS_PROJECT` | `az devops` | shared | read (double underscore — knack's prefix plus the section separator) |
@@ -105,6 +107,64 @@ and are not written anywhere — both are read by the wrapper from your own envi
 
 The `ansible-playbook cloud-cli/<tool>.yml` commands in this file are relative to
 `playbooks/`, which is where they must be run from.
+
+## auth0-deploy-cli.yml
+
+Installs [auth0-deploy-cli](https://github.com/auth0/auth0-deploy-cli) via `npm install -g`,
+the same mechanism [`core/markdownlint.yml`](../core/README.md#markdownlintyml) uses — Auth0
+publishes no apt package or vendor apt repository for this tool. Node.js itself is a
+prerequisite provisioned elsewhere; this playbook only checks for it.
+
+| Path | Contents |
+| --- | --- |
+| `<npm prefix>/bin/a0deploy` | npm's bin symlink |
+| `<npm prefix>/lib/node_modules/auth0-deploy-cli` | the npm package |
+
+Version override:
+
+```bash
+ansible-playbook cloud-cli/auth0-deploy-cli.yml -e host=ws01 -e auth0_deploy_cli_version=8.43.0
+```
+
+### No login step — credentials are passed per-invocation
+
+Unlike every other tool in this directory, a0deploy has no `init`/`login` subcommand and
+writes no per-user config file of its own. It resolves `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and
+`AUTH0_CLIENT_SECRET` (or `AUTH0_CLIENT_SIGNING_KEY_PATH` or `AUTH0_ACCESS_TOKEN` in its
+place) from a `-c config.json` file and/or the environment, merged and re-read on every run —
+confirmed on the target: with none of them set it fails naming exactly those; with the three
+env vars set to nonsense values it gets past that check and attempts a real request instead.
+Rule 1 still applies, just without a stored-state file to avoid touching: this playbook
+supplies none of them, in either place.
+
+### The reachability check exploits that same error message
+
+`a0deploy export` against an empty `config.json`, run with `env -i` so nothing in the
+environment ansible-playbook itself was launched from can leak in, fails asking for
+`AUTH0_DOMAIN` and `AUTH0_CLIENT_ID` by name — proving the npm install, its dependency tree
+and Node's module resolution all work for an arbitrary uid, entirely offline. `env -i` is
+used here and deliberately not for the plain `--version` check beside it: this is the one
+tool in the directory whose zero-configuration path and its authenticated path are separated
+only by which environment variables happen to be set, so the check has to force them unset
+rather than merely leave them unset by convention.
+
+### Per-user setup
+
+a0deploy has no CLI subcommand to confirm which identity is active — the closest equivalent
+is a successful `export`, which necessarily also does the real work:
+
+```bash
+export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_CLIENT_ID=...                    # from an M2M app authorized for the
+export AUTH0_CLIENT_SECRET=...                 # Management API, or keep both in config.json
+a0deploy export -c config.json -f yaml -o ./tenant
+```
+
+`AUTH0_CLIENT_SECRET` (and its alternatives, `AUTH0_CLIENT_SIGNING_KEY_PATH` and
+`AUTH0_ACCESS_TOKEN`) is a secret; so is any `config.json` that embeds it. Both stay in the
+user's own `$HOME` at mode `0600` and must never go in `/etc/environment`. `AUTH0_DOMAIN` and
+`AUTH0_CLIENT_ID` are read the same way but are not secrets — no playbook here sets either,
+since there is no site-wide Auth0 tenant for this repo to name.
 
 ## azure-pwsh.yml
 
