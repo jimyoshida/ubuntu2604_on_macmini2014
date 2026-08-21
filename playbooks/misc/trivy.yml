@@ -4,9 +4,16 @@
 # Ubuntu's own repos do not carry Trivy at all, so this adds Aqua Security's
 # official apt repository instead of Homebrew:
 #
-#   /usr/share/keyrings/trivy.gpg          apt signing key, root-owned
-#   /etc/apt/sources.list.d/trivy.list     apt repository definition
+#   /etc/apt/sources.list.d/trivy.sources  repository definition
+#   /etc/apt/keyrings/trivy.asc            repository signing key
 #   /usr/bin/trivy                         installed by apt, root-owned
+#
+# The key is fetched by URL each run and its FINGERPRINT asserted, rather
+# than pinned inline: per POLICY.md's A5 the bytes are pinned only when the
+# key has no expiry, and Aqua Security's expires 2029-04-15. A pinned copy
+# would simply stop working then, while fetching each run picks up whatever
+# successor Aqua publishes -- and the module compares by checksum, so it is
+# still a no-op when nothing moved.
 #
 # There is no per-user state and nothing to add to a shell profile. Trivy's
 # own vulnerability database still lands under each user's $HOME/.cache/trivy
@@ -32,36 +39,112 @@
     # package reads as "already at the pin" (POLICY.md's C2).
     trivy_dpkg_ok: "install ok installed|"
     trivy_version: "0.73.0"
-    trivy_gpg_key_url: https://aquasecurity.github.io/trivy-repo/deb/public.key
-    trivy_keyring: /usr/share/keyrings/trivy.gpg
-    trivy_repo_line: "deb [signed-by={{ trivy_keyring }}] https://aquasecurity.github.io/trivy-repo/deb generic main"
+    trivy_repo_uri: https://aquasecurity.github.io/trivy-repo/deb
+    trivy_repo_suite: generic
+    trivy_key_url: https://aquasecurity.github.io/trivy-repo/deb/public.key
+    # Aqua Security's repository signing key, created 2026-04-16 and expiring
+    # 2029-04-15. Asserted after import so that a repository quietly pointed at
+    # some other key fails the run rather than being trusted by apt. Re-check
+    # this when the key rotates:
+    #   curl -fsSL {{ trivy_key_url }} | gpg --show-keys --with-colons | awk -F: '$1=="fpr"'
+    trivy_key_fingerprint: "825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F"
+    # No architectures: entry, deliberately -- the source playbook's repo line
+    # carried none either, so apt resolves the host's own architecture. Aqua
+    # publishes amd64 and arm64 alike.
+    #
+    # The apt source this playbook's predecessor wrote for the same repository.
+    trivy_legacy_source: /etc/apt/sources.list.d/trivy.list
     # uid/gid used to prove the install is usable by an arbitrary user
     trivy_verify_uid: 65534    # nobody
     trivy_verify_gid: 65534    # nogroup
 
   tasks:
     - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 5.
       ansible.builtin.apt:
         name:
-          - gnupg
           - ca-certificates
+          - gnupg
+          - python3-debian
         state: present
         update_cache: true
         cache_valid_time: 3600
 
-    - name: 2. Check the currently installed trivy version
-      # ${Status} as well as ${Version} -- see trivy_dpkg_ok above.
-      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' trivy
-      register: trivy_installed
+    - name: 2. Remove the predecessor's apt source for this repository
+      # This playbook used to write trivy.list via apt_repository. Left beside
+      # the .sources file below, apt reads the repository twice and warns that
+      # the target is configured multiple times. The old keyring at
+      # /usr/share/keyrings/trivy.gpg is left alone: nothing references it any
+      # more, and an unused keyring is inert.
+      ansible.builtin.file:
+        path: "{{ trivy_legacy_source }}"
+        state: absent
+
+    - name: 3. Add the Aqua Security apt repository
+      # deb822_repository rather than get_url + `gpg --dearmor` +
+      # apt_repository: the dearmor task reported `changed` on every run.
+      # Unconditional, not gated on the version check below -- a host already
+      # at the pin still needs its repository definition migrated off the
+      # predecessor's .list file.
+      ansible.builtin.deb822_repository:
+        name: trivy
+        types:
+          - deb
+        uris:
+          - "{{ trivy_repo_uri }}"
+        suites:
+          - "{{ trivy_repo_suite }}"
+        components:
+          - main
+        signed_by: "{{ trivy_key_url }}"
+        state: present
+        mode: '0644'
+      register: trivy_repo
+
+    - name: 4. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring. It
+      # tolerates a miss (failed_when: false) because on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ trivy_repo.key_filename | default('/etc/apt/keyrings/trivy.asc') }}
+      register: trivy_fpr
       changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Confirm the keyring holds Aqua Security's signing key
+      ansible.builtin.fail:
+        msg: >-
+          The keyring at
+          {{ trivy_repo.key_filename | default('/etc/apt/keyrings/trivy.asc') }}
+          does not contain Aqua Security's signing key
+          {{ trivy_key_fingerprint }}. Refusing to install from a repository
+          signed by an unknown key.
+      when:
+        - trivy_key_fingerprint not in (trivy_fpr.stdout | default(''))
+        - not (ansible_check_mode and trivy_fpr.rc | default(1) != 0)
+
+    - name: 6. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: trivy_repo.changed
+
+    - name: 7. Check the currently installed trivy version
+      # ${Status} as well as ${Version} -- see trivy_dpkg_ok above.
       # check_mode: false throughout this playbook wherever a task only
       # READS state, and on the scratch directory the unprivileged checks
       # need: without it a dry run skips them and the checks then run
       # against a directory that was never created.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' trivy
+      register: trivy_installed
+      changed_when: false
       check_mode: false
       failed_when: false
 
-    - name: 3. Decide whether trivy needs installing
+    - name: 8. Decide whether trivy needs installing
       ansible.builtin.set_fact:
         trivy_install_needed: >-
           {{ trivy_installed.rc != 0
@@ -70,7 +153,7 @@
           {{ not (ansible_check_mode and (trivy_installed.rc != 0
              or trivy_installed.stdout != (trivy_dpkg_ok ~ trivy_version))) }}
 
-    - name: 3a. Note that verification is deferred in this dry run
+    - name: 8a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
         msg: >-
           --check did not install trivy {{ trivy_version }}, so the version
@@ -78,46 +161,18 @@
           failed. Re-run without --check to verify.
       when: not (trivy_can_verify | bool)
 
-    - name: 4. Download the Aqua Security apt signing key
-      ansible.builtin.get_url:
-        url: "{{ trivy_gpg_key_url }}"
-        dest: /tmp/trivy-public.key
-        mode: '0644'
-        force: true
-      when: trivy_install_needed | bool
-
-    - name: 5. Dearmor the signing key into the apt keyring
-      ansible.builtin.command:
-        cmd: "gpg --batch --yes --dearmor --output {{ trivy_keyring }} /tmp/trivy-public.key"
-      when: trivy_install_needed | bool
-
-    - name: 6. Ensure the apt keyring is world-readable
-      ansible.builtin.file:
-        path: "{{ trivy_keyring }}"
-        owner: root
-        group: root
-        mode: 'u=rwX,go=rX'
-      when: trivy_install_needed | bool
-
-    - name: 7. Remove the downloaded key file
-      ansible.builtin.file:
-        path: /tmp/trivy-public.key
-        state: absent
-      when: trivy_install_needed | bool
-
-    - name: 8. Add the Aqua Security apt repository
-      ansible.builtin.apt_repository:
-        repo: "{{ trivy_repo_line }}"
-        filename: trivy
-        state: present
-        update_cache: true
-      when: trivy_install_needed | bool
-
     - name: 9. Install trivy via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
       ansible.builtin.apt:
         name: "trivy={{ trivy_version }}"
         state: present
-      when: trivy_install_needed | bool
+        allow_downgrade: true
+      # The second clause is about --check on a host that does not yet have
+      # this repository: task 3 reported `changed` without writing, so apt has
+      # no candidate and this would fail outright rather than simulate.
+      when:
+        - trivy_install_needed | bool
+        - not (ansible_check_mode and trivy_repo.changed)
 
     - name: 10. Verify the installed trivy version
       ansible.builtin.command: trivy --version

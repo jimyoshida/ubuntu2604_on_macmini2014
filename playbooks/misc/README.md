@@ -128,19 +128,22 @@ Ubuntu carries no `trivy` package at all, so this adds the vendor's apt reposito
 
 | Path | Contents |
 | --- | --- |
-| `/usr/share/keyrings/trivy.gpg` | apt signing key, dearmored from Aqua Security's published key |
-| `/etc/apt/sources.list.d/trivy.list` | apt repository definition (`signed-by` pinned to the keyring above) |
+| `/etc/apt/sources.list.d/trivy.sources` | repository definition, written by `deb822_repository` |
+| `/etc/apt/keyrings/trivy.asc` | repository signing key, fetched and checksum-compared each run |
 | `/usr/bin/trivy` | installed by apt |
 
-- **Signing key handled the same way `apt-key` used to.** `apt-key` is deprecated;
-  the key is downloaded, dearmored into `/usr/share/keyrings/trivy.gpg`, and referenced
-  from the repo line with `signed-by`, which is the currently supported pattern.
+- **The key is fetched by URL and pinned by fingerprint,** not embedded. Aqua Security's
+  key expires **2029-04-15**, and [POLICY.md's A5](../../POLICY.md) pins the bytes only for
+  a key with no expiry — a pinned copy would simply stop working at that date, while
+  fetching each run picks up whatever successor Aqua publishes. The fingerprint
+  `825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F` is asserted after import, so a repository
+  quietly pointed at some other key fails the run instead of being trusted by apt.
 - **Version-aware idempotency**, same as `shellcheck.yml`: the pin is compared against
   `dpkg-query`'s exact version string. Aqua's repo happens to publish `trivy` without a
   Debian revision suffix, so this pin is just the upstream version (`0.73.0`).
-- **Repository setup is skipped once installed.** The key/repo tasks only run when the
-  pinned version isn't already present, so a host that already has the repo configured
-  doesn't re-add it every run.
+- **Repository setup is unconditional.** `deb822_repository` compares by checksum, so it is
+  a no-op when nothing moved — and a host already at the pinned version still gets its
+  definition migrated off the `trivy.list` this playbook used to write, which is removed.
 
 The unprivileged verification step runs `trivy fs --scanners vuln /etc` as `nobody`
 under a disk-backed scratch `HOME` (`/var/tmp/trivy-verify`), the same `/var/tmp`
@@ -306,13 +309,14 @@ pattern as [`trivy.yml`](#trivyyml):
 
 | Path | Contents |
 | --- | --- |
-| `/usr/share/keyrings/k6-archive-keyring.gpg` | apt signing key, dearmored from Grafana's published key |
-| `/etc/apt/sources.list.d/k6.list` | apt repository definition (`signed-by` pinned to the keyring above) |
+| `/etc/apt/sources.list.d/k6.sources` | repository definition, written by `deb822_repository` |
+| `/etc/apt/keyrings/k6.asc` | repository signing key, fetched and checksum-compared each run |
 | `/usr/bin/k6` | installed by apt |
 
-- **Signing key and repository setup follow `trivy.yml`** exactly: the key is dearmored
-  into a dedicated keyring and referenced from the repo line with `signed-by`, and the
-  key/repo tasks only run when the pinned version isn't already present.
+- **Signing key and repository setup follow `trivy.yml`** exactly: the key is fetched by URL
+  each run and its fingerprint `C5AD17C747E3415A3642D57D77C6C491D6AC1D69` asserted, because
+  Grafana's key expires **2033-03-10**. The repository definition is written unconditionally
+  and the `k6.list` this playbook used to write is removed.
 - **amd64 only.** Grafana's apt repository publishes amd64 packages exclusively (no arm64
   build), so this playbook fails with a clear message on any other architecture rather than
   letting apt report a confusing "no candidate" error.

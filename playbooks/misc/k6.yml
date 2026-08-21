@@ -4,9 +4,16 @@
 # Ubuntu's own repos do not carry k6 at all, so this adds Grafana's official
 # apt repository instead of Homebrew:
 #
-#   /usr/share/keyrings/k6-archive-keyring.gpg   apt signing key, root-owned
-#   /etc/apt/sources.list.d/k6.list              apt repository definition
-#   /usr/bin/k6                                  installed by apt, root-owned
+#   /etc/apt/sources.list.d/k6.sources   repository definition
+#   /etc/apt/keyrings/k6.asc             repository signing key
+#   /usr/bin/k6                          installed by apt, root-owned
+#
+# The key is fetched by URL each run and its FINGERPRINT asserted, rather
+# than pinned inline: per POLICY.md's A5 the bytes are pinned only when the
+# key has no expiry, and Grafana's expires 2033-03-10. A pinned copy would
+# simply stop working then, while fetching each run picks up whatever
+# successor Grafana publishes -- and the module compares by checksum, so it
+# is still a no-op when nothing moved.
 #
 # Grafana's repository publishes amd64 packages only (no arm64 build), so
 # this playbook fails cleanly on other architectures instead of letting apt
@@ -32,19 +39,33 @@
     # package reads as "already at the pin" (POLICY.md's C2).
     k6_dpkg_ok: "install ok installed|"
     k6_version: "2.2.0"
-    k6_gpg_key_url: https://dl.k6.io/key.gpg
-    k6_keyring: /usr/share/keyrings/k6-archive-keyring.gpg
-    k6_repo_line: "deb [signed-by={{ k6_keyring }}] https://dl.k6.io/deb stable main"
+    k6_repo_uri: https://dl.k6.io/deb
+    k6_repo_suite: stable
+    k6_key_url: https://dl.k6.io/key.gpg
+    # Grafana's k6 signing key, created 2021-03-12 and expiring 2033-03-10.
+    # Asserted after import so that a repository quietly pointed at some other
+    # key fails the run rather than being trusted by apt. Re-check when it
+    # rotates:
+    #   curl -fsSL {{ k6_key_url }} | gpg --show-keys --with-colons | awk -F: '$1=="fpr"'
+    k6_key_fingerprint: "C5AD17C747E3415A3642D57D77C6C491D6AC1D69"
+    # amd64 alone, stated rather than left to apt: the repository publishes no
+    # other build, which is what task 2 fails the run over.
+    k6_repo_architecture: amd64
+    # The apt source this playbook's predecessor wrote for the same repository.
+    k6_legacy_source: /etc/apt/sources.list.d/k6.list
     # uid/gid used to prove the install is usable by an arbitrary user
     k6_verify_uid: 65534    # nobody
     k6_verify_gid: 65534    # nogroup
 
   tasks:
     - name: 1. Install prerequisites
+      # python3-debian is what deb822_repository needs to write a .sources
+      # file; gnupg is for the fingerprint assertion in task 6.
       ansible.builtin.apt:
         name:
-          - gnupg
           - ca-certificates
+          - gnupg
+          - python3-debian
         state: present
         update_cache: true
         cache_valid_time: 3600
@@ -57,18 +78,82 @@
           '{{ ansible_facts['architecture'] }}'.
       when: ansible_facts['architecture'] != 'x86_64'
 
-    - name: 3. Check the currently installed k6 version
-      # ${Status} as well as ${Version} -- see k6_dpkg_ok above.
-      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' k6
-      register: k6_installed
+    - name: 3. Remove the predecessor's apt source for this repository
+      # This playbook used to write k6.list via apt_repository. Left beside the
+      # .sources file below, apt reads the repository twice and warns that the
+      # target is configured multiple times. The old keyring at
+      # /usr/share/keyrings/k6-archive-keyring.gpg is left alone: nothing
+      # references it any more, and an unused keyring is inert.
+      ansible.builtin.file:
+        path: "{{ k6_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the k6 apt repository
+      # deb822_repository rather than get_url + `gpg --dearmor` +
+      # apt_repository: the dearmor task reported `changed` on every run, and
+      # the whole sequence needed `not ansible_check_mode` on six tasks to
+      # keep a dry run from failing on a keyring it had not written.
+      # Unconditional, not gated on the version check below -- a host already
+      # at the pin still needs its repository definition migrated off the
+      # predecessor's .list file.
+      ansible.builtin.deb822_repository:
+        name: k6
+        types:
+          - deb
+        uris:
+          - "{{ k6_repo_uri }}"
+        suites:
+          - "{{ k6_repo_suite }}"
+        components:
+          - main
+        architectures:
+          - "{{ k6_repo_architecture }}"
+        signed_by: "{{ k6_key_url }}"
+        state: present
+        mode: '0644'
+      register: k6_repo
+
+    - name: 5. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring. It
+      # tolerates a miss (failed_when: false) because on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ k6_repo.key_filename | default('/etc/apt/keyrings/k6.asc') }}
+      register: k6_fpr
       changed_when: false
-      # check_mode: false throughout this playbook wherever a task only
-      # READS state: without it a dry run skips them and the checks below
-      # act on output that was never produced.
       check_mode: false
       failed_when: false
 
-    - name: 4. Decide whether k6 needs installing
+    - name: 6. Confirm the keyring holds Grafana's k6 signing key
+      ansible.builtin.fail:
+        msg: >-
+          The keyring at
+          {{ k6_repo.key_filename | default('/etc/apt/keyrings/k6.asc') }}
+          does not contain Grafana's k6 signing key {{ k6_key_fingerprint }}.
+          Refusing to install from a repository signed by an unknown key.
+      when:
+        - k6_key_fingerprint not in (k6_fpr.stdout | default(''))
+        - not (ansible_check_mode and k6_fpr.rc | default(1) != 0)
+
+    - name: 7. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: k6_repo.changed
+
+    - name: 8. Check the currently installed k6 version
+      # ${Status} as well as ${Version} -- see k6_dpkg_ok above.
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them and the checks below
+      # act on output that was never produced.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' k6
+      register: k6_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether k6 needs installing
       ansible.builtin.set_fact:
         k6_install_needed: >-
           {{ k6_installed.rc != 0
@@ -77,7 +162,7 @@
           {{ not (ansible_check_mode and (k6_installed.rc != 0
              or k6_installed.stdout != (k6_dpkg_ok ~ k6_version))) }}
 
-    - name: 4a. Note that verification is deferred in this dry run
+    - name: 9a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
         msg: >-
           --check did not install k6 {{ k6_version }}, so the version check
@@ -85,76 +170,18 @@
           failed. Re-run without --check to verify.
       when: not (k6_can_verify | bool)
 
-    - name: 5. Download the k6 apt signing key
-      ansible.builtin.get_url:
-        url: "{{ k6_gpg_key_url }}"
-        dest: /tmp/k6-public.key
-        mode: '0644'
-        force: true
-      when:
-        - k6_install_needed | bool
-        # A dry run cannot fetch the key, so nothing downstream of it can be
-        # attempted either: without this, --check on a host without k6 fails
-        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
-        - not ansible_check_mode
-
-    - name: 6. Dearmor the signing key into the apt keyring
-      ansible.builtin.command:
-        cmd: "gpg --batch --yes --dearmor --output {{ k6_keyring }} /tmp/k6-public.key"
-      when:
-        - k6_install_needed | bool
-        # A dry run cannot fetch the key, so nothing downstream of it can be
-        # attempted either: without this, --check on a host without k6 fails
-        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
-        - not ansible_check_mode
-
-    - name: 7. Ensure the apt keyring is world-readable
-      ansible.builtin.file:
-        path: "{{ k6_keyring }}"
-        owner: root
-        group: root
-        mode: 'u=rwX,go=rX'
-      when:
-        - k6_install_needed | bool
-        # A dry run cannot fetch the key, so nothing downstream of it can be
-        # attempted either: without this, --check on a host without k6 fails
-        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
-        - not ansible_check_mode
-
-    - name: 8. Remove the downloaded key file
-      ansible.builtin.file:
-        path: /tmp/k6-public.key
-        state: absent
-      when:
-        - k6_install_needed | bool
-        # A dry run cannot fetch the key, so nothing downstream of it can be
-        # attempted either: without this, --check on a host without k6 fails
-        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
-        - not ansible_check_mode
-
-    - name: 9. Add the k6 apt repository
-      ansible.builtin.apt_repository:
-        repo: "{{ k6_repo_line }}"
-        filename: k6
-        state: present
-        update_cache: true
-      when:
-        - k6_install_needed | bool
-        # A dry run cannot fetch the key, so nothing downstream of it can be
-        # attempted either: without this, --check on a host without k6 fails
-        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
-        - not ansible_check_mode
-
     - name: 10. Install k6 via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
       ansible.builtin.apt:
         name: "k6={{ k6_version }}"
         state: present
+        allow_downgrade: true
+      # The second clause is about --check on a host that does not yet have
+      # this repository: task 4 reported `changed` without writing, so apt has
+      # no candidate and this would fail outright rather than simulate.
       when:
         - k6_install_needed | bool
-        # A dry run cannot fetch the key, so nothing downstream of it can be
-        # attempted either: without this, --check on a host without k6 fails
-        # at "file (/usr/share/keyrings/k6-archive-keyring.gpg) is absent".
-        - not ansible_check_mode
+        - not (ansible_check_mode and k6_repo.changed)
 
     - name: 11. Verify the installed k6 version
       ansible.builtin.command: k6 version

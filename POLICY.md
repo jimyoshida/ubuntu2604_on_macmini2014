@@ -557,10 +557,6 @@ Before opening a change for review, confirm:
   `ok` and never fails misleadingly — but it is the conservative form, and the other 53 playbooks
   do better. Converting them means adding the fact and the 2a note, as C1 describes.
 
-- **`misc/k6.yml` and `misc/trivy.yml` predate A5.** Both still use `apt_repository` with a
-  separately fetched keyring under `/usr/share/keyrings/` and a `.list` file, rather than
-  `deb822_repository` with the key resolved per A5's expiry rule. They work and are pinned; they
-  are the two remaining playbooks not on the shared convention.
 - **`deb822_repository` is not idempotent *across* control-node versions.** ansible-core 2.16 and
   2.20 write materially different files for identical input, so alternating control nodes reports
   `changed` on the repository task and fires the cache refresh with it. Harmless, but it explains
