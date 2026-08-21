@@ -2,7 +2,7 @@
 
 Standalone playbooks that install developer tooling on a **shared** Ubuntu workstation, to
 root-owned system paths usable by every account on the host rather than into one account's
-home directory.
+home directory. See [POLICY.md](../../POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -212,7 +212,7 @@ Installs [junit2html](https://gitlab.com/inorton/junit2html) via `pipx`, root-ow
 | `/usr/local/share/man` | `PIPX_MAN_DIR` |
 
 Runs `pipx` as `root` with `PIPX_HOME`/`PIPX_BIN_DIR`/`PIPX_MAN_DIR` redirected to the root-owned paths
-above — the pipx-as-root pattern from `MIGRATION.md`'s install mechanism decision order —
+above — the pipx-as-root pattern in [INSTALL-MECHANISMS.md](../../INSTALL-MECHANISMS.md) —
 rather than the per-user `~/.local/bin` / `~/.local/pipx` that a plain `pipx install` as
 the connecting user would use. There is nothing to add to a shell profile: junit2html is a
 plain CLI with no per-user configuration.
@@ -220,7 +220,7 @@ plain CLI with no per-user configuration.
 - **`PIPX_MAN_DIR` matters.** Left unset, pipx creates `/root/.local/share/man` on every
   run — confirmed by removing that directory, running an install with the variable set (it
   stays gone) and one without it (it comes back). Writing under root's own `$HOME` is what
-  MIGRATION3's B2 forbids. The playbook also clears up the directory earlier runs left
+  [POLICY.md's B2](../../POLICY.md) forbids. The playbook also clears up the directory earlier runs left
   behind, with `rmdir` rather than `state: absent` so it goes only when empty; anything since
   put there is somebody's and is left alone. [`certbot.yml`](#certbotyml), the other pipx
   user here, does the same, and the two are no-ops for each other.
@@ -463,7 +463,7 @@ are both still release candidates as of 2026-08-17, so the 3.9.x line is the sta
 - **The tarball, not the zip.** Apache's `-bin.zip` does not carry Unix permission bits
   reliably; the `.tar.gz` does, and its `bin/mvn` arrives already `0755`.
 - **No `settings.xml` of this repo's own.** The distribution ships one and it is left exactly
-  as shipped — writing a copy here to configure nothing is the dead config MIGRATION2's A2/A3
+  as shipped — writing a copy here to configure nothing is the dead config [POLICY.md's A2/A3](../../POLICY.md)
   removed elsewhere. A host that needs a proxy or a mirror sets it there or in each account's
   own `~/.m2/settings.xml`.
 - **A checked JDK prerequisite**, [`core/openjdk.yml`](../core/README.md#openjdkyml), rather than
@@ -477,7 +477,7 @@ carefully `$HOME` is set — the same class of trap as `core/ansible.yml`'s `rem
 The unprivileged checks therefore pass an explicit `-Dmaven.repo.local`. They also need
 `chdir`: the `mvn` script walks up looking for a project base directory, and an unprivileged
 process left in a directory it cannot read prints `cd: can't cd to /home/<invoker>` — the
-defect MIGRATION2 found in `gcx-cli.yml`, here triggered by Maven's own launcher.
+second half of [POLICY.md's C6](../../POLICY.md), here triggered by Maven's own launcher.
 
 ### The smoke test is an offline build, plus a deliberate failure
 
@@ -583,7 +583,7 @@ That makes verification a trap twice over, and both halves were reproduced on a 
   resolves its home to `/nonexistent` and dies with `Unable to create home directory:
   /nonexistent/.ZAP/` no matter how `$HOME` is set. The scan passes an explicit `-dir`. Same
   trap [`maven.yml`](#mavenyml) documents, but fatal here rather than a fallback.
-- **Running `zap.sh` as root without `-dir` creates `/root/.ZAP`**, which MIGRATION3's B2
+- **Running `zap.sh` as root without `-dir` creates `/root/.ZAP`**, which [POLICY.md's B2](../../POLICY.md)
   forbids. So ZAP is never run as root at all: the install check is filesystem state, and the
   single ZAP invocation in the play is the unprivileged scan.
 
@@ -724,7 +724,7 @@ created here.
 Without it, pipx creates `/root/.local/share/man`. Confirmed by experiment: remove that
 directory, run an install with `PIPX_MAN_DIR` set — it stays gone and the configured directory
 appears instead — then run one without it, and it comes back. Writing under root's own `$HOME`
-is what MIGRATION3's B2 forbids, and it also puts any man page a package ships somewhere no
+is what [POLICY.md's B2](../../POLICY.md) forbids, and it also puts any man page a package ships somewhere no
 other account can read. Here it points at `/usr/local/share/man`, where `man certbot` finds it.
 
 Both this playbook and [`junit2html.yml`](#junit2htmlyml) — the other pipx user here — also
@@ -784,7 +784,7 @@ curl -sSL https://dvc.org/deb/dists/stable/main/binary-amd64/Packages \
   | awk '/^Package: dvc$/{f=1} f&&/^Version:/{print $2; f=0}' | sort -V | tail -1
 ```
 
-**The signing key expires 2027-03-05**, so per MIGRATION2's rule it is fetched by URL each run
+**The signing key expires 2027-03-05**, so per [POLICY.md's A5 rule](../../POLICY.md) it is fetched by URL each run
 (the module compares by checksum, so that stays idempotent) with only the fingerprint pinned —
 the `mise.yml`/`github-cli.yml` form rather than an inline key.
 

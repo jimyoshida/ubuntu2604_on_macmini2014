@@ -1,8 +1,8 @@
 # Container & Kubernetes Playbooks (multi-user workstations)
 
 Standalone playbooks that install container and Kubernetes tooling on a **shared** Ubuntu
-workstation. They are the multi-user successors to `container/`. See
-[MIGRATION3.md](../../MIGRATION3.md) for the policy and the per-tool plan.
+workstation, to root-owned system paths usable by every account on the host rather than into
+one account's home directory. See [POLICY.md](../../POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 

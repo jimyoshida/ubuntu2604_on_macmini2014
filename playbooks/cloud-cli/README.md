@@ -1,8 +1,8 @@
 # Cloud CLI Playbooks (multi-user workstations)
 
 Standalone playbooks that install cloud and service CLI tools on a **shared** Ubuntu
-workstation. They are the multi-user successors to `cloud-cli/`. See
-[MIGRATION2.md](../../MIGRATION2.md) for the policy and the per-tool plan.
+workstation, to root-owned system paths usable by every account on the host rather than into
+one account's home directory. See [POLICY.md](../../POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -867,8 +867,8 @@ and both tools validate a real config file as uid 65534.
 
 Unlike the vendor-repo playbooks, these pins are **release-specific**: apt candidates
 differ between 24.04 and 26.04, and an install fails outright when the pin is not what the
-target's sources carry. Check `apt-cache policy` on the target before bumping — the
-`shellcheck.yml` finding in MIGRATION.md.
+target's sources carry. Check `apt-cache policy` on the target before bumping — the same
+caveat [`core/shellcheck.yml`](../core/README.md#shellcheckyml) carries.
 
 Version overrides:
 
