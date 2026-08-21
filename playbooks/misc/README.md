@@ -473,7 +473,7 @@ are both still release candidates as of 2026-08-17, so the 3.9.x line is the sta
 
 `HOME=<scratch> java -XshowSettings:properties` prints `user.home = /nonexistent` for uid
 65534, so Maven tries to create `/nonexistent/.m2/repository` and fails no matter how
-carefully `$HOME` is set — the same class of trap as `core/ansible-core.yml`'s `remote_tmp`.
+carefully `$HOME` is set — the same class of trap as `core/ansible.yml`'s `remote_tmp`.
 The unprivileged checks therefore pass an explicit `-Dmaven.repo.local`. They also need
 `chdir`: the `mvn` script walks up looking for a project base directory, and an unprivileged
 process left in a directory it cannot read prints `cd: can't cd to /home/<invoker>` — the

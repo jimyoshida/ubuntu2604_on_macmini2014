@@ -192,7 +192,7 @@ closing summary prints the commands each account runs for itself.
 **Root has to run `pwsh` here**, which [`core/pwsh.yml`](../core/README.md#pwshyml) is careful to
 avoid: installing to the AllUsers scope means writing under `/usr/local`. Since `pwsh` writes
 `~/.cache/powershell` (PowerShellGet's cache among it) wherever `HOME` points, it gets a scratch
-`HOME` that does not outlive the play — the treatment `core/ansible-core.yml` gives
+`HOME` that does not outlive the play — the treatment `core/ansible.yml` gives
 `ansible-galaxy` for the same reason.
 
 ### Verification imports, it does not just list

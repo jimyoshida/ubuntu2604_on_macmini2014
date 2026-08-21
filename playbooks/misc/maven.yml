@@ -47,7 +47,7 @@
 #     user.home = /nonexistent for uid 65534. Maven therefore tries to create
 #     /nonexistent/.m2/repository and fails, however carefully $HOME is set,
 #     so the smoke tests pass an explicit -Dmaven.repo.local instead. (Same
-#     class of trap as ansible-core.yml's remote_tmp, and it is why nothing
+#     class of trap as ansible.yml's remote_tmp, and it is why nothing
 #     here relies on $HOME for the local repository.)
 #   * The `mvn` script cds around while looking for a project base directory,
 #     so an unprivileged process left in a directory it cannot read prints

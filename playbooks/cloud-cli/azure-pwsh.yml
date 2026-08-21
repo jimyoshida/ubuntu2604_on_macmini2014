@@ -27,7 +27,7 @@
 # AllUsers scope means writing under /usr/local, so the install itself is
 # privileged -- and pwsh writes ~/.cache/powershell (PowerShellGet's own
 # cache among it) wherever HOME points. It is therefore given a scratch HOME
-# that does not outlive the play, the same treatment ansible-core.yml gives
+# that does not outlive the play, the same treatment ansible.yml gives
 # ansible-galaxy for the same reason.
 #
 # Usage:

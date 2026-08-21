@@ -68,9 +68,9 @@
 # state (collections, local temp) inside the scratch directory.
 #
 # Usage:
-#   ansible-playbook core/ansible-core.yml -e host=<inventory host or group>
-#   ansible-playbook core/ansible-core.yml -e host=ws01 -e ansible_core_version=2.20.1-1
-#   ansible-playbook core/ansible-core.yml -e host=ws01 \
+#   ansible-playbook core/ansible.yml -e host=<inventory host or group>
+#   ansible-playbook core/ansible.yml -e host=ws01 -e ansible_core_version=2.20.1-1
+#   ansible-playbook core/ansible.yml -e host=ws01 \
 #     -e ansible_collection_community_general_version=13.3.0
 
 - name: Install ansible-core and pinned Galaxy collections system-wide

@@ -362,7 +362,7 @@ apt package pins are release-specific (see `shellcheck.yml`'s note on the same i
 below); to override one, edit `modern_tools_packages` with `-e` as a JSON list, the same
 pattern [`misc/grype-syft.yml`](../misc/README.md) uses for its tool list.
 
-## ansible-core.yml
+## ansible.yml
 
 Installs [ansible-core](https://github.com/ansible/ansible) from the Ubuntu apt package —
 ten CLI entrypoints under `/usr/bin`, root-owned — plus five pinned Galaxy collections into
@@ -441,8 +441,8 @@ Version overrides — the apt pin is Ubuntu-release-specific in the same way `sh
 each collection has its own variable:
 
 ```bash
-ansible-playbook core/ansible-core.yml -e host=ws01 -e ansible_core_version=2.20.1-1
-ansible-playbook core/ansible-core.yml -e host=ws01 -e ansible_collection_community_general_version=13.3.0
+ansible-playbook core/ansible.yml -e host=ws01 -e ansible_core_version=2.20.1-1
+ansible-playbook core/ansible.yml -e host=ws01 -e ansible_collection_community_general_version=13.3.0
 ```
 
 ## jq.yml

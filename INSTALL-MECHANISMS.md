@@ -35,7 +35,7 @@ version, no repository work needed.
 | [core/dotnet.yml](playbooks/core/dotnet.yml) | `dotnet-sdk-10.0` — Ubuntu 26.04 carries .NET 10 directly; no Microsoft repo needed |
 | [core/core-tools.yml](playbooks/core/core-tools.yml) | 18 packages: curl, gnupg, lsb-release, git, git-lfs, git-secret, python3-pip, zip, unzip, vim, net-tools, ncat, figlet, dos2unix, make, parallel, ca-certificates, aha |
 | [core/modern-tools.yml](playbooks/core/modern-tools.yml) | 13 packages (bat→`batcat`+symlink, fd→`fdfind`+symlink, fzf+`/etc/profile.d` hook, plus 10 more) |
-| [core/ansible-core.yml](playbooks/core/ansible-core.yml) | `ansible-core` (Galaxy collections on top are a separate mechanism — see below) |
+| [core/ansible.yml](playbooks/core/ansible.yml) | `ansible-core` (Galaxy collections on top are a separate mechanism — see below) |
 | [cloud-cli/promtool.yml](playbooks/cloud-cli/promtool.yml) | `promtool`, `amtool` (via `prometheus-alertmanager`, daemon stopped/disabled) |
 | [container/podman.yml](playbooks/container/podman.yml) | `podman`, `podman-compose` |
 | [misc/jsonnet.yml](playbooks/misc/jsonnet.yml) | `jsonnet` |
@@ -157,7 +157,7 @@ distinct from how the tool itself got there.
 Two more instances of the same pattern live inside playbooks already classified above, layered
 on top of their own apt package rather than a separate file:
 
-- [core/ansible-core.yml](playbooks/core/ansible-core.yml) installs `ansible-core` via apt
+- [core/ansible.yml](playbooks/core/ansible.yml) installs `ansible-core` via apt
   (mechanism 1), then pins five Galaxy collections with
   `ansible-galaxy collection install --force-with-deps`.
 - [cloud-cli/azure-devops-cli.yml](playbooks/cloud-cli/azure-devops-cli.yml) installs `az` via
