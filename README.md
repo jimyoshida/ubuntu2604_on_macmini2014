@@ -66,10 +66,3 @@ playbook is checked against:
 - **[INSTALL-MECHANISMS.md](INSTALL-MECHANISMS.md)** — how each playbook gets its tool onto the
   filesystem: apt package, vendor apt repository, upstream release artifact, pipx, `npm
   install -g`.
-
-## History
-
-This repo was migrated from an earlier single-user layout to the multi-user one above across
-four migrations; see [MIGRATION.md](MIGRATION.md), [MIGRATION2.md](MIGRATION2.md),
-[MIGRATION3.md](MIGRATION3.md) and [MIGRATION4.md](MIGRATION4.md) for that history, and `git log`
-for anything deleted along the way.
