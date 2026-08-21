@@ -73,6 +73,10 @@
     kubectl_stream: "v1.36"
     kubectl_version: "1.36.3-1.1"
     kubectl_repo_uri: "https://pkgs.k8s.io/core:/stable:/{{ kubectl_stream }}/deb/"
+    # The host apt's candidate must be served from, asserted by task 12. Named
+    # separately from kubectl_repo_uri so that overriding the stream does not
+    # quietly change what that assertion accepts.
+    kubectl_repo_host: pkgs.k8s.io
     kubectl_key_url: "https://pkgs.k8s.io/core:/stable:/{{ kubectl_stream }}/deb/Release.key"
     # The OBS project key for this stream. It EXPIRES 2026-12-29, so
     # POLICY.md's A5 puts this on the URL form: fetch each run (the module
@@ -242,17 +246,35 @@
       failed_when: kubectl_dpkg.stdout != (kubectl_dpkg_ok ~ kubectl_version)
       when: kubectl_can_verify | bool
 
-    - name: 12. Confirm apt will not replace kubectl on the next upgrade
-      # The whole point of task 6, asserted rather than assumed. apt-cache
-      # policy reports the candidate it would install; if the epoch package is
-      # still winning, the pin is not doing its job and the next `apt upgrade`
-      # on this host would undo this playbook.
-      ansible.builtin.command: apt-cache policy kubectl
+    - name: 12. Confirm apt will not replace kubectl with another vendor's package
+      # The whole point of task 6, asserted rather than assumed: whichever
+      # version apt would install next must come from pkgs.k8s.io, not from
+      # the Cloud SDK repository whose epoch outranks it.
+      #
+      # It asserts the candidate's ORIGIN, not that the candidate equals
+      # kubectl_version. Those are different questions, and the version form
+      # was wrong: pkgs.k8s.io publishes patch releases continuously, so the
+      # candidate moves ahead of the pin as a matter of course -- POLICY.md
+      # calls that expected drift -- and an equality check therefore fails on
+      # every host eventually, for a reason that has nothing to do with the
+      # vendor collision it exists to catch. Measured here with the pin at
+      # 1.36.3-1.1 and upstream at 1.36.4-1.1: the epoch package was correctly
+      # held at priority 500 while the check reported failure anyway.
+      #
+      # The awk reads the candidate version, finds its entry in the version
+      # table -- which is prefixed `***` when it is also the installed one --
+      # and prints the URI of the source serving it.
+      ansible.builtin.shell:
+        cmd: >-
+          apt-cache policy kubectl | awk '
+            /^  Candidate:/ { cand=$2; next }
+            { v = ($1=="***") ? $2 : $1 }
+            v == cand { getline; print $2; exit }'
       register: kubectl_policy
       changed_when: false
       check_mode: false
-      failed_when: >-
-        ('Candidate: ' ~ kubectl_version) not in kubectl_policy.stdout
+      # Empty output (no candidate at all) fails this too, which is intended.
+      failed_when: kubectl_repo_host not in (kubectl_policy.stdout | default(''))
       when: kubectl_can_verify | bool
 
     - name: 13. Generate the shared bash completion from the installed binary

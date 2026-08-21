@@ -64,7 +64,13 @@
     # target's configured apt sources.
     core_tools_packages:
       - name: curl
-        version: "8.18.0-1ubuntu2.3"
+        # Advanced from 8.18.0-1ubuntu2.3, which resolute-updates superseded
+        # and the archive no longer carries -- so the pin was unsatisfiable on
+        # every host, and because task 3 installs all eighteen packages in one
+        # apt transaction, that one stale pin blocked the other seventeen too.
+        # The verify_cmd matches on the upstream version alone, so it needs no
+        # change when the Ubuntu revision moves.
+        version: "8.18.0-1ubuntu2.4"
         verify_cmd: "curl --version | grep -q '^curl 8.18.0'"
       - name: gnupg
         version: "2.4.8-4ubuntu3"
