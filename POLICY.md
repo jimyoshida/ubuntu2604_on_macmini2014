@@ -550,17 +550,12 @@ Before opening a change for review, confirm:
 
 ## Known exceptions and outstanding debt
 
-- **C1 is satisfied by halves.** Every playbook gates its verification so a dry run never fails
-  misleadingly — 53 on a `<tool>_can_verify` fact, three (`devcontainers`, `kind`, `minikube`)
-  on a bare `not ansible_check_mode`. The other half is thinner: 90 read-only `command`/`shell`
-  tasks across 25 playbooks carry `changed_when: false` but not `check_mode: false`, so against
-  an **already-provisioned** host `--check` skips them and reports `ok` without having verified
-  anything. Adding the key is mechanical, but each task wants a glance first — a few depend on a
-  file an earlier task in the same play writes, which `--check` only simulates. Find them with:
-
-  ```bash
-  grep -B8 'changed_when: false' playbooks/*/*.yml | grep -A8 'builtin.\(command\|shell\)'
-  ```
+- **Three playbooks never verify under `--check`.** `container/devcontainers.yml`,
+  `container/kind.yml` and `container/minikube.yml` gate their checks on a bare
+  `not ansible_check_mode` rather than a `<tool>_can_verify` fact, so a dry run skips them even
+  against a host that already has the pinned version. That is safe — it never reports an unproven
+  `ok` and never fails misleadingly — but it is the conservative form, and the other 53 playbooks
+  do better. Converting them means adding the fact and the 2a note, as C1 describes.
 
 - **`misc/k6.yml` and `misc/trivy.yml` predate A5.** Both still use `apt_repository` with a
   separately fetched keyring under `/usr/share/keyrings/` and a `.list` file, rather than
