@@ -550,10 +550,18 @@ Before opening a change for review, confirm:
 
 ## Known exceptions and outstanding debt
 
-- **Five playbooks predate the `--check` work** and skip their own read-only checks under a dry
-  run, per C1: `core/jq.yml`, `core/modern-tools.yml`, `misc/bats.yml`, `misc/jsonnet.yml`,
-  `misc/plantuml.yml`. None carries `check_mode: false` on the `command`/`shell` tasks that
-  verify the install.
+- **C1 is satisfied by halves.** Every playbook gates its verification so a dry run never fails
+  misleadingly — 53 on a `<tool>_can_verify` fact, three (`devcontainers`, `kind`, `minikube`)
+  on a bare `not ansible_check_mode`. The other half is thinner: 90 read-only `command`/`shell`
+  tasks across 25 playbooks carry `changed_when: false` but not `check_mode: false`, so against
+  an **already-provisioned** host `--check` skips them and reports `ok` without having verified
+  anything. Adding the key is mechanical, but each task wants a glance first — a few depend on a
+  file an earlier task in the same play writes, which `--check` only simulates. Find them with:
+
+  ```bash
+  grep -B8 'changed_when: false' playbooks/*/*.yml | grep -A8 'builtin.\(command\|shell\)'
+  ```
+
 - **`misc/k6.yml` and `misc/trivy.yml` predate A5.** Both still use `apt_repository` with a
   separately fetched keyring under `/usr/share/keyrings/` and a `.list` file, rather than
   `deb822_repository` with the key resolved per A5's expiry rule. They work and are pinned; they
