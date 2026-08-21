@@ -356,6 +356,7 @@
           docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
       register: docker_dpkg
       changed_when: false
+      check_mode: false
       failed_when: >-
         ('docker-ce ' ~ docker_dpkg_ok ~ docker_version) not in docker_dpkg.stdout
         or ('docker-ce-cli ' ~ docker_dpkg_ok ~ docker_version) not in docker_dpkg.stdout
@@ -406,6 +407,7 @@
         chdir: "{{ docker_smoke_home }}"
       register: docker_smoke_context
       changed_when: false
+      check_mode: false
       failed_when: "'unix:///var/run/docker.sock' not in docker_smoke_context.stdout"
       when: docker_can_verify | bool
 
@@ -421,6 +423,7 @@
         chdir: "{{ docker_smoke_home }}"
       register: docker_smoke_buildx
       changed_when: false
+      check_mode: false
       failed_when: "'github.com/docker/buildx' not in docker_smoke_buildx.stdout"
       when: docker_can_verify | bool
 
@@ -441,6 +444,7 @@
         chdir: "{{ docker_smoke_home }}"
       register: docker_smoke_refused
       changed_when: false
+      check_mode: false
       failed_when: >-
         docker_smoke_refused.rc == 0
         or 'permission denied' not in (docker_smoke_refused.stderr | lower)

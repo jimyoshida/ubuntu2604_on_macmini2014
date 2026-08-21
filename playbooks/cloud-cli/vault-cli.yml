@@ -250,6 +250,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' vault
       register: vault_cli_dpkg
       changed_when: false
+      check_mode: false
       failed_when: vault_cli_dpkg.stdout != (vault_cli_dpkg_ok ~ vault_cli_version)
       when: vault_cli_can_verify | bool
 
@@ -299,6 +300,7 @@
         chdir: "{{ vault_cli_smoke_home }}"
       register: vault_cli_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: ('Vault v' ~ vault_cli_binary_version) not in vault_cli_smoke_version.stdout
       when: vault_cli_can_verify | bool
 
@@ -313,6 +315,7 @@
         group: "{{ vault_cli_verify_gid }}"
         mode: '0600'
       when: vault_cli_can_verify | bool
+      check_mode: false
 
     - name: 16. Format a policy file as an unprivileged user
       # A4 tier 1: real offline work, the `tofu fmt -check` of this playbook.
@@ -329,6 +332,7 @@
         chdir: "{{ vault_cli_smoke_home }}"
       register: vault_cli_smoke_fmt
       changed_when: false
+      check_mode: false
       failed_when: "'Formatted policy' not in vault_cli_smoke_fmt.stdout"
       when: vault_cli_can_verify | bool
 
@@ -346,6 +350,7 @@
         chdir: "{{ vault_cli_smoke_home }}"
       register: vault_cli_smoke_path
       changed_when: false
+      check_mode: false
       failed_when: (vault_cli_smoke_path.stdout | trim) != vault_cli_bin
       when: vault_cli_can_verify | bool
 

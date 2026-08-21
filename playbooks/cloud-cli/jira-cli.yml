@@ -206,6 +206,7 @@
       ansible.builtin.command: "{{ jira_cli_bin }} version"
       register: jira_cli_version_out
       changed_when: false
+      check_mode: false
       failed_when: ('Version="' ~ jira_cli_version ~ '"') not in jira_cli_version_out.stdout
       when: jira_cli_can_verify | bool
 
@@ -217,6 +218,7 @@
       ansible.builtin.command: "{{ jira_cli_bin }} completion bash"
       register: jira_cli_completion_out
       changed_when: false
+      check_mode: false
       when: jira_cli_can_verify | bool
 
     - name: 15. Install the bash completion script
@@ -256,6 +258,7 @@
         chdir: "{{ jira_cli_smoke_home }}"
       register: jira_cli_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: ('Version="' ~ jira_cli_version ~ '"') not in jira_cli_smoke_version.stdout
       when: jira_cli_can_verify | bool
 
@@ -274,6 +277,7 @@
         chdir: "{{ jira_cli_smoke_home }}"
       register: jira_cli_smoke_completion
       changed_when: false
+      check_mode: false
       failed_when: "'__jira_debug' not in jira_cli_smoke_completion.stdout"
       when: jira_cli_can_verify | bool
 
@@ -295,6 +299,7 @@
         chdir: "{{ jira_cli_smoke_home }}"
       register: jira_cli_smoke_path
       changed_when: false
+      check_mode: false
       failed_when: (jira_cli_smoke_path.stdout | trim) != jira_cli_bin
       when: jira_cli_can_verify | bool
 

@@ -158,6 +158,7 @@
         cmd: dpkg-query -W -f='${Package} ${Status}|${Version}\n' podman podman-compose
       register: podman_dpkg
       changed_when: false
+      check_mode: false
       failed_when: >-
         ('podman ' ~ podman_dpkg_ok ~ podman_version) not in podman_dpkg.stdout
           or ('podman-compose ' ~ podman_dpkg_ok ~ podman_compose_version) not in podman_dpkg.stdout
@@ -196,6 +197,7 @@
         chdir: "{{ podman_smoke_home }}"
       register: podman_smoke
       changed_when: false
+      check_mode: false
       failed_when: podman_version.split('+')[0] not in podman_smoke.stdout
       when: podman_can_verify | bool
 

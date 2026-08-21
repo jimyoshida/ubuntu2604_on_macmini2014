@@ -116,6 +116,7 @@
         cmd: dpkg-query -W -f='${Package} ${Status}|${Version}\n' promtool prometheus-alertmanager
       register: promtool_dpkg
       changed_when: false
+      check_mode: false
       failed_when: >-
         ('promtool ' ~ promtool_dpkg_ok ~ promtool_version) not in promtool_dpkg.stdout
           or ('prometheus-alertmanager ' ~ promtool_dpkg_ok ~ alertmanager_version)
@@ -133,6 +134,7 @@
         group: root
         mode: '0755'
       when: promtool_can_verify | bool
+      check_mode: false
 
     - name: 7. Write the configs the unprivileged checks validate
       # Deliberately minimal but genuinely valid: each exercises the real
@@ -162,6 +164,7 @@
       loop_control:
         label: "{{ item.name }}"
       when: promtool_can_verify | bool
+      check_mode: false
 
     - name: 8. Check a Prometheus config as an unprivileged user
       ansible.builtin.command:
@@ -170,6 +173,7 @@
           promtool check config {{ promtool_smoke_dir }}/prometheus.yml
       register: promtool_smoke_promtool
       changed_when: false
+      check_mode: false
       failed_when: "'SUCCESS' not in promtool_smoke_promtool.stdout"
       when: promtool_can_verify | bool
 
@@ -184,6 +188,7 @@
           amtool check-config {{ promtool_smoke_dir }}/alertmanager.yml
       register: promtool_smoke_amtool
       changed_when: false
+      check_mode: false
       failed_when: "'SUCCESS' not in promtool_smoke_amtool.stdout"
       when: promtool_can_verify | bool
 
@@ -191,6 +196,7 @@
       ansible.builtin.file:
         path: "{{ promtool_smoke_dir }}"
         state: absent
+      check_mode: false
 
     - name: 11. Display installation summary
       ansible.builtin.debug:

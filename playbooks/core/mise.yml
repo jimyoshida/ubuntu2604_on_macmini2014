@@ -211,6 +211,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' mise
       register: mise_dpkg
       changed_when: false
+      check_mode: false
       failed_when: mise_dpkg.stdout != (mise_dpkg_ok ~ mise_version)
       when: mise_can_verify | bool
 
@@ -227,6 +228,7 @@
         content: |
           # Managed by playbooks/core/mise.yml
           eval "$(mise activate bash)"
+      register: mise_profile_hook
 
     - name: 13. Ensure interactive non-login shells read /etc/profile.d
       # /etc/profile.d/*.sh is only sourced by login shells by default; a
@@ -238,6 +240,7 @@
         marker: "# {mark} ANSIBLE MANAGED BLOCK: profile.d for interactive shells"
         block: |
           for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
+      register: mise_bashrc_hook
 
     - name: 14. Create a scratch HOME for the unprivileged checks
       ansible.builtin.file:
@@ -263,10 +266,16 @@
         HOME: "{{ mise_smoke_home }}"
       register: mise_smoke_activation
       changed_when: false
+      check_mode: false
       failed_when: >-
         'mise' not in mise_smoke_activation.stdout
         or '_mise_hook' not in mise_smoke_activation.stdout
-      when: mise_can_verify | bool
+      # Also skipped when --check is the run that would have written the hook:
+      # tasks 12 and 13 only simulate it, so there is nothing to source.
+      when:
+        - mise_can_verify | bool
+        - not (ansible_check_mode
+               and (mise_profile_hook is changed or mise_bashrc_hook is changed))
 
     - name: 16. Inspect the install as an unprivileged user
       # Stronger than --version: mise doctor inspects the real install
@@ -283,6 +292,7 @@
         chdir: "{{ mise_smoke_home }}"
       register: mise_smoke_doctor
       changed_when: false
+      check_mode: false
       failed_when: mise_version not in mise_smoke_doctor.stdout
       when: mise_can_verify | bool
 

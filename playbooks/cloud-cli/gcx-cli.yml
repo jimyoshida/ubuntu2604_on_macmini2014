@@ -203,6 +203,7 @@
       ansible.builtin.command: "{{ gcx_cli_bin }} --version"
       register: gcx_cli_version_out
       changed_when: false
+      check_mode: false
       failed_when: ('gcx version ' ~ gcx_cli_version ~ ' ') not in gcx_cli_version_out.stdout
       when: gcx_cli_can_verify | bool
 
@@ -214,6 +215,7 @@
       ansible.builtin.command: "{{ gcx_cli_bin }} completion bash"
       register: gcx_cli_completion_out
       changed_when: false
+      check_mode: false
       when: gcx_cli_can_verify | bool
 
     - name: 15. Install the bash completion script
@@ -257,6 +259,7 @@
         chdir: "{{ gcx_cli_smoke_home }}"
       register: gcx_cli_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: ('gcx version ' ~ gcx_cli_version ~ ' ') not in gcx_cli_smoke_version.stdout
       when: gcx_cli_can_verify | bool
 
@@ -278,6 +281,7 @@
         chdir: "{{ gcx_cli_smoke_home }}"
       register: gcx_cli_smoke_config
       changed_when: false
+      check_mode: false
       failed_when: (gcx_cli_smoke_config.stdout | trim) | length == 0
       when: gcx_cli_can_verify | bool
 
@@ -295,6 +299,7 @@
         chdir: "{{ gcx_cli_smoke_home }}"
       register: gcx_cli_smoke_path
       changed_when: false
+      check_mode: false
       failed_when: (gcx_cli_smoke_path.stdout | trim) != gcx_cli_bin
       when: gcx_cli_can_verify | bool
 

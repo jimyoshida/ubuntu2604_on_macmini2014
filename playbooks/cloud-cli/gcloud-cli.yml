@@ -186,6 +186,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' google-cloud-cli
       register: gcloud_cli_dpkg
       changed_when: false
+      check_mode: false
       failed_when: gcloud_cli_dpkg.stdout != (gcloud_cli_dpkg_ok ~ gcloud_cli_pkg_version)
       when: gcloud_cli_can_verify | bool
 
@@ -216,6 +217,7 @@
           gcloud version
       register: gcloud_cli_smoke
       changed_when: false
+      check_mode: false
       failed_when: gcloud_cli_version not in gcloud_cli_smoke.stdout
       when: gcloud_cli_can_verify | bool
 

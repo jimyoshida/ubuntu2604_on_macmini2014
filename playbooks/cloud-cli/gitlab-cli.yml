@@ -196,6 +196,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' glab
       register: gitlab_cli_dpkg
       changed_when: false
+      check_mode: false
       failed_when: gitlab_cli_dpkg.stdout != (gitlab_cli_dpkg_ok ~ gitlab_cli_version)
       when: gitlab_cli_can_verify | bool
 
@@ -228,6 +229,7 @@
         chdir: "{{ gitlab_cli_smoke_home }}"
       register: gitlab_cli_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: gitlab_cli_version not in gitlab_cli_smoke_version.stdout
       when: gitlab_cli_can_verify | bool
 
@@ -243,6 +245,7 @@
         chdir: "{{ gitlab_cli_smoke_home }}"
       register: gitlab_cli_smoke_config
       changed_when: false
+      check_mode: false
       failed_when: (gitlab_cli_smoke_config.stdout | trim) | length == 0
       when: gitlab_cli_can_verify | bool
 

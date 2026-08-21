@@ -222,6 +222,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' azure-cli
       register: azure_cli_dpkg
       changed_when: false
+      check_mode: false
       failed_when: azure_cli_dpkg.stdout != (azure_cli_dpkg_ok ~ azure_cli_pkg_version)
       when: azure_cli_can_verify | bool
 
@@ -256,6 +257,7 @@
           az version --query '"azure-cli"' -o tsv
       register: azure_cli_smoke
       changed_when: false
+      check_mode: false
       failed_when: (azure_cli_smoke.stdout | trim) != azure_cli_version
       when: azure_cli_can_verify | bool
 

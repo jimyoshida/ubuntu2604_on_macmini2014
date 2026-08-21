@@ -159,6 +159,7 @@
         chdir: "{{ auth0_deploy_cli_smoke_home }}"
       register: auth0_deploy_cli_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: auth0_deploy_cli_version not in auth0_deploy_cli_smoke_version.stdout
       when: auth0_deploy_cli_can_verify | bool
 
@@ -199,6 +200,7 @@
         chdir: "{{ auth0_deploy_cli_smoke_home }}"
       register: auth0_deploy_cli_smoke_export
       changed_when: false
+      check_mode: false
       failed_when: >-
         auth0_deploy_cli_smoke_export.rc != 1
         or 'AUTH0_DOMAIN' not in auth0_deploy_cli_smoke_export.stdout

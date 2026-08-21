@@ -104,6 +104,7 @@
       ansible.builtin.command: "{{ playwright_npm_prefix.stdout }}/bin/playwright --version"
       register: playwright_installed
       changed_when: false
+      check_mode: false
       failed_when: false
 
     - name: 8. Decide whether playwright needs installing

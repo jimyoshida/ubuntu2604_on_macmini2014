@@ -269,6 +269,7 @@
       ansible.builtin.command: "{{ influx_cli_bin }} completion bash"
       register: influx_cli_completion_out
       changed_when: false
+      check_mode: false
       when: influx_cli_can_verify | bool
 
     - name: 17. Install the bash completion script
@@ -311,6 +312,7 @@
         chdir: "{{ influx_cli_smoke_home }}"
       register: influx_cli_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: "'Influx CLI' not in influx_cli_smoke_version.stdout"
       when: influx_cli_can_verify | bool
 
@@ -327,6 +329,7 @@
         chdir: "{{ influx_cli_smoke_home }}"
       register: influx_cli_smoke_config
       changed_when: false
+      check_mode: false
       failed_when: "'Active' not in influx_cli_smoke_config.stdout"
       when: influx_cli_can_verify | bool
 
@@ -344,6 +347,7 @@
         chdir: "{{ influx_cli_smoke_home }}"
       register: influx_cli_smoke_path
       changed_when: false
+      check_mode: false
       failed_when: (influx_cli_smoke_path.stdout | trim) != influx_cli_bin
       when: influx_cli_can_verify | bool
 

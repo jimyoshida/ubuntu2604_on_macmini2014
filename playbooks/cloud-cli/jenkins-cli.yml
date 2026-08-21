@@ -261,6 +261,7 @@
           fi
           exec java -jar {{ jenkins_cli_jar }} \
             -s "${JENKINS_URL:-{{ jenkins_url }}}" "${AUTH_ARGS[@]}" "$@"
+      register: jenkins_cli_wrapper_file
 
     - name: 15. Publish the shared default JENKINS_URL
       # A1: JENKINS_URL is shared, non-secret endpoint configuration, so it is
@@ -283,6 +284,7 @@
           # per-account secrets and must NOT be set here: this file is world-readable.
           : "${JENKINS_URL:={{ jenkins_url }}}"
           export JENKINS_URL
+      register: jenkins_cli_profile_file
 
     - name: 16. Create the 'jenkins' alias symlink
       ansible.builtin.file:
@@ -298,6 +300,7 @@
         cmd: "unzip -p {{ jenkins_cli_jar }} META-INF/MANIFEST.MF"
       register: jenkins_cli_installed_manifest
       changed_when: false
+      check_mode: false
       failed_when: >-
         ('Implementation-Version: ' ~ jenkins_cli_version)
         not in jenkins_cli_installed_manifest.stdout
@@ -345,6 +348,7 @@
         stdin: ""
       register: jenkins_cli_smoke
       changed_when: false
+      check_mode: false
       failed_when: "'Connection failed' not in (jenkins_cli_smoke.stderr | default(''))"
       when: jenkins_cli_can_verify | bool
 
@@ -358,8 +362,13 @@
         cmd: "grep -F -- '-s \"${JENKINS_URL:-{{ jenkins_url }}}\"' {{ jenkins_cli_wrapper }}"
       register: jenkins_cli_wrapper_check
       changed_when: false
+      check_mode: false
       failed_when: jenkins_cli_wrapper_check.rc != 0
-      when: jenkins_cli_can_verify | bool
+      # Also skipped when --check is the run that would have written the
+      # wrapper: task 14 only simulates it, so there is nothing to grep.
+      when:
+        - jenkins_cli_can_verify | bool
+        - not (ansible_check_mode and jenkins_cli_wrapper_file is changed)
 
     - name: 21. Confirm a login shell resolves jenkins-cli and the shared default
       # Proves both /etc drop-ins land for an account that is not the connecting
@@ -374,10 +383,16 @@
         stdin: ""
       register: jenkins_cli_smoke_path
       changed_when: false
+      check_mode: false
       failed_when: >-
         jenkins_cli_wrapper not in jenkins_cli_smoke_path.stdout
         or jenkins_url not in jenkins_cli_smoke_path.stdout
-      when: jenkins_cli_can_verify | bool
+      # Same reasoning as task 20, for both /etc drop-ins this play writes.
+      when:
+        - jenkins_cli_can_verify | bool
+        - not (ansible_check_mode
+               and (jenkins_cli_wrapper_file is changed
+                    or jenkins_cli_profile_file is changed))
 
     - name: 22. Remove the scratch HOME
       ansible.builtin.file:

@@ -198,6 +198,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' gh
       register: github_cli_dpkg
       changed_when: false
+      check_mode: false
       failed_when: github_cli_dpkg.stdout != (github_cli_dpkg_ok ~ github_cli_version)
       when: github_cli_can_verify | bool
 
@@ -219,6 +220,7 @@
           env HOME={{ github_cli_smoke_home }} gh --version
       register: github_cli_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: github_cli_version not in github_cli_smoke_version.stdout
       when: github_cli_can_verify | bool
 
@@ -234,6 +236,7 @@
           env HOME={{ github_cli_smoke_home }} gh config get git_protocol
       register: github_cli_smoke_config
       changed_when: false
+      check_mode: false
       failed_when: (github_cli_smoke_config.stdout | trim) | length == 0
       when: github_cli_can_verify | bool
 

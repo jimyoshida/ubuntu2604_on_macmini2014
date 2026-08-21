@@ -254,6 +254,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' azure-cli
       register: azure_cli_dpkg
       changed_when: false
+      check_mode: false
       failed_when: azure_cli_dpkg.stdout != (azure_cli_dpkg_ok ~ azure_cli_pkg_version)
       when: azure_cli_can_verify | bool
 
@@ -325,6 +326,7 @@
           az extension show --name {{ az_devops_ext_name }} --query path -o tsv
       register: az_devops_ext_path
       changed_when: false
+      check_mode: false
       failed_when: (az_devops_ext_path.stdout | trim) | length == 0
       when: az_devops_can_verify | bool
 
@@ -418,6 +420,7 @@
           az extension show --name {{ az_devops_ext_name }} --query version -o tsv
       register: az_devops_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: (az_devops_smoke_version.stdout | trim) != az_devops_ext_version
       when: az_devops_can_verify | bool
 
@@ -434,6 +437,7 @@
           az devops -h
       register: az_devops_smoke_help
       changed_when: false
+      check_mode: false
       failed_when: "'project' not in az_devops_smoke_help.stdout"
       when: az_devops_can_verify | bool
 
@@ -460,6 +464,7 @@
           az devops project list
       register: az_devops_org_smoke
       changed_when: false
+      check_mode: false
       failed_when: "'--organization must be specified' in (az_devops_org_smoke.stderr | default(''))"
       when:
         - az_devops_can_verify | bool

@@ -213,6 +213,7 @@
       loop: "{{ dotnet_tools }}"
       loop_control:
         label: "{{ item.command }}"
+      register: dotnet_tools_wrappers
 
     - name: 10. Verify every tool is installed at its pinned version
       # The root-side scratch HOME is still in place for this, and is removed
@@ -280,7 +281,11 @@
       changed_when: false
       check_mode: false
       failed_when: item.version not in dotnet_tools_smoke_versions.stdout
-      when: dotnet_tools_can_verify | bool
+      # Also skipped when --check is the run that would have written the
+      # wrappers: task 9 only simulates them, so there is nothing to exec.
+      when:
+        - dotnet_tools_can_verify | bool
+        - not (ansible_check_mode and dotnet_tools_wrappers is changed)
 
     - name: 15. Write the XML the transform check will read
       ansible.builtin.copy:

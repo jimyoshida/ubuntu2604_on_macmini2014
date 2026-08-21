@@ -260,6 +260,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' helm
       register: helm_dpkg
       changed_when: false
+      check_mode: false
       failed_when: helm_dpkg.stdout != (helm_dpkg_ok ~ helm_version)
       when: helm_can_verify | bool
 
@@ -280,6 +281,7 @@
         owner: root
         group: root
         mode: '0644'
+      register: helm_completion_file
       when: helm_can_verify | bool
 
     - name: 13. Create the scratch chart for the unprivileged checks
@@ -345,6 +347,7 @@
         chdir: "{{ helm_smoke_dir }}"
       register: helm_smoke_version
       changed_when: false
+      check_mode: false
       failed_when: ('v' ~ helm_version.split('-')[0]) not in helm_smoke_version.stdout
       when: helm_can_verify | bool
 
@@ -356,6 +359,7 @@
         chdir: "{{ helm_smoke_dir }}"
       register: helm_smoke_lint
       changed_when: false
+      check_mode: false
       failed_when: "'0 chart(s) failed' not in helm_smoke_lint.stdout"
       when: helm_can_verify | bool
 
@@ -370,6 +374,7 @@
         chdir: "{{ helm_smoke_dir }}"
       register: helm_smoke_template
       changed_when: false
+      check_mode: false
       failed_when: >-
         'name: smoke-smoke' not in helm_smoke_template.stdout
         or 'key: "multiuser"' not in helm_smoke_template.stdout
@@ -385,8 +390,13 @@
         chdir: "{{ helm_smoke_dir }}"
       register: helm_smoke_completion
       changed_when: false
+      check_mode: false
       failed_when: "'COMPLETION_OK' not in helm_smoke_completion.stdout"
-      when: helm_can_verify | bool
+      # Also skipped when --check is the run that would have written the
+      # completion: task 12 only simulates it, so there is nothing to load.
+      when:
+        - helm_can_verify | bool
+        - not (ansible_check_mode and helm_completion_file is changed)
 
     - name: 19. Remove the scratch directory
       ansible.builtin.file:

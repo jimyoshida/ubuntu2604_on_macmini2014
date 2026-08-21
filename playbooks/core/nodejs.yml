@@ -306,6 +306,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' nodejs
       register: nodejs_dpkg
       changed_when: false
+      check_mode: false
       failed_when: nodejs_dpkg.stdout != (nodejs_dpkg_ok ~ nodejs_version)
       when: nodejs_can_verify | bool
 
@@ -316,6 +317,7 @@
       ansible.builtin.command: npm config get prefix
       register: nodejs_npm_prefix
       changed_when: false
+      check_mode: false
       when: nodejs_can_verify | bool
 
     - name: 13. Resolve the yarn and pnpm binary paths
@@ -339,6 +341,7 @@
           done
       register: nodejs_corepack_check
       changed_when: false
+      check_mode: false
       when: nodejs_can_verify | bool
 
     - name: 15. Check whether npm already has yarn and pnpm at the pinned versions
@@ -359,6 +362,7 @@
         label: "{{ item.name }}"
       register: nodejs_npm_ls
       changed_when: false
+      check_mode: false
       failed_when: false
       when: nodejs_can_verify | bool
 
@@ -439,6 +443,7 @@
         label: "{{ item.name }}"
       register: nodejs_npm_ls_verify
       changed_when: false
+      check_mode: false
       failed_when: nodejs_npm_ls_verify.rc != 0
       when: nodejs_can_verify | bool
 
@@ -493,6 +498,7 @@
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
+      check_mode: false
       failed_when: item.expect not in nodejs_smoke_versions.stdout
       when: nodejs_can_verify | bool
 
@@ -508,6 +514,7 @@
         chdir: "{{ nodejs_smoke_home }}"
       register: nodejs_smoke_npm_install
       changed_when: false
+      check_mode: false
       failed_when: nodejs_smoke_npm_install.rc != 0
       when: nodejs_can_verify | bool
 
@@ -552,6 +559,7 @@
         chdir: "{{ nodejs_smoke_home }}"
       register: nodejs_smoke_audit_export
       changed_when: false
+      check_mode: false
       failed_when: >-
         'smoke-pkg' not in nodejs_smoke_audit_export.stdout
         or 'Smoke advisory' not in nodejs_smoke_audit_export.stdout
@@ -571,6 +579,7 @@
         chdir: "{{ nodejs_smoke_home }}"
       register: nodejs_smoke_yarn_audit_html
       changed_when: false
+      check_mode: false
       failed_when: >-
         'Found 1 vulnerabilities' not in nodejs_smoke_yarn_audit_html.stdout
         or (nodejs_smoke_yarn_audit_html.stdout_lines | last | int) < 1
