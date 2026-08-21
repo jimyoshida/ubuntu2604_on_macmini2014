@@ -370,10 +370,27 @@ redirects that cache to the shared `/opt` path instead:
   idempotency check alone would miss a browsers directory that was wiped or never
   populated on an otherwise up-to-date host.
 
-The unprivileged verification step screenshots a `data:` URL — not a real website — as
-`nobody`, proving the installed browser and the shared `PLAYWRIGHT_BROWSERS_PATH` cache
-both work end to end without depending on outbound network access at verification time,
-the same offline-smoke-test approach `hadolint.yml` and `k6.yml` use.
+**The verification does not render a page, and that is deliberate.** The obvious check —
+`playwright screenshot` on a `data:` URL as an arbitrary uid — **hangs indefinitely** here:
+`chrome-headless-shell` starts and its zygote, GPU, network-service and renderer children
+all come up, but the screenshot never completes. It was measured at 23 minutes before being
+killed, with no output file ever written, and `playwright screenshot` takes no timeout of
+its own — so a playbook built on it blocks forever, the same trap
+[`jenkins-cli.yml`](../cloud-cli/README.md#jenkins-cliyml) documents for `jenkins-cli -help`.
+
+What replaced it answers the actual multi-user question more directly, in under a second:
+
+- **`playwright install --dry-run`** as `nobody` reports where each browser *would* be
+  installed without downloading anything, so it reads the same registry a real run uses.
+  The reported location must be under `/opt/playwright-browsers` — proof that
+  `PLAYWRIGHT_BROWSERS_PATH` is honoured for an account that did no setup of its own.
+- **The browser binary is then executed** as `nobody`, so the browser itself is exercised
+  rather than merely located. The `find` that locates it matches only a world-executable
+  file and runs as that uid, so the check fails if the permission pass above left the tree
+  unreadable to an ordinary account.
+
+Both carry an explicit `timeout` (`playwright_smoke_timeout`, 60s), so a future hang fails
+the run instead of blocking it.
 
 Version overrides:
 

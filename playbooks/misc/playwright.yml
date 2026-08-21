@@ -27,6 +27,21 @@
 # whole play already runs as root via become, which is what Playwright
 # itself requires to invoke apt directly instead of trying to re-sudo.
 #
+# THE SMOKE TEST DOES NOT RENDER A PAGE, AND THAT IS DELIBERATE. The obvious
+# check -- `playwright screenshot` on a data: URL as an arbitrary uid -- HANGS
+# INDEFINITELY on this host: chrome-headless-shell starts, its zygote, GPU,
+# network-service and renderer children all come up, and the screenshot never
+# completes. Measured at 23 minutes before it was killed, with no output file
+# ever written. `playwright screenshot` takes no timeout of its own, so a
+# playbook built on it blocks forever -- the same trap cloud-cli/jenkins-cli.yml
+# documents for `jenkins-cli -help`.
+#
+# What replaced it answers the actual multi-user question more directly and in
+# under a second: can an arbitrary uid resolve the SHARED browser path, and can
+# it execute the browser binary out of it? Tasks 16 and 17 below. Every
+# unprivileged check here also carries an explicit `timeout`, so a future hang
+# fails the run instead of blocking it.
+#
 # Usage:
 #   ansible-playbook misc/playwright.yml -e host=<inventory host or group>
 #   ansible-playbook misc/playwright.yml -e host=ws01 -e playwright_version=1.62.1
@@ -45,6 +60,10 @@
     playwright_browsers:
       - chromium
     playwright_browsers_path: /opt/playwright-browsers
+    # Belt and braces against a check that blocks rather than exits -- see the
+    # header on the screenshot smoke test this replaced. Both checks below run
+    # in well under a second; 60 is a ceiling, not a budget.
+    playwright_smoke_timeout: 60
     # uid/gid used to prove the install is usable by an arbitrary user
     playwright_verify_uid: 65534    # nobody
     playwright_verify_gid: 65534    # nogroup
@@ -187,43 +206,57 @@
         mode: 'u=rwX,go=rX'
         recurse: true
 
-    - name: 16. Take a screenshot of an offline page as an unprivileged user
-      # A data: URL, not a real website: proves the installed browser and the
-      # shared PLAYWRIGHT_BROWSERS_PATH cache both work end to end without
-      # depending on outbound network access at verification time, the same
-      # offline-smoke-test approach hadolint.yml and k6.yml use.
+    - name: 16. Resolve the shared browser location as an unprivileged user
+      # `install --dry-run` reports where each browser WOULD be installed
+      # without downloading anything, so it reads the same registry a real run
+      # uses. Asserting the reported location is under the shared /opt path
+      # proves PLAYWRIGHT_BROWSERS_PATH is honoured for an account that did no
+      # setup of its own -- the thing this playbook exists to arrange.
       ansible.builtin.command:
         cmd: >-
+          timeout {{ playwright_smoke_timeout }}
           setpriv --reuid={{ playwright_verify_uid }} --regid={{ playwright_verify_gid }} --clear-groups
-          {{ playwright_npm_prefix.stdout }}/bin/playwright screenshot
-          "data:text/html,<title>playwright-smoke-ok</title><h1>hi</h1>"
-          /tmp/playwright-multiuser-smoke.png
+          {{ playwright_npm_prefix.stdout }}/bin/playwright install --dry-run
+          {{ playwright_browsers | join(' ') }}
         chdir: /tmp
       environment:
         HOME: /tmp
         TMPDIR: /tmp
         PLAYWRIGHT_BROWSERS_PATH: "{{ playwright_browsers_path }}"
-      register: playwright_smoke
+      register: playwright_smoke_paths
       changed_when: false
       check_mode: false
+      failed_when: >-
+        ('Install location:' not in playwright_smoke_paths.stdout)
+        or (playwright_browsers_path not in playwright_smoke_paths.stdout)
       when: playwright_can_verify | bool
 
-    - name: 17. Confirm the screenshot was produced
-      ansible.builtin.stat:
-        path: /tmp/playwright-multiuser-smoke.png
-      register: playwright_smoke_file
+    - name: 17. Run the shared browser binary as an unprivileged user
+      # A4's "offline real work", scaled to what can be done in a second: the
+      # browser itself is executed, not merely located. The `find` is part of
+      # the assertion rather than a convenience -- it runs as uid 65534 and
+      # matches only a world-executable file, so it fails if task 15's
+      # permission pass left the tree unreadable to an ordinary account.
+      ansible.builtin.command:
+        cmd: >-
+          timeout {{ playwright_smoke_timeout }}
+          setpriv --reuid={{ playwright_verify_uid }} --regid={{ playwright_verify_gid }} --clear-groups
+          sh -c 'B=$(find {{ playwright_browsers_path }} -name chrome-headless-shell
+          -type f -perm -o+x | head -1); test -n "$B" && exec "$B" --version'
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: playwright_smoke_browser
+      changed_when: false
       check_mode: false
-      failed_when: not playwright_smoke_file.stat.exists or playwright_smoke_file.stat.size == 0
+      # A version-bearing match, not the tool's own name (POLICY.md's C3):
+      # "chrome-headless-shell" would appear in a "command not found" message.
+      failed_when: >-
+        playwright_smoke_browser.stdout is not search('Chrome for Testing [0-9]+\.[0-9]+')
       when: playwright_can_verify | bool
 
-    - name: 18. Remove the smoke test screenshot
-      ansible.builtin.file:
-        path: /tmp/playwright-multiuser-smoke.png
-        state: absent
-      check_mode: false
-      when: playwright_can_verify | bool
-
-    - name: 19. Display installation summary
+    - name: 18. Display installation summary
       ansible.builtin.debug:
         msg:
           - "{{ playwright_version_out.stdout | trim }} installed system-wide."
@@ -232,7 +265,10 @@
           - "  {{ playwright_npm_prefix.stdout }}/lib/node_modules/playwright"
           - "  {{ playwright_browsers_path }} ({{ playwright_browsers | join(', ') }})"
           - ""
-          - "Verified runnable by an unprivileged user (uid {{ playwright_verify_uid }})."
+          - >-
+            Verified as an unprivileged user (uid {{ playwright_verify_uid }}): the CLI
+            resolves browsers to {{ playwright_browsers_path }}, and the browser
+            binary there is executable by an account that did no setup of its own.
           - ""
           - "Usage:"
           - "  playwright screenshot https://example.com out.png   # Capture a page screenshot"
