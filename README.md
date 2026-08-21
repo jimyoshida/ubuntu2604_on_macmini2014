@@ -55,6 +55,12 @@ string baked into its `verify_cmd` — to match, then re-run the playbook to rei
 `/etc/apt/preferences.d/kubectl`, so `apt upgrade` can't swap it for a different vendor's package.
 Even there, a version bump within that same origin still needs the pin update above.
 
+## Install mechanisms
+
+See [INSTALL-MECHANISMS.md](INSTALL-MECHANISMS.md) for how each playbook gets its tool onto
+the filesystem — apt package, vendor apt repository, upstream release artifact, pipx, `npm
+install -g`, and so on.
+
 ## History
 
 This repo was migrated from an earlier single-user layout to the multi-user one above across
