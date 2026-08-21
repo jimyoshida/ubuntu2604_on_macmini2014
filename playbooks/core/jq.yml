@@ -44,6 +44,10 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' jq
       register: jq_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
       failed_when: false
 
     - name: 2. Decide whether jq needs installing
@@ -51,6 +55,18 @@
         jq_install_needed: >-
           {{ jq_installed.rc != 0
              or jq_installed.stdout != (jq_dpkg_ok ~ jq_version) }}
+        jq_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (jq_installed.rc != 0
+                       or jq_installed.stdout != (jq_dpkg_ok ~ jq_version))) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install jq {{ jq_version }}, so the version
+          check and the unprivileged filter below are skipped rather than failed.
+          Re-run without --check to verify.
+      when: not (jq_can_verify | bool)
 
     - name: 3. Install jq via apt
       ansible.builtin.apt:
@@ -65,6 +81,8 @@
       register: jq_version_out
       changed_when: false
       failed_when: jq_version_out.stdout != (jq_dpkg_ok ~ jq_version)
+      check_mode: false
+      when: jq_can_verify | bool
 
     - name: 5. Filter a JSON value as an unprivileged user
       ansible.builtin.shell:
@@ -79,6 +97,8 @@
       register: jq_smoke
       changed_when: false
       failed_when: (jq_smoke.stdout | trim) != '1'
+      check_mode: false
+      when: jq_can_verify | bool
 
     - name: 6. Display installation summary
       ansible.builtin.debug:
@@ -92,3 +112,4 @@
           - "Usage:"
           - "  jq '.key' file.json          # Read a value"
           - "  echo '{}' | jq '.key = 1'    # Build/transform JSON"
+      when: jq_can_verify | bool

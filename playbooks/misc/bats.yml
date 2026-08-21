@@ -54,12 +54,28 @@
       ansible.builtin.command: "{{ bats_prefix }}/bin/bats --version"
       register: bats_installed
       changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
       failed_when: false
 
     - name: 3. Decide whether bats-core needs installing
       ansible.builtin.set_fact:
         bats_core_install_needed: >-
           {{ (bats_installed.stdout | default('') | trim) != 'Bats ' ~ bats_core_version }}
+        bats_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (bats_installed.stdout | default('') | trim)
+                      != 'Bats ' ~ bats_core_version) }}
+
+    - name: 3a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install bats-core {{ bats_core_version }}, so the
+          version check and the unprivileged smoke test below are skipped
+          rather than failed. Re-run without --check to verify.
+      when: not (bats_can_verify | bool)
 
     - name: 4. Fetch the bats-core source
       # No depth limit: a shallow clone cannot be re-pointed at a different tag
@@ -75,7 +91,12 @@
       ansible.builtin.command:
         cmd: "./install.sh {{ bats_prefix }}"
         chdir: "{{ bats_src_dir }}"
-      when: bats_core_install_needed | bool
+      # not ansible_check_mode as well: chdir is validated before check mode
+      # skips the task, and task 4 only simulates the clone, so a dry run on
+      # a host without the source tree dies on "Unable to change directory".
+      when:
+        - bats_core_install_needed | bool
+        - not ansible_check_mode
 
     - name: 6. Create the shared bats library directory
       ansible.builtin.file:
@@ -94,6 +115,7 @@
       loop: "{{ bats_libraries }}"
       loop_control:
         label: "{{ item.name }} v{{ item.version }}"
+      register: bats_libs
 
     - name: 8. Ensure the helper libraries are readable by every user
       # Guards against a restrictive umask on the control path; 'X' only adds
@@ -120,6 +142,8 @@
       register: bats_version_out
       changed_when: false
       failed_when: (bats_version_out.stdout | trim) != 'Bats ' ~ bats_core_version
+      check_mode: false
+      when: bats_can_verify | bool
 
     - name: 11. Write a smoke test exercising the helper libraries
       ansible.builtin.copy:
@@ -136,6 +160,8 @@
             assert_success
             assert_output "hello"
           }
+      check_mode: false
+      when: bats_can_verify | bool
 
     - name: 12. Run the smoke test as an unprivileged user
       # BATS_LIB_PATH is deliberately left unset here so the test proves the
@@ -150,11 +176,16 @@
         TMPDIR: /tmp
       register: bats_smoke
       changed_when: false
+      check_mode: false
+      when:
+        - bats_can_verify | bool
+        - not (ansible_check_mode and bats_libs is changed)
 
     - name: 13. Remove the smoke test
       ansible.builtin.file:
         path: /tmp/bats-multiuser-smoke.bats
         state: absent
+      check_mode: false
 
     - name: 14. Display installation summary
       ansible.builtin.debug:
@@ -172,3 +203,4 @@
           - ""
           - "No per-user setup is required: {{ bats_lib_dir }} is bats-core's"
           - "default BATS_LIB_PATH, and is also set in /etc/environment."
+      when: bats_can_verify | bool

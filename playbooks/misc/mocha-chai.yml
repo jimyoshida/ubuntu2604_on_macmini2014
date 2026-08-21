@@ -105,12 +105,25 @@
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
+      check_mode: false
       failed_when: false
 
     - name: 7. Decide whether mocha/chai need installing
       ansible.builtin.set_fact:
         mocha_chai_install_needed: >-
           {{ mocha_chai_installed.results | selectattr('rc', 'ne', 0) | list | length > 0 }}
+        mocha_chai_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (mocha_chai_installed.results
+                       | selectattr('rc', 'ne', 0) | list | length > 0)) }}
+
+    - name: 7a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install mocha/chai at the pinned versions, so the
+          version check and the unprivileged spec run below are skipped
+          rather than failed. Re-run without --check to verify.
+      when: not (mocha_chai_can_verify | bool)
 
     - name: 8. Install mocha and chai via npm as root
       ansible.builtin.command: >-
@@ -142,6 +155,8 @@
         label: "{{ item.name }}"
       changed_when: false
       failed_when: mocha_chai_verify.rc != 0
+      check_mode: false
+      when: mocha_chai_can_verify | bool
 
     - name: 11. Publish NODE_PATH to all login sessions
       ansible.builtin.lineinfile:
@@ -162,6 +177,8 @@
               expect(1 + 1).to.equal(2);
             });
           });
+      check_mode: false
+      when: mocha_chai_can_verify | bool
 
     - name: 13. Run the spec with mocha as an unprivileged user
       # NODE_PATH is set explicitly here, not left to /etc/environment: a
@@ -178,11 +195,14 @@
       register: mocha_chai_smoke
       changed_when: false
       failed_when: "'1 passing' not in mocha_chai_smoke.stdout"
+      check_mode: false
+      when: mocha_chai_can_verify | bool
 
     - name: 14. Remove the smoke test spec file
       ansible.builtin.file:
         path: /tmp/mocha-chai-multiuser-smoke.spec.js
         state: absent
+      check_mode: false
 
     - name: 15. Display installation summary
       ansible.builtin.debug:
@@ -198,3 +218,4 @@
           - "Usage:"
           - "  mocha test/*.spec.js               # Run test files"
           - "  const { expect } = require('chai'); # Works from any account/directory (NODE_PATH)"
+      when: mocha_chai_can_verify | bool

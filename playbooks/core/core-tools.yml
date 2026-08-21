@@ -160,6 +160,22 @@
         label: "{{ item.item.name }}"
       when: (item.stdout | default('')) != (core_tools_dpkg_ok ~ item.item.version)
 
+    - name: 2a. Decide whether this run can verify what it installed
+      ansible.builtin.set_fact:
+        core_tools_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (core_tools_pending | default([]) | length > 0)) }}
+
+    - name: 2b. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install
+          {{ core_tools_pending | default([]) | join(', ') }}, so the version
+          checks, the ca-certificates assertion and the unprivileged verify
+          commands below are skipped rather than failed. Re-run without
+          --check to verify.
+      when: not (core_tools_can_verify | bool)
+
     - name: 3. Install the packages that need installing
       ansible.builtin.apt:
         name: "{{ core_tools_pending | default([]) }}"
@@ -183,6 +199,8 @@
         label: "{{ item.name }}"
       changed_when: false
       failed_when: core_tools_version_out.stdout != (core_tools_dpkg_ok ~ item.version)
+      check_mode: false
+      when: core_tools_can_verify | bool
 
     - name: 5. Verify the ca-certificates bundle
       # ca-certificates ships no binary -- policy point 9's "exercise the
@@ -192,6 +210,8 @@
       ansible.builtin.stat:
         path: /etc/ssl/certs/ca-certificates.crt
       register: core_tools_ca_bundle
+      check_mode: false
+      when: core_tools_can_verify | bool
 
     - name: 6. Assert the ca-certificates bundle is present, non-empty and world-readable
       ansible.builtin.assert:
@@ -202,6 +222,7 @@
         fail_msg: >-
           /etc/ssl/certs/ca-certificates.crt is missing, empty, or not
           world-readable.
+      when: core_tools_can_verify | bool
 
     - name: 7. Create a scratch HOME for the unprivileged checks
       ansible.builtin.file:
@@ -228,6 +249,8 @@
       register: core_tools_smoke
       changed_when: false
       failed_when: core_tools_smoke.rc != 0
+      check_mode: false
+      when: core_tools_can_verify | bool
 
     - name: 9. Convert an ANSI escape sequence to HTML as an unprivileged user (aha)
       # aha's --version output is not reliable enough to pin a match string
@@ -244,6 +267,8 @@
       failed_when: >-
         'multi-user-smoke-test' not in core_tools_aha_smoke.stdout
         or '<html' not in (core_tools_aha_smoke.stdout | lower)
+      check_mode: false
+      when: core_tools_can_verify | bool
 
     - name: 10. Remove the scratch HOME
       ansible.builtin.file:
@@ -271,3 +296,4 @@
                 '',
                 'Verified runnable by an unprivileged user (uid ' ~ core_tools_verify_uid ~ ').',
                 'No shell configuration was changed and no per-user state was written.'] }}
+      when: core_tools_can_verify | bool
