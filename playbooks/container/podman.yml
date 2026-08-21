@@ -43,6 +43,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    podman_dpkg_ok: "install ok installed|"
     # Ubuntu archive (resolute/universe) versions. These pins are release-specific
     # -- apt candidates differ between 24.04 and 26.04 and an install fails
     # outright when the pin is not what the target's sources carry. Check
@@ -104,8 +109,9 @@
       # skipped command task registers rc 0 and an empty stdout, which task 2
       # would read as "neither is at the pinned version", true here by accident
       # rather than by measurement (POLICY.md's C1).
+      # ${Status} as well as ${Version} -- see podman_dpkg_ok above.
       ansible.builtin.command:
-        cmd: dpkg-query -W -f='${Package} ${Version}\n' podman podman-compose
+        cmd: dpkg-query -W -f='${Package} ${Status}|${Version}\n' podman podman-compose
       register: podman_installed
       changed_when: false
       check_mode: false
@@ -114,12 +120,15 @@
     - name: 2. Decide whether either package needs installing
       ansible.builtin.set_fact:
         podman_install_needed: >-
-          {{ ('podman ' ~ podman_version) not in podman_installed.stdout
-             or ('podman-compose ' ~ podman_compose_version) not in podman_installed.stdout }}
+          {{ ('podman ' ~ podman_dpkg_ok ~ podman_version) not in podman_installed.stdout
+               or ('podman-compose ' ~ podman_dpkg_ok ~ podman_compose_version)
+                  not in podman_installed.stdout }}
         podman_can_verify: >-
           {{ not (ansible_check_mode
-                  and (('podman ' ~ podman_version) not in podman_installed.stdout
-                       or ('podman-compose ' ~ podman_compose_version) not in podman_installed.stdout)) }}
+                  and (('podman ' ~ podman_dpkg_ok ~ podman_version)
+                     not in podman_installed.stdout
+                         or ('podman-compose ' ~ podman_dpkg_ok ~ podman_compose_version)
+                            not in podman_installed.stdout)) }}
 
     - name: 2a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -146,12 +155,12 @@
 
     - name: 4. Verify the installed package versions
       ansible.builtin.command:
-        cmd: dpkg-query -W -f='${Package} ${Version}\n' podman podman-compose
+        cmd: dpkg-query -W -f='${Package} ${Status}|${Version}\n' podman podman-compose
       register: podman_dpkg
       changed_when: false
       failed_when: >-
-        ('podman ' ~ podman_version) not in podman_dpkg.stdout
-        or ('podman-compose ' ~ podman_compose_version) not in podman_dpkg.stdout
+        ('podman ' ~ podman_dpkg_ok ~ podman_version) not in podman_dpkg.stdout
+          or ('podman-compose ' ~ podman_dpkg_ok ~ podman_compose_version) not in podman_dpkg.stdout
       when: podman_can_verify | bool
 
     - name: 5. Create a scratch HOME for the unprivileged smoke test

@@ -26,6 +26,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    trivy_dpkg_ok: "install ok installed|"
     trivy_version: "0.73.0"
     trivy_gpg_key_url: https://aquasecurity.github.io/trivy-repo/deb/public.key
     trivy_keyring: /usr/share/keyrings/trivy.gpg
@@ -45,7 +50,8 @@
         cache_valid_time: 3600
 
     - name: 2. Check the currently installed trivy version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' trivy
+      # ${Status} as well as ${Version} -- see trivy_dpkg_ok above.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' trivy
       register: trivy_installed
       changed_when: false
       # check_mode: false throughout this playbook wherever a task only
@@ -58,9 +64,11 @@
     - name: 3. Decide whether trivy needs installing
       ansible.builtin.set_fact:
         trivy_install_needed: >-
-          {{ trivy_installed.rc != 0 or trivy_installed.stdout != trivy_version }}
+          {{ trivy_installed.rc != 0
+             or trivy_installed.stdout != (trivy_dpkg_ok ~ trivy_version) }}
         trivy_can_verify: >-
-          {{ not (ansible_check_mode and (trivy_installed.rc != 0 or trivy_installed.stdout != trivy_version)) }}
+          {{ not (ansible_check_mode and (trivy_installed.rc != 0
+             or trivy_installed.stdout != (trivy_dpkg_ok ~ trivy_version))) }}
 
     - name: 3a. Note that verification is deferred in this dry run
       ansible.builtin.debug:

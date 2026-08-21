@@ -48,6 +48,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    azure_cli_dpkg_ok: "install ok installed|"
     # --- azure-cli, identical to azure-cli.yml ------------------------------
     azure_cli_version: "2.89.0"
     azure_cli_deb_revision: "1"
@@ -200,7 +205,8 @@
       # skipped command task still registers, with rc 0 and an empty stdout,
       # which the facts below would read as a version that is merely not the
       # pinned one.
-      ansible.builtin.command: dpkg-query -W -f='${Version}' azure-cli
+      # ${Status} as well as ${Version} -- see azure_cli_dpkg_ok above.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' azure-cli
       register: azure_cli_installed
       changed_when: false
       check_mode: false
@@ -210,13 +216,13 @@
       ansible.builtin.set_fact:
         azure_cli_install_needed: >-
           {{ azure_cli_installed.rc != 0
-             or azure_cli_installed.stdout != azure_cli_pkg_version }}
+               or azure_cli_installed.stdout != (azure_cli_dpkg_ok ~ azure_cli_pkg_version) }}
         # Everything past task 8 needs the CLI actually present, and task 8
         # does not really run under --check.
         azure_cli_can_verify: >-
           {{ not (ansible_check_mode
                   and (azure_cli_installed.rc != 0
-                       or azure_cli_installed.stdout != azure_cli_pkg_version)) }}
+                         or azure_cli_installed.stdout != (azure_cli_dpkg_ok ~ azure_cli_pkg_version))) }}
 
     - name: 7a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -245,10 +251,10 @@
         - not (ansible_check_mode and azure_cli_repo.changed)
 
     - name: 9. Verify the installed azure-cli package version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' azure-cli
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' azure-cli
       register: azure_cli_dpkg
       changed_when: false
-      failed_when: azure_cli_dpkg.stdout != azure_cli_pkg_version
+      failed_when: azure_cli_dpkg.stdout != (azure_cli_dpkg_ok ~ azure_cli_pkg_version)
       when: azure_cli_can_verify | bool
 
     - name: 10. Create a scratch HOME for the root-side az invocations

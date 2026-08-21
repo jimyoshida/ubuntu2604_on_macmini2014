@@ -56,6 +56,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    mise_dpkg_ok: "install ok installed|"
     # apt candidate on Ubuntu 26.04 (resolute), checked 2026-08-15 -- and
     # re-checked minutes later while writing this playbook, when upstream
     # published 2026.8.6 mid-session and moved the candidate out from under
@@ -167,7 +172,8 @@
     - name: 8. Check the currently installed mise version
       # dpkg-query, never `mise --version` as root -- see the header comment
       # on why running mise itself as root is a B2 violation.
-      ansible.builtin.command: dpkg-query -W -f='${Version}' mise
+      # ${Status} as well as ${Version} -- see mise_dpkg_ok above.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' mise
       register: mise_installed
       changed_when: false
       check_mode: false
@@ -176,11 +182,12 @@
     - name: 9. Decide whether mise needs installing
       ansible.builtin.set_fact:
         mise_install_needed: >-
-          {{ mise_installed.rc != 0 or mise_installed.stdout != mise_version }}
+          {{ mise_installed.rc != 0
+             or mise_installed.stdout != (mise_dpkg_ok ~ mise_version) }}
         mise_can_verify: >-
           {{ not (ansible_check_mode
                   and (mise_installed.rc != 0
-                       or mise_installed.stdout != mise_version)) }}
+                         or mise_installed.stdout != (mise_dpkg_ok ~ mise_version))) }}
 
     - name: 9a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -201,10 +208,10 @@
         - not (ansible_check_mode and mise_repo.changed)
 
     - name: 11. Verify the installed mise package version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' mise
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' mise
       register: mise_dpkg
       changed_when: false
-      failed_when: mise_dpkg.stdout != mise_version
+      failed_when: mise_dpkg.stdout != (mise_dpkg_ok ~ mise_version)
       when: mise_can_verify | bool
 
     - name: 12. Install the shared mise activation hook

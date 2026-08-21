@@ -54,6 +54,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    mongodb_dpkg_ok: "install ok installed|"
     # Current version in MongoDB's repository, checked 2026-08-17.
     mongodb_tools_version: "100.18.0"
     mongodb_repo_uri: "https://repo.mongodb.org/apt/ubuntu"
@@ -178,9 +183,10 @@
       # absent while still printing the one that is present, hence
       # failed_when: false. check_mode: false because this reads state that
       # already exists.
+      # ${Status} as well as ${Version} -- see mongodb_dpkg_ok above.
       ansible.builtin.command:
         cmd: >-
-          dpkg-query -W -f='${Package} ${Version}\n'
+          dpkg-query -W -f='${Package} ${Status}|${Version}\n'
           mongodb-database-tools mongodb-mongosh
       register: mongodb_installed
       changed_when: false
@@ -190,16 +196,16 @@
     - name: 8. Decide what needs installing
       ansible.builtin.set_fact:
         mongodb_tools_install_needed: >-
-          {{ ('mongodb-database-tools ' ~ mongodb_tools_version)
+          {{ ('mongodb-database-tools ' ~ mongodb_dpkg_ok ~ mongodb_tools_version)
              not in (mongodb_installed.stdout | default('')) }}
         mongosh_install_needed: >-
-          {{ ('mongodb-mongosh ' ~ mongosh_version)
+          {{ ('mongodb-mongosh ' ~ mongodb_dpkg_ok ~ mongosh_version)
              not in (mongodb_installed.stdout | default('')) }}
         mongodb_can_verify: >-
           {{ not (ansible_check_mode
-                  and (('mongodb-database-tools ' ~ mongodb_tools_version)
+                  and (('mongodb-database-tools ' ~ mongodb_dpkg_ok ~ mongodb_tools_version)
                        not in (mongodb_installed.stdout | default(''))
-                       or ('mongodb-mongosh ' ~ mongosh_version)
+                       or ('mongodb-mongosh ' ~ mongodb_dpkg_ok ~ mongosh_version)
                           not in (mongodb_installed.stdout | default('')))) }}
 
     - name: 8a. Note that verification is deferred in this dry run
@@ -319,14 +325,15 @@
     - name: 19. Verify the installed package versions
       ansible.builtin.command:
         cmd: >-
-          dpkg-query -W -f='${Package} ${Version}\n'
+          dpkg-query -W -f='${Package} ${Status}|${Version}\n'
           mongodb-database-tools mongodb-mongosh
       register: mongodb_dpkg
       changed_when: false
       check_mode: false
       failed_when: >-
-        ('mongodb-database-tools ' ~ mongodb_tools_version) not in mongodb_dpkg.stdout
-        or ('mongodb-mongosh ' ~ mongosh_version) not in mongodb_dpkg.stdout
+        ('mongodb-database-tools ' ~ mongodb_dpkg_ok ~ mongodb_tools_version)
+           not in mongodb_dpkg.stdout
+          or ('mongodb-mongosh ' ~ mongodb_dpkg_ok ~ mongosh_version) not in mongodb_dpkg.stdout
       when: mongodb_can_verify | bool
 
     - name: 20. Stat every tool the database-tools package ships

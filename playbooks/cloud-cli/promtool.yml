@@ -30,6 +30,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    promtool_dpkg_ok: "install ok installed|"
     # Ubuntu archive (resolute/universe) versions. Unlike the vendor-repo
     # playbooks these pins are release-specific: apt candidates differ between
     # 24.04 and 26.04, and an install fails outright when the pin is not what
@@ -50,8 +55,9 @@
       # already exists -- a skipped command task registers rc 0 and an empty
       # stdout, which task 2 would read as "neither is at the pinned version",
       # true here by accident rather than by measurement.
+      # ${Status} as well as ${Version} -- see promtool_dpkg_ok above.
       ansible.builtin.command:
-        cmd: dpkg-query -W -f='${Package} ${Version}\n' promtool prometheus-alertmanager
+        cmd: dpkg-query -W -f='${Package} ${Status}|${Version}\n' promtool prometheus-alertmanager
       register: promtool_installed
       changed_when: false
       check_mode: false
@@ -60,12 +66,16 @@
     - name: 2. Decide whether either package needs installing
       ansible.builtin.set_fact:
         promtool_install_needed: >-
-          {{ ('promtool ' ~ promtool_version) not in promtool_installed.stdout
-             or ('prometheus-alertmanager ' ~ alertmanager_version) not in promtool_installed.stdout }}
+          {{ ('promtool ' ~ promtool_dpkg_ok ~ promtool_version)
+             not in promtool_installed.stdout
+               or ('prometheus-alertmanager ' ~ promtool_dpkg_ok ~ alertmanager_version)
+                  not in promtool_installed.stdout }}
         promtool_can_verify: >-
           {{ not (ansible_check_mode
-                  and (('promtool ' ~ promtool_version) not in promtool_installed.stdout
-                       or ('prometheus-alertmanager ' ~ alertmanager_version) not in promtool_installed.stdout)) }}
+                  and (('promtool ' ~ promtool_dpkg_ok ~ promtool_version)
+                     not in promtool_installed.stdout
+                         or ('prometheus-alertmanager ' ~ promtool_dpkg_ok ~ alertmanager_version)
+                            not in promtool_installed.stdout)) }}
 
     - name: 2a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -103,12 +113,13 @@
 
     - name: 5. Verify the installed package versions
       ansible.builtin.command:
-        cmd: dpkg-query -W -f='${Package} ${Version}\n' promtool prometheus-alertmanager
+        cmd: dpkg-query -W -f='${Package} ${Status}|${Version}\n' promtool prometheus-alertmanager
       register: promtool_dpkg
       changed_when: false
       failed_when: >-
-        ('promtool ' ~ promtool_version) not in promtool_dpkg.stdout
-        or ('prometheus-alertmanager ' ~ alertmanager_version) not in promtool_dpkg.stdout
+        ('promtool ' ~ promtool_dpkg_ok ~ promtool_version) not in promtool_dpkg.stdout
+          or ('prometheus-alertmanager ' ~ promtool_dpkg_ok ~ alertmanager_version)
+             not in promtool_dpkg.stdout
       when: promtool_can_verify | bool
 
     - name: 6. Create the scratch directory for the unprivileged checks

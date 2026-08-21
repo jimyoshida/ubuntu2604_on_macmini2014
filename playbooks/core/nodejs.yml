@@ -75,6 +75,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    nodejs_dpkg_ok: "install ok installed|"
     # The stream is part of the pin: moving to Node 26 when it becomes LTS
     # means editing nodejs_stream (which changes the repository URI) as well
     # as nodejs_version, not just the version string.
@@ -245,7 +250,8 @@
       when: nodejs_repo.changed
 
     - name: 8. Check the currently installed Node.js version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' nodejs
+      # ${Status} as well as ${Version} -- see nodejs_dpkg_ok above.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' nodejs
       register: nodejs_installed
       changed_when: false
       check_mode: false
@@ -254,11 +260,12 @@
     - name: 9. Decide whether Node.js needs installing
       ansible.builtin.set_fact:
         nodejs_install_needed: >-
-          {{ nodejs_installed.rc != 0 or nodejs_installed.stdout != nodejs_version }}
+          {{ nodejs_installed.rc != 0
+             or nodejs_installed.stdout != (nodejs_dpkg_ok ~ nodejs_version) }}
         nodejs_can_verify: >-
           {{ not (ansible_check_mode
                   and (nodejs_installed.rc != 0
-                       or nodejs_installed.stdout != nodejs_version)) }}
+                         or nodejs_installed.stdout != (nodejs_dpkg_ok ~ nodejs_version))) }}
 
     - name: 9a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -296,10 +303,10 @@
         - not (ansible_check_mode and nodejs_repo.changed)
 
     - name: 11. Verify the installed Node.js package version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' nodejs
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' nodejs
       register: nodejs_dpkg
       changed_when: false
-      failed_when: nodejs_dpkg.stdout != nodejs_version
+      failed_when: nodejs_dpkg.stdout != (nodejs_dpkg_ok ~ nodejs_version)
       when: nodejs_can_verify | bool
 
     - name: 12. Resolve npm's global install prefix

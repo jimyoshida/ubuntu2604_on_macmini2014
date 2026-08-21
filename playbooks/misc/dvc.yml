@@ -34,6 +34,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    dvc_dpkg_ok: "install ok installed|"
     # Newest version in Iterative's apt repository as of 2026-08-17, which is
     # also the current PyPI release:
     #   curl -sSL https://dvc.org/deb/dists/stable/main/binary-amd64/Packages \
@@ -138,7 +143,8 @@
       when: dvc_repo.changed
 
     - name: 7. Check the currently installed DVC version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' dvc
+      # ${Status} as well as ${Version} -- see dvc_dpkg_ok above.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' dvc
       register: dvc_installed
       changed_when: false
       check_mode: false
@@ -147,11 +153,12 @@
     - name: 8. Decide whether DVC needs installing
       ansible.builtin.set_fact:
         dvc_install_needed: >-
-          {{ dvc_installed.rc != 0 or dvc_installed.stdout != dvc_version }}
+          {{ dvc_installed.rc != 0
+             or dvc_installed.stdout != (dvc_dpkg_ok ~ dvc_version) }}
         dvc_can_verify: >-
           {{ not (ansible_check_mode
                   and (dvc_installed.rc != 0
-                       or dvc_installed.stdout != dvc_version)) }}
+                       or dvc_installed.stdout != (dvc_dpkg_ok ~ dvc_version))) }}
 
     - name: 8a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -172,11 +179,11 @@
       when: dvc_install_needed | bool
 
     - name: 10. Verify the installed DVC version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' dvc
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' dvc
       register: dvc_version_out
       changed_when: false
       check_mode: false
-      failed_when: dvc_version != dvc_version_out.stdout
+      failed_when: dvc_version_out.stdout != (dvc_dpkg_ok ~ dvc_version)
       when: dvc_can_verify | bool
 
     - name: 11. Create a scratch project for the unprivileged checks

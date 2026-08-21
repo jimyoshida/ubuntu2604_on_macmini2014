@@ -363,10 +363,25 @@ Point 6 rules out `stat.exists`. That is necessary, not sufficient — a version
 still be blind to absence:
 
 - **`dpkg-query -W -f='${Version}'` reports a version for a removed package.** A package in
-  `deinstall ok config-files` state — binary gone, conffiles retained — answers with its version,
-  so the guard reads "already at the pin", skips the install, and the verification step then
-  confirms the same phantom and prints it in the summary. Read `${Status}|${Version}` and compare
-  against `install ok installed|<version>`.
+  `deinstall ok config-files` state — binary gone, conffiles retained — answers with its version
+  and exits 0, so the guard reads "already at the pin", skips the install, and the verification
+  step then confirms the same phantom and prints it in the summary. Read `${Status}|${Version}`
+  and compare against `install ok installed|<version>`. Every apt-based playbook here declares
+  that prefix once as a play var:
+
+  ```yaml
+  <tool>_dpkg_ok: "install ok installed|"
+  ```
+
+  and every guard compares against `(<tool>_dpkg_ok ~ <tool>_version)`. Multi-package playbooks
+  use the same var inside the per-package substring test —
+  `('podman ' ~ podman_dpkg_ok ~ podman_version) not in <register>.stdout`. To find hosts in
+  the state that exposes this:
+
+  ```bash
+  dpkg-query -W -f='${Status}|${Package}|${Version}\n' | grep -v '^install ok installed'
+  ```
+
 - **`npm ls -g a@1 b@2` exits 0 when *either* spec matches.** It is an OR across arguments, not an
   AND, so a guard checking two packages at once cannot tell "both pinned" from "only one of
   them". Run one `npm ls` per package and require every one to succeed.
@@ -534,19 +549,6 @@ Before opening a change for review, confirm:
 - [ ] README section updated: install paths, version override, and any grant or regression a user will hit
 
 ## Known exceptions and outstanding debt
-
-- **The C2 `${Status}` fix reached only the playbook it was found in.** `core/core-tools.yml`
-  reads `dpkg-query -W -f='${Status}|${Version}'`; the other 26 apt-based playbooks still read
-  `${Version}` alone and compare with `installed.rc != 0 or installed.stdout != <pin>`. That is
-  the blind guard C2 describes, and it reproduces on any host holding a package in
-  `deinstall ok config-files` state — which is not rare; a stock workstation typically has a
-  dozen. A package removed at exactly the pinned version is reported as installed, skipped, and
-  then "verified". Carrying the fix across is a mechanical change to task 1 and the verify task
-  of each. Check a host with:
-
-  ```bash
-  dpkg-query -W -f='${Status}|${Package}|${Version}\n' | grep -v '^install ok installed'
-  ```
 
 - **Five playbooks predate the `--check` work** and skip their own read-only checks under a dry
   run, per C1: `core/jq.yml`, `core/modern-tools.yml`, `misc/bats.yml`, `misc/jsonnet.yml`,

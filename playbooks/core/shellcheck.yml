@@ -21,6 +21,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    shellcheck_dpkg_ok: "install ok installed|"
     # dpkg version, including the Debian revision suffix, so the comparison
     # in task 2 is exact. This is Ubuntu 26.04 (resolute)'s current
     # candidate. apt is the chosen mechanism here, so overriding this only
@@ -33,7 +38,8 @@
 
   tasks:
     - name: 1. Check the currently installed shellcheck version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' shellcheck
+      # ${Status} as well as ${Version} -- see shellcheck_dpkg_ok above.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' shellcheck
       register: shellcheck_installed
       changed_when: false
       # check_mode: false throughout this playbook wherever a task only
@@ -45,9 +51,11 @@
     - name: 2. Decide whether shellcheck needs installing
       ansible.builtin.set_fact:
         shellcheck_install_needed: >-
-          {{ shellcheck_installed.rc != 0 or shellcheck_installed.stdout != shellcheck_version }}
+          {{ shellcheck_installed.rc != 0
+             or shellcheck_installed.stdout != (shellcheck_dpkg_ok ~ shellcheck_version) }}
         shellcheck_can_verify: >-
-          {{ not (ansible_check_mode and (shellcheck_installed.rc != 0 or shellcheck_installed.stdout != shellcheck_version)) }}
+          {{ not (ansible_check_mode and (shellcheck_installed.rc != 0
+             or shellcheck_installed.stdout != (shellcheck_dpkg_ok ~ shellcheck_version))) }}
 
     - name: 2a. Note that verification is deferred in this dry run
       ansible.builtin.debug:

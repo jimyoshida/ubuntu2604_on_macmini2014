@@ -27,6 +27,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    github_cli_dpkg_ok: "install ok installed|"
     github_cli_version: "2.97.0"
     github_cli_repo_uri: "https://cli.github.com/packages"
     github_cli_suite: stable
@@ -148,7 +153,8 @@
       # check_mode: false because this reads state that already exists. A
       # skipped command task registers rc 0 and an empty stdout, which task 9
       # would read as a version merely different from the pin.
-      ansible.builtin.command: dpkg-query -W -f='${Version}' gh
+      # ${Status} as well as ${Version} -- see github_cli_dpkg_ok above.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' gh
       register: github_cli_installed
       changed_when: false
       check_mode: false
@@ -158,11 +164,11 @@
       ansible.builtin.set_fact:
         github_cli_install_needed: >-
           {{ github_cli_installed.rc != 0
-             or github_cli_installed.stdout != github_cli_version }}
+               or github_cli_installed.stdout != (github_cli_dpkg_ok ~ github_cli_version) }}
         github_cli_can_verify: >-
           {{ not (ansible_check_mode
                   and (github_cli_installed.rc != 0
-                       or github_cli_installed.stdout != github_cli_version)) }}
+                         or github_cli_installed.stdout != (github_cli_dpkg_ok ~ github_cli_version))) }}
 
     - name: 9a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -189,10 +195,10 @@
         - not (ansible_check_mode and github_cli_repo.changed)
 
     - name: 11. Verify the installed gh package version
-      ansible.builtin.command: dpkg-query -W -f='${Version}' gh
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' gh
       register: github_cli_dpkg
       changed_when: false
-      failed_when: github_cli_dpkg.stdout != github_cli_version
+      failed_when: github_cli_dpkg.stdout != (github_cli_dpkg_ok ~ github_cli_version)
       when: github_cli_can_verify | bool
 
     - name: 12. Create a scratch HOME for the unprivileged checks

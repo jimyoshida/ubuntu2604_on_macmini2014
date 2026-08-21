@@ -50,6 +50,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    docker_dpkg_ok: "install ok installed|"
     # Release-specific pins: the version string embeds the Ubuntu codename, so
     # these are not portable across releases the way a plain semver pin is.
     # Check `apt-cache policy` on the target before bumping.
@@ -281,9 +286,10 @@
       # skipped command task registers rc 0 and an empty stdout, which task 9
       # would read as "nothing is at the pinned version" by accident rather
       # than by measurement.
+      # ${Status} as well as ${Version} -- see docker_dpkg_ok above.
       ansible.builtin.command:
         cmd: >-
-          dpkg-query -W -f='${Package} ${Version}\n'
+          dpkg-query -W -f='${Package} ${Status}|${Version}\n'
           docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
       register: docker_installed
       changed_when: false
@@ -293,18 +299,26 @@
     - name: 9. Decide whether the Docker packages need installing
       ansible.builtin.set_fact:
         docker_install_needed: >-
-          {{ ('docker-ce ' ~ docker_version) not in docker_installed.stdout
-             or ('docker-ce-cli ' ~ docker_version) not in docker_installed.stdout
-             or ('containerd.io ' ~ containerd_version) not in docker_installed.stdout
-             or ('docker-buildx-plugin ' ~ docker_buildx_version) not in docker_installed.stdout
-             or ('docker-compose-plugin ' ~ docker_compose_version) not in docker_installed.stdout }}
+          {{ ('docker-ce ' ~ docker_dpkg_ok ~ docker_version)
+             not in docker_installed.stdout
+               or ('docker-ce-cli ' ~ docker_dpkg_ok ~ docker_version) not in docker_installed.stdout
+               or ('containerd.io ' ~ docker_dpkg_ok ~ containerd_version) not in docker_installed.stdout
+               or ('docker-buildx-plugin ' ~ docker_dpkg_ok ~ docker_buildx_version)
+                  not in docker_installed.stdout
+               or ('docker-compose-plugin ' ~ docker_dpkg_ok ~ docker_compose_version)
+                  not in docker_installed.stdout }}
         docker_can_verify: >-
           {{ not (ansible_check_mode
-                  and (('docker-ce ' ~ docker_version) not in docker_installed.stdout
-                       or ('docker-ce-cli ' ~ docker_version) not in docker_installed.stdout
-                       or ('containerd.io ' ~ containerd_version) not in docker_installed.stdout
-                       or ('docker-buildx-plugin ' ~ docker_buildx_version) not in docker_installed.stdout
-                       or ('docker-compose-plugin ' ~ docker_compose_version) not in docker_installed.stdout)) }}
+                  and (('docker-ce ' ~ docker_dpkg_ok ~ docker_version)
+                     not in docker_installed.stdout
+                         or ('docker-ce-cli ' ~ docker_dpkg_ok ~ docker_version)
+                            not in docker_installed.stdout
+                         or ('containerd.io ' ~ docker_dpkg_ok ~ containerd_version)
+                            not in docker_installed.stdout
+                         or ('docker-buildx-plugin ' ~ docker_dpkg_ok ~ docker_buildx_version)
+                            not in docker_installed.stdout
+                         or ('docker-compose-plugin ' ~ docker_dpkg_ok ~ docker_compose_version)
+                            not in docker_installed.stdout)) }}
 
     - name: 9a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -338,16 +352,16 @@
     - name: 11. Verify the installed Docker package versions
       ansible.builtin.command:
         cmd: >-
-          dpkg-query -W -f='${Package} ${Version}\n'
+          dpkg-query -W -f='${Package} ${Status}|${Version}\n'
           docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
       register: docker_dpkg
       changed_when: false
       failed_when: >-
-        ('docker-ce ' ~ docker_version) not in docker_dpkg.stdout
-        or ('docker-ce-cli ' ~ docker_version) not in docker_dpkg.stdout
-        or ('containerd.io ' ~ containerd_version) not in docker_dpkg.stdout
-        or ('docker-buildx-plugin ' ~ docker_buildx_version) not in docker_dpkg.stdout
-        or ('docker-compose-plugin ' ~ docker_compose_version) not in docker_dpkg.stdout
+        ('docker-ce ' ~ docker_dpkg_ok ~ docker_version) not in docker_dpkg.stdout
+        or ('docker-ce-cli ' ~ docker_dpkg_ok ~ docker_version) not in docker_dpkg.stdout
+          or ('containerd.io ' ~ docker_dpkg_ok ~ containerd_version) not in docker_dpkg.stdout
+          or ('docker-buildx-plugin ' ~ docker_dpkg_ok ~ docker_buildx_version) not in docker_dpkg.stdout
+          or ('docker-compose-plugin ' ~ docker_dpkg_ok ~ docker_compose_version) not in docker_dpkg.stdout
       when: docker_can_verify | bool
 
     - name: 12. Ensure the Docker daemon is enabled and running

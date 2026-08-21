@@ -45,6 +45,11 @@
   gather_facts: true
 
   vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    dotnet_dpkg_ok: "install ok installed|"
     # apt candidate on Ubuntu 26.04 (resolute), checked 2026-08-17. apt
     # versions are release-specific (see shellcheck.yml's note on the same
     # issue), so overriding this only helps if that exact dpkg version is
@@ -63,7 +68,8 @@
     - name: 1. Check the currently installed .NET SDK version
       # dpkg-query, never `dotnet --version` as root -- see the header on why
       # running the CLI as root is a B2 violation.
-      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ dotnet_package }}"
+      # ${Status} as well as ${Version} -- see dotnet_dpkg_ok above.
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ dotnet_package }}"
       register: dotnet_installed
       changed_when: false
       check_mode: false
@@ -72,11 +78,12 @@
     - name: 2. Decide whether the .NET SDK needs installing
       ansible.builtin.set_fact:
         dotnet_install_needed: >-
-          {{ dotnet_installed.rc != 0 or dotnet_installed.stdout != dotnet_version }}
+          {{ dotnet_installed.rc != 0
+             or dotnet_installed.stdout != (dotnet_dpkg_ok ~ dotnet_version) }}
         dotnet_can_verify: >-
           {{ not (ansible_check_mode
                   and (dotnet_installed.rc != 0
-                       or dotnet_installed.stdout != dotnet_version)) }}
+                         or dotnet_installed.stdout != (dotnet_dpkg_ok ~ dotnet_version))) }}
 
     - name: 2a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
@@ -99,11 +106,11 @@
       when: dotnet_install_needed | bool
 
     - name: 4. Verify the installed .NET SDK package version
-      ansible.builtin.command: "dpkg-query -W -f='${Version}' {{ dotnet_package }}"
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ dotnet_package }}"
       register: dotnet_version_out
       changed_when: false
       check_mode: false
-      failed_when: dotnet_version != dotnet_version_out.stdout
+      failed_when: dotnet_version_out.stdout != (dotnet_dpkg_ok ~ dotnet_version)
       when: dotnet_can_verify | bool
 
     - name: 5. Create a scratch HOME for the unprivileged checks
@@ -172,7 +179,7 @@
       ansible.builtin.debug:
         msg:
           - >-
-            .NET SDK {{ dotnet_version_out.stdout | default(dotnet_version, true) | trim }}
+            .NET SDK {{ dotnet_version }}
             installed system-wide.
           - ""
           - "  {{ dotnet_bin }}"
