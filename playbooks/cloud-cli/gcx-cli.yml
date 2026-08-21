@@ -51,7 +51,7 @@
     gcx_cli_bin: /usr/local/bin/gcx
     gcx_cli_completion: /etc/bash_completion.d/gcx
     # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts, and
-    # this binary is ~100MiB unpacked (see MIGRATION.md).
+    # this binary is ~100MiB unpacked (see POLICY.md's C4).
     gcx_cli_stage_dir: "/var/tmp/gcx-cli-install-{{ gcx_cli_version }}"
     gcx_cli_smoke_home: /var/tmp/gcx-cli-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
@@ -282,8 +282,8 @@
       when: gcx_cli_can_verify | bool
 
     - name: 19. Confirm a login shell resolves gcx to the system-wide copy
-      # The Homebrew follow-up in MIGRATION2.md: if `brew shellenv` is injected
-      # system-wide it wins on PATH, so users keep silently running a per-user
+      # The Homebrew PATH trap: if `brew shellenv` is injected system-wide
+      # it wins on PATH, so users keep silently running a per-user
       # brew copy after migration. `env -i ... bash -lc` starts from an empty
       # environment, so PATH comes purely from /etc/profile and (via it)
       # /etc/bash.bashrc. It cannot see a brew line in an individual user's own
@@ -300,8 +300,8 @@
 
     - name: 20. Remove the scratch HOME
       # gcx has no background uploader that recreates it: verified on the
-      # target, the directory stays gone. (az does recreate it -- see
-      # MIGRATION2.md -- so this is worth checking per tool, not assuming.)
+      # target, the directory stays gone. (az does recreate it, so this is
+      # worth checking per tool rather than assuming.)
       ansible.builtin.file:
         path: "{{ gcx_cli_smoke_home }}"
         state: absent

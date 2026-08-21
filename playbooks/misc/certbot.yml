@@ -32,7 +32,7 @@
 # /root/.local/share/man -- confirmed by removing that directory, running an
 # install with PIPX_MAN_DIR set (it stays gone, and the configured directory
 # appears instead), then running one without it (it comes back). Writing
-# under root's own $HOME is what MIGRATION3's B2 forbids, and it also puts
+# under root's own $HOME is what POLICY.md's B2 forbids, and it also puts
 # any man page a package ships somewhere no other account can read.
 #
 # Usage:

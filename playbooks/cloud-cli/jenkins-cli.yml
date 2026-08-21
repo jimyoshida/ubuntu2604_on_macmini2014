@@ -7,10 +7,9 @@
 #   /etc/profile.d/jenkins-cli.sh      the shared, non-secret default JENKINS_URL
 #
 # The source playbook (cloud-cli/jenkins-cli.yml) already installed to
-# root-owned paths, so MIGRATION2.md files this under "install-time
-# lookup('env', ...) baked into shared state": it rendered the *invoking
-# shell's* $JENKINS_URL into the wrapper that every account executes, so one
-# person's environment silently became everyone's default.
+# root-owned paths, so what it got wrong was POLICY.md's A2: it rendered the
+# *invoking shell's* $JENKINS_URL into the wrapper that every account
+# executes, so one person's environment silently became everyone's default.
 #
 # Fixing that is the small half of this migration. The large half is where the
 # jar comes from:
@@ -76,7 +75,7 @@
     jenkins_cli_alias: /usr/local/bin/jenkins
     jenkins_cli_profile: /etc/profile.d/jenkins-cli.sh
     # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and the
-    # jar is ~11MiB (see MIGRATION.md).
+    # jar is ~11MiB (see POLICY.md's C4).
     jenkins_cli_stage_dir: "/var/tmp/jenkins-cli-install-{{ jenkins_cli_version }}"
     jenkins_cli_smoke_home: /var/tmp/jenkins-cli-smoke-home
     # A port nothing listens on. The smoke test asserts the CLI gets as far as

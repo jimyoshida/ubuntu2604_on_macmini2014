@@ -21,7 +21,7 @@
 # cloud-cli/gcloud-cli.yml, which does not install kubectl and has no idea it
 # is involved. The source playbook's unpinned `apt: name=kubectl` therefore
 # installed a different vendor's binary than the repository it had just
-# configured, and reported success (MIGRATION3.md B5, decision (a)).
+# configured, and reported success (POLICY.md B5).
 #
 # Pinning at install time is not enough: `apt install kubectl=1.36.3-1.1
 # --allow-downgrades` works once, and the next unrelated `apt upgrade` drags
@@ -70,7 +70,7 @@
     kubectl_repo_uri: "https://pkgs.k8s.io/core:/stable:/{{ kubectl_stream }}/deb/"
     kubectl_key_url: "https://pkgs.k8s.io/core:/stable:/{{ kubectl_stream }}/deb/Release.key"
     # The OBS project key for this stream. It EXPIRES 2026-12-29, so
-    # MIGRATION2's rule puts this on the URL form: fetch each run (the module
+    # POLICY.md's A5 puts this on the URL form: fetch each run (the module
     # compares by checksum, so it stays idempotent) and pin only the
     # fingerprint. Pinning the bytes, as container/docker.yml does for Docker's
     # non-expiring key, would simply stop working at the end of the year.

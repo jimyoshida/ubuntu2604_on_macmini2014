@@ -12,16 +12,16 @@
 # What changed versus the source playbook:
 #   - Pinned version. The source installed `@devcontainers/cli@latest`, so what
 #     landed depended on the day it ran and nothing recorded which.
-#   - Version-aware idempotency (MIGRATION.md policy point 6). The source
-#     guarded on `which devcontainer`, so it installed the newest version once
+#   - Version-aware idempotency (POLICY.md point 6). The source guarded on
+#     `which devcontainer`, so it installed the newest version once
 #     and then never moved again: this host sat on 0.87.0 while upstream was on
 #     0.88.0 for exactly that reason. Bumping devcontainers_cli_version now
 #     actually replaces the package.
 #   - npm's global prefix is read at run time rather than assumed. It is not
 #     fixed: an apt-installed nodejs defaults it to /usr/local, a NodeSource one
-#     to /usr (this host). MIGRATION.md's markdownlint finding.
+#     to /usr (this host). POLICY.md's C5.
 #   - Verification runs as an arbitrary uid with a scratch HOME instead of as
-#     the connecting account (policy point 9, MIGRATION3.md B4).
+#     the connecting account (POLICY.md point 9 and B4).
 #
 # There is no per-user state and no grant: the CLI keeps nothing under $HOME of
 # its own, and needs no group membership to run. Driving a dev container does
@@ -43,7 +43,7 @@
   vars:
     devcontainers_cli_version: "0.88.0"
     # Disk-backed rather than /tmp, which is a size-capped tmpfs on these hosts
-    # (MIGRATION.md's grype-syft finding). The CLI writes into HOME on first run.
+    # (POLICY.md's C4). The CLI writes into HOME on first run.
     devcontainers_smoke_home: /var/tmp/devcontainers-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
     devcontainers_verify_uid: 65534    # nobody
@@ -132,7 +132,7 @@
     - name: 11. Create a scratch HOME for the unprivileged smoke test
       # check_mode: false so the directory really exists for the length of the
       # run: the smoke test below sets chdir, and the command action validates
-      # chdir before check mode skips the task (MIGRATION2's opentofu finding).
+      # chdir before check mode skips the task (POLICY.md's C1).
       ansible.builtin.file:
         path: "{{ devcontainers_smoke_home }}"
         state: directory
@@ -162,7 +162,7 @@
       #
       # HOME is a scratch directory the task owns, since the CLI writes there in
       # the modes that do work (A4). chdir keeps the cwd somewhere uid 65534 can
-      # traverse -- MIGRATION2's gcx finding, where a correct install failed its
+      # traverse -- POLICY.md's C6, where a correct install failed its
       # own verification on the working directory.
       ansible.builtin.command:
         cmd: >-

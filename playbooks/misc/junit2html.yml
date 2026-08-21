@@ -14,7 +14,7 @@
 # cosmetic: left unset, pipx creates /root/.local/share/man on every run --
 # confirmed by removing that directory, running an install with the variable
 # set (it stays gone) and one without it (it comes back). Writing under
-# root's own $HOME is what MIGRATION3's B2 forbids, and it also puts any man
+# root's own $HOME is what POLICY.md's B2 forbids, and it also puts any man
 # page a package ships somewhere no other account can read. Task 2 clears up
 # the directory left behind by runs made before this was set.
 #

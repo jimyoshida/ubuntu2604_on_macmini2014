@@ -47,7 +47,7 @@
     gitlab_cli_arch: "{{ gitlab_cli_arch_map.get(ansible_facts['architecture'], '') }}"
     gitlab_cli_deb: "glab_{{ gitlab_cli_version }}_linux_{{ gitlab_cli_arch }}.deb"
     # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts (see
-    # MIGRATION.md). The source playbook staged in /tmp.
+    # POLICY.md's C4). The source playbook staged in /tmp.
     gitlab_cli_stage_dir: "/var/tmp/glab-install-{{ gitlab_cli_version }}"
     gitlab_cli_smoke_home: /var/tmp/gitlab-cli-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user

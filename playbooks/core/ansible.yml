@@ -48,7 +48,7 @@
 # dpkg-query output instead (confirmed live: `env -i HOME=<scratch> ansible
 # --version` creates <scratch>/.ansible/tmp from the plainest possible
 # invocation). Running that as root would leave /root/.ansible behind, which
-# is what MIGRATION3's B2 forbids -- the same rule that shapes mise.yml.
+# is what POLICY.md's B2 forbids -- the same rule that shapes mise.yml.
 # ansible-galaxy is worse: it writes a galaxy_token file and a galaxy_cache/
 # directory. It is the one ansible command here that HAS to run as root
 # (it writes into a root-owned system path), so it gets a scratch HOME and

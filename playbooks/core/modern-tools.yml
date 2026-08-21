@@ -18,8 +18,8 @@
 #
 # fzf's key bindings only take effect if /etc/profile.d is actually sourced by
 # interactive shells: this playbook also lays down the /etc/bash.bashrc hook
-# for that (see MIGRATION.md's "Known follow-ups"), since fzf is the first
-# migrated tool that needs it. It is a harmless no-op for any later playbook
+# for that (POLICY.md's B3), since fzf is the first tool here that needs
+# it. It is a harmless no-op for any later playbook
 # that needs the same hook (blockinfile is idempotent on its marker).
 #
 # Usage:

@@ -24,7 +24,7 @@
 # ~/.config/powershell (profiles) and ~/.local/share/powershell (modules
 # installed with -Scope CurrentUser) -- confirmed live, the cache appears on
 # the plainest possible invocation. Running it as root would leave that under
-# /root, which MIGRATION3's B2 forbids, so the idempotency check reads the
+# /root, which POLICY.md's B2 forbids, so the idempotency check reads the
 # filesystem and every pwsh invocation below is unprivileged with a scratch
 # HOME.
 #

@@ -42,7 +42,7 @@
     dvc_repo_uri: "https://dvc.org/deb/"
     dvc_suite: stable
     dvc_component: main
-    # The Iterative signing key EXPIRES 2027-03-05, so MIGRATION2's rule puts
+    # The Iterative signing key EXPIRES 2027-03-05, so POLICY.md's A5 puts
     # this on the URL form -- fetch each run (the module compares by
     # checksum, so it stays idempotent) and pin only the fingerprint. Same
     # shape as mise.yml and github-cli.yml, not the inline-key form.

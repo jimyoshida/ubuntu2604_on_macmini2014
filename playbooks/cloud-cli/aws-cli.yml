@@ -20,7 +20,8 @@
 #
 # apt was considered and rejected: Ubuntu 26.04 universe carries a genuine
 # v2 (2.31.x) but trails upstream by several minor releases and will drift
-# further over an LTS lifetime. See MIGRATION2.md.
+# further over an LTS lifetime, while `aws` ships weekly. Revisit if
+# `apt-cache policy awscli` on the target ever lands close to upstream.
 #
 # Usage:
 #   ansible-playbook cloud-cli/aws-cli.yml -e host=<inventory host or group>
@@ -50,7 +51,7 @@
     aws_cli_arch: "{{ aws_cli_arch_map[ansible_facts['architecture']] | default('') }}"
     aws_cli_zip: "awscli-exe-linux-{{ aws_cli_arch }}-{{ aws_cli_version }}.zip"
     # Disk-backed, not /tmp: the installer zip is ~70MiB and unpacks larger,
-    # and /tmp is a size-capped tmpfs on these hosts (see MIGRATION.md).
+    # and /tmp is a size-capped tmpfs on these hosts (see POLICY.md's C4).
     aws_cli_stage_dir: "/var/tmp/awscli-install-{{ aws_cli_version }}"
     aws_cli_smoke_home: /var/tmp/aws-cli-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user

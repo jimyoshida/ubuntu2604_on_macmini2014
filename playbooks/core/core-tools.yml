@@ -21,10 +21,9 @@
 #   - aha has no reliable --version output. Verified by feeding it a
 #     real ANSI escape sequence and checking it did real work: converted to
 #     an HTML document, not just echoed back.
-# Every verify_cmd below was confirmed against the actual installed binary on
-# this host, not carried over from documentation -- see MIGRATION4.md's own
-# note that several of its guesses were only "medium" or "low" confidence
-# before that check.
+# Every verify_cmd below was confirmed against the actual installed binary
+# rather than carried over from documentation, which is worth doing rather
+# than assuming: several plausible-looking guesses turned out to be wrong.
 #
 # A verify_cmd must FAIL when the binary is absent, which is not automatic:
 # `<tool> --version 2>&1 | grep -qi '<tool>'` passes with the tool uninstalled,
@@ -251,8 +250,7 @@
       # Built as a real Jinja list, not a folded string joined on a literal
       # '\n' -- confirmed at run time that a '\n' inside a >- folded scalar
       # never reaches Jinja as an escape (YAML block scalars do not process
-      # backslash escapes, so it stays two literal characters), which is what
-      # MIGRATION.md's trim_blocks finding was working around. A YAML/Jinja
+      # backslash escapes, so it stays two literal characters). A YAML/Jinja
       # list handed straight to debug's msg prints one line per element with
       # no join or escaping needed at all.
       ansible.builtin.debug:

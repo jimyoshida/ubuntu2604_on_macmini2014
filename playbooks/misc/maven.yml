@@ -25,7 +25,7 @@
 #    already 0755 (confirmed against the published artifact).
 # 3. No settings.xml of this repo's own. The distribution ships its own
 #    conf/settings.xml and it is left exactly as shipped -- writing a copy
-#    here to configure nothing is the kind of dead config MIGRATION2's A2/A3
+#    here to configure nothing is the kind of dead config POLICY.md's A2/A3
 #    removed elsewhere. A host that genuinely needs a proxy or a mirror sets
 #    it in that file or in each account's ~/.m2/settings.xml.
 # 4. The JDK itself is provisioned by core/openjdk.yml, not by this playbook:
@@ -51,8 +51,8 @@
 #     here relies on $HOME for the local repository.)
 #   * The `mvn` script cds around while looking for a project base directory,
 #     so an unprivileged process left in a directory it cannot read prints
-#     "cd: can't cd to /home/<invoker>" -- the same defect MIGRATION2 found
-#     in gcx-cli.yml. Each check chdirs into its own scratch project.
+#     "cd: can't cd to /home/<invoker>" -- the second half of POLICY.md's C6.
+#     Each check chdirs into its own scratch project.
 #
 # Usage:
 #   ansible-playbook misc/maven.yml -e host=<inventory host or group>

@@ -37,7 +37,7 @@
     databricks_cli_bin: /usr/local/bin/databricks
     databricks_cli_completion: /etc/bash_completion.d/databricks
     # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts (see
-    # MIGRATION.md).
+    # POLICY.md's C4).
     databricks_cli_stage_dir: "/var/tmp/databricks-cli-install-{{ databricks_cli_version }}"
     databricks_cli_smoke_home: /var/tmp/databricks-cli-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user

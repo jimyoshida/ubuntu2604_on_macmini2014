@@ -64,10 +64,9 @@
     vault_cli_version: "2.0.4-1"
     vault_cli_binary_version: "{{ vault_cli_version | regex_replace('-[0-9]+$', '') }}"
     vault_cli_repo_uri: "https://apt.releases.hashicorp.com"
-    # HashiCorp's Artifactory publishes a suite per Ubuntu codename, and -- in
-    # correction of MIGRATION2.md, which recorded that it did not -- resolute
-    # IS published: /dists/resolute/InRelease is a real, signed index carrying
-    # the same 184 vault versions as noble, generated in the same run.
+    # HashiCorp's Artifactory publishes a suite per Ubuntu codename, and
+    # resolute IS published: /dists/resolute/InRelease is a real, signed index
+    # carrying the same 184 vault versions as noble, generated in the same run.
     #
     # noble is used anyway, and the map is kept rather than reading
     # ansible_facts['distribution_release'] directly, because the now-deleted
@@ -328,8 +327,8 @@
       when: vault_cli_can_verify | bool
 
     - name: 17. Confirm a login shell resolves vault to the system-wide copy
-      # The Homebrew follow-up in MIGRATION2.md: if `brew shellenv` is injected
-      # system-wide it wins on PATH, so users keep silently running a per-user
+      # The Homebrew PATH trap: if `brew shellenv` is injected system-wide
+      # it wins on PATH, so users keep silently running a per-user
       # brew copy after migration. `env -i ... bash -lc` starts from an empty
       # environment, so PATH comes purely from /etc/profile and (via it)
       # /etc/bash.bashrc. It cannot see a brew line in an individual user's own

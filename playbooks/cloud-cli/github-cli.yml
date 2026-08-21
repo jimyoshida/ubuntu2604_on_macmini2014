@@ -197,7 +197,7 @@
 
     - name: 12. Create a scratch HOME for the unprivileged checks
       # gh reads and writes ~/.config/gh. /var/tmp rather than /tmp, which is
-      # a size-capped tmpfs on these hosts (see MIGRATION.md).
+      # a size-capped tmpfs on these hosts (see POLICY.md's C4).
       ansible.builtin.file:
         path: "{{ github_cli_smoke_home }}"
         state: directory

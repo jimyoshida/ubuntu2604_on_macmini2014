@@ -11,9 +11,8 @@
 # day it ran: anyone who ran it before Helm 4 shipped has 3.x, anyone who ran
 # it after gets 4.x, and nothing recorded which. Pinning is therefore not a
 # no-op -- it is choosing, on the record, which major version this repo
-# installs. 4.2.3-1 is that choice (MIGRATION3.md, decided 2026-08-14), taken
-# because no consumer in this repo templates a chart and Helm was not
-# installed on any host here at all.
+# installs. 4.2.3-1 is that choice, taken because no consumer in this repo
+# templates a chart and Helm was not installed on any host here at all.
 #
 # The 3.x line is still published from the same repository under the same
 # package name, so the fallback costs nothing to support:
@@ -64,7 +63,7 @@
     helm_verify_gid: 65534    # nogroup
     # packagecloud's signing key for this repository, fingerprint
     # DDF78C3E6EBB2D2CC223C95C62BA89D07698DBC6 -- the same one the source
-    # playbook asserted. It carries NO EXPIRY, so per MIGRATION2's rule the
+    # playbook asserted. It carries NO EXPIRY, so per POLICY.md's A5 the
     # bytes are pinned inline as well as the fingerprint, the same form
     # container/docker.yml uses. (Contrast container/kubectl.yml, whose key
     # expires and is therefore fetched by URL each run.)

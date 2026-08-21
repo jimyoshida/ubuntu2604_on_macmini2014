@@ -16,7 +16,7 @@
 # running the playbook, ever got mise's shell integration.
 #
 # eval "$(mise activate bash)" is a PATH/env-rewriting hook, not a completion
-# and not a static alias, so per MIGRATION3's B3 it takes the same
+# and not a static alias, so per POLICY.md's B3 it takes the same
 # destination as modern-tools.yml's fzf.sh: a literal,
 # live `eval "$(mise activate bash)"` line in /etc/profile.d/mise.sh, run
 # fresh on every interactive shell rather than a snapshot of its output. That
@@ -73,7 +73,7 @@
       aarch64: arm64
     mise_arch: "{{ mise_arch_map.get(ansible_facts['architecture'], '') }}"
     # mise's signing key EXPIRES 2028-01-02 (checked 2026-08-15), so
-    # MIGRATION2's rule puts this on the URL form: fetch each run (the module
+    # POLICY.md's A5 puts this on the URL form: fetch each run (the module
     # compares by checksum, so it stays idempotent) and pin only the
     # fingerprint -- the github-cli.yml/kubectl.yml form, not the
     # docker.yml/nodejs.yml one.
@@ -317,5 +317,5 @@
                 "an 'ANSIBLE MANAGED BLOCK: mise' eval in that one account's ~/.bashrc.",
                 'This playbook does not remove it -- it is redundant with the hook above,',
                 "not harmful, and removing text from an account's $HOME is a decision this",
-                'migration leaves to the operator (see MIGRATION4.md known follow-ups).']
+                "repository leaves to the operator (see POLICY.md's known exceptions)."]
           ) }}

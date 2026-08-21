@@ -10,7 +10,7 @@
 #
 #   - `stat.exists` as the install guard, so a version bump silently no-opped.
 #     That is not hypothetical: this host ran 0.27.0 from a playbook that could
-#     have been re-run at any time (MIGRATION.md policy point 6).
+#     have been re-run at any time (POLICY.md point 6).
 #   - No checksum verification of the downloaded binary.
 #   - The architecture hardcoded as amd64.
 #   - The completion written into one account's ~/.bashrc as
@@ -98,7 +98,7 @@
       register: kind_checksum
       # Fetching a published checksum changes nothing, so let --check do it:
       # a dry run then genuinely validates the version pin against upstream
-      # without downloading or installing (MIGRATION2's gitlab-cli finding).
+      # without downloading or installing (POLICY.md's C1).
       check_mode: false
       when: kind_install_needed | bool
 

@@ -9,13 +9,13 @@
 # What it got wrong:
 #
 #   - `stat.exists` as the install guard, so a version bump silently no-opped
-#     (MIGRATION.md policy point 6). Its sibling container/kind.yml left this
+#     (POLICY.md point 6). Its sibling container/kind.yml left this
 #     host on kind 0.27.0 for exactly that reason.
 #   - No checksum verification, and the architecture hardcoded as amd64.
 #   - `minikube config set driver docker` with `become: no` (task 6), which
 #     writes ~/.minikube/config/config.json for whoever ran the playbook and
 #     nobody else -- so the "default driver" it set was a default for exactly
-#     one account. Dropped here per MIGRATION3.md B2: no task in this playbook
+#     one account. Dropped here per POLICY.md B2: no task in this playbook
 #     writes anything under any account's $HOME, including the connecting
 #     account's.
 #   - The completion written into one account's ~/.bashrc (B3).

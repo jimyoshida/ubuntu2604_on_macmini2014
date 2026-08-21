@@ -14,7 +14,7 @@
 # accounts named in docker_users, which defaults to empty -- so a fresh run
 # produces a working daemon that the invoking account cannot talk to. That is
 # the correct default on a shared box, and it will look like a regression to
-# the first person who hits it (MIGRATION3.md B1).
+# the first person who hits it (POLICY.md B1).
 #
 #   ansible-playbook container/docker.yml -e host=ws01 -e docker_users=alice,bob
 #
@@ -80,7 +80,7 @@
     docker_verify_gid: 65534    # nogroup
     # Docker's release-signing key, fingerprint
     # 9DC858229FC7DD38854AE2D88D81803C0EBFCD88. It carries NO EXPIRY, so
-    # MIGRATION2's rule says to pin the bytes as well as the fingerprint: the
+    # POLICY.md's A5 says to pin the bytes as well as the fingerprint: the
     # key material is the trust anchor and a rotation should fail apt's Release
     # check loudly rather than be followed silently. (Contrast github-cli.yml,
     # whose signing key expires and is therefore fetched each run with only its
@@ -372,7 +372,7 @@
 
     - name: 14. Create a scratch HOME for the unprivileged checks
       # docker reads ~/.docker. /var/tmp rather than /tmp, which is a
-      # size-capped tmpfs on these hosts (MIGRATION.md's grype-syft finding).
+      # size-capped tmpfs on these hosts (POLICY.md's C4).
       ansible.builtin.file:
         path: "{{ docker_smoke_home }}"
         state: directory

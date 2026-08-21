@@ -11,12 +11,12 @@
 #
 #   - It ran `loginctl enable-linger` for `lookup('env', 'USER')` -- a per-account
 #     grant, made to whoever happened to run the playbook. Lingering is now an
-#     explicit list that defaults to empty (MIGRATION3.md B1). Empty means this
+#     explicit list that defaults to empty (POLICY.md B1). Empty means this
 #     playbook grants nothing, which is the correct default on a shared box.
 #   - It appended `xhost +local:podman` to that account's ~/.bashrc, loosening X
 #     server access control on every interactive shell, from a playbook whose job
 #     is installing a container runtime. Deleted outright, with no replacement
-#     (MIGRATION3.md B5, decided 2026-08-14).
+#     (POLICY.md B5).
 #   - Neither package was pinned, and facts were not gathered.
 #
 # This playbook writes nothing under any account's $HOME, including the
@@ -46,8 +46,8 @@
     # Ubuntu archive (resolute/universe) versions. These pins are release-specific
     # -- apt candidates differ between 24.04 and 26.04 and an install fails
     # outright when the pin is not what the target's sources carry. Check
-    # `apt-cache policy` on the target before bumping (MIGRATION.md's shellcheck
-    # finding).
+    # `apt-cache policy` on the target before bumping (the same caveat
+    # core/shellcheck.yml carries).
     podman_version: "5.7.0+ds2-3build1"
     podman_compose_version: "1.5.0-2"
     # Accounts whose user services survive logout. A grant, not an install, so it
@@ -56,7 +56,7 @@
     # named-account var in this repo takes.
     podman_linger_users: []
     # Scratch HOME for the smoke test. Disk-backed rather than /tmp, which is a
-    # size-capped tmpfs on these hosts (MIGRATION.md's grype-syft finding).
+    # size-capped tmpfs on these hosts (POLICY.md's C4).
     podman_smoke_home: /var/tmp/podman-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
     podman_verify_uid: 65534    # nobody
@@ -103,7 +103,7 @@
       # check_mode: false because this reads state that already exists -- a
       # skipped command task registers rc 0 and an empty stdout, which task 2
       # would read as "neither is at the pinned version", true here by accident
-      # rather than by measurement (MIGRATION2's promtool pattern).
+      # rather than by measurement (POLICY.md's C1).
       ansible.builtin.command:
         cmd: dpkg-query -W -f='${Package} ${Version}\n' podman podman-compose
       register: podman_installed
@@ -159,9 +159,9 @@
       # even `podman --version` stats $HOME/.config first, and setpriv does not
       # change HOME, so without this the check fails as
       # `stat /root/.config: permission denied`: a correct install failing its
-      # own verification on the connecting account's HOME. A4's writable-HOME
-      # mechanic, which turns out to apply to podman more aggressively than to
-      # any tool in MIGRATION2.
+      # own verification on the connecting account's HOME. POLICY.md's A4
+      # writable-HOME mechanic, which applies to podman more aggressively than
+      # to any of the cloud CLIs it was written for.
       ansible.builtin.file:
         path: "{{ podman_smoke_home }}"
         state: directory

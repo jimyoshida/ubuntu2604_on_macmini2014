@@ -27,8 +27,8 @@
 # on the npm registry the first time any account invokes it, non-deterministic
 # across accounts and across time, into that account's own npm/Corepack cache.
 #
-# The fix (MIGRATION4.md's decision (a)): `corepack disable` removes
-# Corepack's shims, then `npm install -g yarn@<version> pnpm@<version>` --
+# The fix: `corepack disable` removes Corepack's shims, then
+# `npm install -g yarn@<version> pnpm@<version>` --
 # already this repo's trusted mechanism for a root-owned global npm install,
 # per core/markdownlint.yml -- puts real, pinned packages at the same paths.
 #
@@ -92,7 +92,7 @@
     nodejs_arch: "{{ nodejs_arch_map.get(ansible_facts['architecture'], '') }}"
     # NodeSource's signing key carries NO EXPIRY (checked 2026-08-15:
     # `gpg --show-keys` reports an empty expiration field on the primary
-    # [SC] key), so MIGRATION2's rule pins the bytes inline rather than
+    # [SC] key), so POLICY.md's A5 pins the bytes inline rather than
     # fetching by URL -- the docker.yml/azure-cli.yml form, not the
     # github-cli.yml/kubectl.yml one.
     nodejs_key_fingerprint: "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"

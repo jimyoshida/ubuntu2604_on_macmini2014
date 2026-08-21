@@ -154,8 +154,9 @@
       # The entry is "<hash>  /root/project/packages/<file>" -- InfluxData's
       # build path is baked into the published file -- so the pattern allows an
       # optional directory prefix rather than anchoring straight after the
-      # whitespace. Same class of trap as the bin/ prefix MIGRATION.md warns
-      # about; anchoring on the bare filename would find nothing.
+      # whitespace. Checksum files vary in how they spell the filename -- a
+      # bin/ prefix is the other form seen here -- so confirm the format
+      # before pinning a pattern; anchoring on the bare filename finds nothing.
       ansible.builtin.set_fact:
         influx_cli_sha256: >-
           {{ (influx_cli_checksum_file.content | default('')
@@ -330,8 +331,8 @@
       when: influx_cli_can_verify | bool
 
     - name: 21. Confirm a login shell resolves influx to the system-wide copy
-      # The Homebrew follow-up in MIGRATION2.md: if `brew shellenv` is injected
-      # system-wide it wins on PATH, so users keep silently running a per-user
+      # The Homebrew PATH trap: if `brew shellenv` is injected system-wide
+      # it wins on PATH, so users keep silently running a per-user
       # brew copy after migration. `env -i ... bash -lc` starts from an empty
       # environment, so PATH comes purely from /etc/profile and (via it)
       # /etc/bash.bashrc. It cannot see a brew line in an individual user's own

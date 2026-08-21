@@ -12,7 +12,7 @@
 # This installs CLI tools only. The `prometheus-alertmanager` package exists
 # here purely because it is what ships amtool; its daemon is stopped and
 # disabled, exactly as the source playbook did. Deploying an actual
-# Alertmanager is out of scope (MIGRATION2.md).
+# Alertmanager is out of scope for this repository.
 #
 # There is no per-user state to speak of: amtool reads an optional
 # ~/.config/amtool/config.yml, which this playbook does not create for anyone.
@@ -34,7 +34,7 @@
     # playbooks these pins are release-specific: apt candidates differ between
     # 24.04 and 26.04, and an install fails outright when the pin is not what
     # the target's sources carry. Check `apt-cache policy` on the target
-    # before bumping -- the shellcheck.yml finding in MIGRATION.md.
+    # before bumping -- the same caveat core/shellcheck.yml carries.
     promtool_version: "2.53.5+ds1-3"
     alertmanager_version: "0.28.1+ds-3"
     promtool_smoke_dir: /var/tmp/promtool-smoke
@@ -113,7 +113,7 @@
 
     - name: 6. Create the scratch directory for the unprivileged checks
       # Disk-backed rather than /tmp, which is a size-capped tmpfs on these
-      # hosts (see MIGRATION.md). World-readable, since the configs written
+      # hosts (see POLICY.md's C4). World-readable, since the configs written
       # into it are read back by uid 65534.
       ansible.builtin.file:
         path: "{{ promtool_smoke_dir }}"

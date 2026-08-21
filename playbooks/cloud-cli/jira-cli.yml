@@ -49,7 +49,7 @@
     jira_cli_bin: /usr/local/bin/jira
     jira_cli_completion: /etc/bash_completion.d/jira
     # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts (see
-    # MIGRATION.md).
+    # POLICY.md's C4).
     jira_cli_stage_dir: "/var/tmp/jira-cli-install-{{ jira_cli_version }}"
     jira_cli_smoke_home: /var/tmp/jira-cli-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
@@ -278,9 +278,9 @@
       when: jira_cli_can_verify | bool
 
     - name: 19. Confirm a login shell resolves jira to the system-wide copy
-      # The Homebrew follow-up in MIGRATION2.md: four of these tools currently
-      # live in /home/linuxbrew/.linuxbrew/bin, and if `brew shellenv` is
-      # injected system-wide it wins on PATH -- so users keep silently running
+      # The Homebrew PATH trap: some of these tools may still live in
+      # /home/linuxbrew/.linuxbrew/bin, and if `brew shellenv` is injected
+      # system-wide it wins on PATH -- so users keep silently running
       # the per-user brew copy after migration. `env -i ... bash -lc` starts
       # from an empty environment, so PATH comes purely from /etc/profile and
       # (via it) /etc/bash.bashrc.

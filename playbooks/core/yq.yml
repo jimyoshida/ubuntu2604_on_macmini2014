@@ -3,7 +3,7 @@
 #
 # Ubuntu's apt `yq` is kislyuk/yq, a Python wrapper around jq with entirely
 # different syntax from mikefarah's Go yq that scripts in this repo expect
-# (see the decision-order gotcha in MIGRATION.md). Silently swapping one for
+# (see INSTALL-MECHANISMS.md). Silently swapping one for
 # the other under the same command name would break any script written
 # against the Go one, so this installs the real thing as a release binary:
 #

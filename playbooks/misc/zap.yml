@@ -27,7 +27,7 @@
 #     trap maven.yml documents, and it bites harder here: ZAP treats it as
 #     fatal rather than falling back.)
 #   * Running zap.sh as root without -dir creates /root/.ZAP -- confirmed by
-#     doing it -- which is what MIGRATION3's B2 forbids. So this playbook
+#     doing it -- which is what POLICY.md's B2 forbids. So this playbook
 #     never runs ZAP as root at all: the install is checked on the
 #     filesystem, and the one ZAP invocation is the unprivileged scan.
 #
