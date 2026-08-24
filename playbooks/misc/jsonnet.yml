@@ -8,7 +8,7 @@
 #
 # There is no per-user state and nothing to add to a shell profile.
 #
-# Split out from core/modern-tools.yml (like jq.yml) so it can be pinned and
+# Split out from core/modern-tools.yml (like yq.yml) so it can be pinned and
 # verified independently of the rest of that bundle.
 #
 # Usage:

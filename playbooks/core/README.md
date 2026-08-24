@@ -22,19 +22,21 @@ as an arbitrary uid (`setpriv --reuid=65534`) rather than as the connecting acco
 
 ## core-tools.yml
 
-Installs eighteen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
-`lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `zip`, `unzip`, `vim`,
-`net-tools`, `ncat`, `figlet`, `dos2unix`, `make`, `parallel`, `ca-certificates`, `aha` — all
-to `/usr/bin` (or, for `ca-certificates`, a data file with no binary at all). Nothing is added
-to a shell profile, and the only per-user state any of them creates is GNU parallel's: running
-a job — not `--version`, which writes nothing — makes `~/.parallel/tmp` in the invoking
-account's own home, where it belongs. `jq` has its own dedicated playbook,
-[`jq.yml`](#jqyml).
+Installs twenty-two general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
+`lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `cpanminus`, `mailutils`, `jq`,
+`xlsx2csv`, `docx2txt`, `zip`, `unzip`, `net-tools`, `ncat`, `figlet`, `dos2unix`, `make`,
+`parallel`, `ca-certificates`, `aha` — all to `/usr/bin` (or, for `ca-certificates`, a data file
+with no binary at all). Nothing is added to a shell profile, and the only per-user state any of
+them creates is GNU parallel's: running a job — not `--version`, which writes nothing — makes
+`~/.parallel/tmp` in the invoking account's own home, where it belongs. The install task passes
+`install_recommends: false`, added for `mailutils` (whose only recommendation is a full
+`default-mta` like postfix) but applied across the board so no package here pulls in more than
+the CLI tool asked for.
 
 Every package is pinned and version-compared against what's installed, and every package is
 verified as an unprivileged user.
 
-Three packages do not fit a plain `--version` check, and the verify command for **every**
+Four packages do not fit a plain `--version` check, and the verify command for **every**
 package was confirmed against the actual installed binary rather than assumed:
 
 - **`ca-certificates`** ships no binary. Verified by checking `/etc/ssl/certs/ca-certificates.crt`
@@ -46,6 +48,9 @@ package was confirmed against the actual installed binary rather than assumed:
   of it, so its check runs three and compares their combined output — the one verify command
   here that does real work. Ubuntu's package prints no citation notice (confirmed: an
   unprivileged run writes nothing at all to stderr), so nothing has to be silenced for it.
+- **`docx2txt`** has no `--version` output at all. Verified the same way as `aha`: builds a
+  minimal real `.docx` (a zip containing a bare `word/document.xml` and
+  `word/_rels/document.xml.rels`) and checks the extracted text comes back correctly.
 
 One finding only visible by actually running the playbook, not by reading the source:
 `git-lfs` and `git-secret`'s unprivileged checks needed a `chdir` into the scratch
@@ -337,9 +342,10 @@ Also lays down:
 | --- | --- |
 | `/etc/profile.d/fzf.sh` | `eval "$(fzf --bash)"` — fzf key bindings and completion |
 
-`yq.yml` and `jq.yml` live as their own playbooks in this directory (below) rather than
-bundled here, and `jsonnet.yml` lives in [`misc/`](../misc/README.md) — each pinned and
-verified independently.
+`yq.yml` lives as its own playbook in this directory (below) rather than bundled here, and
+`jsonnet.yml` lives in [`misc/`](../misc/README.md) — each pinned and verified independently.
+`jq` used to be split out the same way, but now lives in [`core-tools.yml`](#core-toolsyml)
+instead, alongside the other plain-apt CLI tools.
 
 **No vendor apt repo needed for `gum` and `glow`.** Ubuntu 26.04 ("resolute") carries apt
 packages for both directly (`gum` 0.17.0-1, `glow` 2.1.1-1), so a single apt install covers
@@ -444,22 +450,6 @@ each collection has its own variable:
 ```bash
 ansible-playbook core/ansible.yml -e host=ws01 -e ansible_core_version=2.20.1-1
 ansible-playbook core/ansible.yml -e host=ws01 -e ansible_collection_community_general_version=13.3.0
-```
-
-## jq.yml
-
-Installs [jq](https://github.com/jqlang/jq) from the Ubuntu apt package, `/usr/bin/jq`,
-root-owned. There is no per-user state and nothing to add to a shell profile.
-
-A plain apt install, pinned by exact dpkg version the same way `shellcheck.yml` (below) is.
-
-The unprivileged verification step pipes `{"a": 1}` into `jq '.a'` as `nobody` and checks
-the output.
-
-Version overrides:
-
-```bash
-ansible-playbook core/jq.yml -e host=ws01 -e jq_version=1.8.1-4ubuntu2
 ```
 
 ## markdownlint.yml

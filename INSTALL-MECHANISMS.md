@@ -8,13 +8,13 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 56 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 55 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
 | Mechanism | Playbooks |
 | --- | ---: |
-| 1. Ubuntu apt package | 11 |
+| 1. Ubuntu apt package | 10 |
 | 2. Vendor apt repository | 15 |
 | 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 19 |
 | 4. Upstream git tag + install script / tree | 2 |
@@ -30,10 +30,9 @@ version, no repository work needed.
 | Playbook | Package(s) |
 | --- | --- |
 | [core/shellcheck.yml](playbooks/core/shellcheck.yml) | `shellcheck` |
-| [core/jq.yml](playbooks/core/jq.yml) | `jq` |
 | [core/openjdk.yml](playbooks/core/openjdk.yml) | `default-jdk` (pulls in `default-jre` + `default-jdk-headless`) |
 | [core/dotnet.yml](playbooks/core/dotnet.yml) | `dotnet-sdk-10.0` — Ubuntu 26.04 carries .NET 10 directly; no Microsoft repo needed |
-| [core/core-tools.yml](playbooks/core/core-tools.yml) | 18 packages: curl, gnupg, lsb-release, git, git-lfs, git-secret, python3-pip, zip, unzip, vim, net-tools, ncat, figlet, dos2unix, make, parallel, ca-certificates, aha |
+| [core/core-tools.yml](playbooks/core/core-tools.yml) | 22 packages: curl, gnupg, lsb-release, git, git-lfs, git-secret, python3-pip, cpanminus, mailutils, jq, xlsx2csv, docx2txt, zip, unzip, net-tools, ncat, figlet, dos2unix, make, parallel, ca-certificates, aha |
 | [core/modern-tools.yml](playbooks/core/modern-tools.yml) | 13 packages (bat→`batcat`+symlink, fd→`fdfind`+symlink, fzf+`/etc/profile.d` hook, plus 10 more) |
 | [core/ansible.yml](playbooks/core/ansible.yml) | `ansible-core` (Galaxy collections on top are a separate mechanism — see below) |
 | [cloud-cli/promtool.yml](playbooks/cloud-cli/promtool.yml) | `promtool`, `amtool` (via `prometheus-alertmanager`, daemon stopped/disabled) |

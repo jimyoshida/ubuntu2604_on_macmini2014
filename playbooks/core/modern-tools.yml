@@ -7,9 +7,10 @@
 #   - yq.yml: Ubuntu's apt `yq` is the unrelated Python jq-wrapper, not
 #     mikefarah's Go yq that Homebrew installs, so it needs a release binary
 #     instead of a plain apt install.
-#   - jq.yml, jsonnet.yml: plain apt installs like the rest of this bundle,
-#     split out so each can be pinned and verified independently of the
-#     others.
+#   - jsonnet.yml: a plain apt install like the rest of this bundle, split
+#     out so it can be pinned and verified independently of the others.
+#   - jq was split out the same way, as jq.yml, but has since been folded
+#     into core-tools.yml instead, alongside the other plain-apt CLI tools.
 #
 #   /usr/bin/<tool>            for everything installed via apt
 #   /usr/local/bin/bat         symlink; apt installs the binary as batcat
