@@ -2,7 +2,7 @@
 
 Standalone playbooks that install the base CLI toolset, Node.js, mise, ansible-core, the .NET
 SDK, PowerShell and OpenJDK on a **shared** Ubuntu workstation, to root-owned system paths usable
-by every account on the host. See [POLICY.md](../../POLICY.md) for the rules they follow.
+by every account on the host. See [POLICY.md](../POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -56,7 +56,7 @@ One finding only visible by actually running the playbook, not by reading the so
 `git-lfs` and `git-secret`'s unprivileged checks needed a `chdir` into the scratch
 `HOME`, because `git` stats the current directory on startup and an unprivileged
 uid cannot even stat this repository's checkout path — the trap
-[POLICY.md's C6](../../POLICY.md) describes, here triggered by `git` itself rather than the
+[POLICY.md's C6](../POLICY.md) describes, here triggered by `git` itself rather than the
 tool being installed.
 
 ## nodejs.yml
@@ -152,7 +152,7 @@ Installs mise from its own apt repository.
 mise's shell integration goes to `/etc/profile.d/mise.sh` system-wide — the same
 destination and the same shape (a live `eval`, not a captured snapshot) as
 `modern-tools.yml`'s `fzf.sh` — rather than into any one account's `~/.bashrc` (see
-[POLICY.md's B3](../../POLICY.md) on why a `PATH`/env-rewriting hook belongs there and not among
+[POLICY.md's B3](../POLICY.md) on why a `PATH`/env-rewriting hook belongs there and not among
 completions or static aliases). `/etc/bash.bashrc` needs the `/etc/profile.d` bootstrap for
 non-login interactive shells to read it, which this playbook lays down defensively in case
 it runs on a host neither `misc/` nor `container/` has touched yet.
@@ -162,7 +162,7 @@ root.** Confirmed live: `HOME=<scratch> mise --version` creates
 `<scratch>/.cache/mise/latest-version`, a self-update-check cache, from the plainest possible
 invocation. The install and post-install version checks compare `dpkg-query` output instead —
 running `mise --version` as root would leave `/root/.cache/mise` behind, which is exactly what
-[POLICY.md's B2](../../POLICY.md) forbids ("no task ... may write ... under any account's `$HOME`, including the
+[POLICY.md's B2](../POLICY.md) forbids ("no task ... may write ... under any account's `$HOME`, including the
 invoker's"). The unprivileged checks give mise a scratch, writable `HOME` for the same reason
 every other tool in this repo that touches `$HOME` gets one.
 
@@ -202,7 +202,7 @@ cache) on first use. A shared NuGet cache is deliberately not created: one accou
 should not decide what another builds against.
 
 That same fact makes the CLI unsafe to run as root here — `dotnet --version` alone creates
-`/root/.dotnet`, which [POLICY.md's B2](../../POLICY.md) forbids — so the idempotency and version checks read
+`/root/.dotnet`, which [POLICY.md's B2](../POLICY.md) forbids — so the idempotency and version checks read
 `dpkg-query` (as `mise.yml` does) and every actual `dotnet` invocation is unprivileged with a
 scratch `HOME`.
 
@@ -246,7 +246,7 @@ release, verified against the SHA-256 GitHub publishes for the asset.
 PowerShell writes `~/.cache/powershell` (including `telemetry.uuid` and startup profile data),
 `~/.config/powershell` and `~/.local/share/powershell` — confirmed live, the cache appears on the
 plainest possible invocation. Running it as root would leave that under `/root`, which
-[POLICY.md's B2](../../POLICY.md) forbids, so the idempotency check reads the filesystem (the versioned path and
+[POLICY.md's B2](../POLICY.md) forbids, so the idempotency check reads the filesystem (the versioned path and
 the symlink target) and every `pwsh` invocation is unprivileged with a scratch `HOME`.
 
 ### The AllUsers module scope is asserted, not assumed
@@ -357,7 +357,7 @@ runtime library.
 
 fzf's key bindings need `/etc/profile.d` to actually be read by interactive shells, which is
 not true by default for a non-login shell (e.g. a plain SSH session) on stock Ubuntu — see
-[POLICY.md's B3](../../POLICY.md). This playbook adds that hook to `/etc/bash.bashrc`; the
+[POLICY.md's B3](../POLICY.md). This playbook adds that hook to `/etc/bash.bashrc`; the
 task is an idempotent no-op for any other playbook that adds the same hook.
 
 The unprivileged verification step runs every tool's `--version` as `nobody`, then separately
@@ -515,7 +515,7 @@ Installs [mikefarah/yq](https://github.com/mikefarah/yq) as a single static bina
 to a shell profile.
 
 This is a release binary rather than a plain apt install, deliberately: per the
-apt gotcha in [INSTALL-MECHANISMS.md](../../INSTALL-MECHANISMS.md), Ubuntu's apt `yq` is
+apt gotcha in [INSTALL-MECHANISMS.md](../INSTALL-MECHANISMS.md), Ubuntu's apt `yq` is
 `kislyuk/yq`, a Python
 wrapper around `jq` with entirely different syntax from mikefarah's Go `yq` that this
 playbook installs. Silently swapping one for the other under the same command name would

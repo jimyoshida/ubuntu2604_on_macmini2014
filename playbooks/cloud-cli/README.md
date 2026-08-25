@@ -2,7 +2,7 @@
 
 Standalone playbooks that install cloud and service CLI tools on a **shared** Ubuntu
 workstation, to root-owned system paths usable by every account on the host rather than into
-one account's home directory. See [POLICY.md](../../POLICY.md) for the rules they follow.
+one account's home directory. See [POLICY.md](../POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 

@@ -60,9 +60,9 @@ Even there, a version bump within that same origin still needs the pin update ab
 Two reference documents describe how these playbooks are built, and are what a new or changed
 playbook is checked against:
 
-- **[POLICY.md](POLICY.md)** — the rules every playbook satisfies: root-owned paths, pinned
+- **[POLICY.md](playbooks/POLICY.md)** — the rules every playbook satisfies: root-owned paths, pinned
   versions, no writes to any `$HOME`, privilege grants that default to empty, and verification
   that runs as an unprivileged uid. Ends with a review checklist.
-- **[INSTALL-MECHANISMS.md](INSTALL-MECHANISMS.md)** — how each playbook gets its tool onto the
+- **[INSTALL-MECHANISMS.md](playbooks/INSTALL-MECHANISMS.md)** — how each playbook gets its tool onto the
   filesystem: apt package, vendor apt repository, upstream release artifact, pipx, `npm
   install -g`.
