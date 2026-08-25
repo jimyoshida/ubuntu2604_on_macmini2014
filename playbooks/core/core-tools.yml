@@ -4,7 +4,7 @@
 #
 #   /usr/bin/<tool>                    for every package that ships a binary
 #
-# All twenty-one packages already come from Ubuntu's own apt archive, so unlike
+# All twenty packages already come from Ubuntu's own apt archive, so unlike
 # most of _multi-user/tools/ this migration needed no reach work: the source
 # playbook (core/core-tools.yml, renamed from core/agent-base.yml on
 # 2026-08-14) already installs to root-owned /usr paths. What it does not do
@@ -13,7 +13,7 @@
 # idempotency (policy point 6) and per-package unprivileged verification
 # (policy point 9).
 #
-# The verification list is heterogeneous on purpose, not eighteen copies of
+# The verification list is heterogeneous on purpose, not seventeen copies of
 # `--version`: two packages do not fit that shape at all.
 #   - aha has no reliable --version output. Verified by feeding it a
 #     real ANSI escape sequence and checking it did real work: converted to
@@ -65,9 +65,9 @@
       - name: curl
         # Advanced from 8.18.0-1ubuntu2.3, which resolute-updates superseded
         # and the archive no longer carries -- so the pin was unsatisfiable on
-        # every host, and because task 3 installs all twenty-one packages in
+        # every host, and because task 3 installs all twenty packages in
         # one apt transaction, that one stale pin blocked the other
-        # twenty too.
+        # nineteen too.
         # The verify_cmd matches on the upstream version alone, so it needs no
         # change when the Ubuntu revision moves.
         version: "8.18.0-1ubuntu2.4"
@@ -75,9 +75,6 @@
       - name: gnupg
         version: "2.4.8-4ubuntu3"
         verify_cmd: "gpg --version | grep -q 'gpg (GnuPG) 2.4.8'"
-      - name: lsb-release
-        version: "12.1-2build1"
-        verify_cmd: "lsb_release -a 2>/dev/null | grep -q '^Distributor ID:.*Ubuntu'"
       - name: git
         version: "1:2.53.0-1ubuntu1"
         verify_cmd: "git --version | grep -q 'git version 2.53.0'"
@@ -208,7 +205,7 @@
       # install_recommends: false -- added for mailutils, whose only
       # recommendation is default-mta (postfix): pulling in a full mail
       # server as a side effect of a CLI tool list is not what this playbook
-      # is for. Applies to all twenty-one packages, not just mailutils, which
+      # is for. Applies to all twenty packages, not just mailutils, which
       # is the intended, minimal-footprint behavior for this playbook.
       ansible.builtin.apt:
         name: "{{ core_tools_pending | default([]) }}"
