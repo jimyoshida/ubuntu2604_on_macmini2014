@@ -32,7 +32,7 @@ version, no repository work needed.
 | [core/shellcheck.yml](core/shellcheck.yml) | `shellcheck` |
 | [core/openjdk.yml](core/openjdk.yml) | `default-jdk` (pulls in `default-jre` + `default-jdk-headless`) |
 | [core/dotnet.yml](core/dotnet.yml) | `dotnet-sdk-10.0` — Ubuntu 26.04 carries .NET 10 directly; no Microsoft repo needed |
-| [core/misc-tools.yml](core/misc-tools.yml) | 22 packages: curl, gnupg, lsb-release, git, git-lfs, git-secret, python3-pip, cpanminus, mailutils, jq, xlsx2csv, docx2txt, zip, unzip, net-tools, ncat, figlet, dos2unix, make, parallel, ca-certificates, aha |
+| [core/misc-tools.yml](core/misc-tools.yml) | 14 packages: curl, gnupg, git, git-lfs, git-secret, mailutils, jq, xlsx2csv, docx2txt, net-tools, ncat, make, parallel, aha |
 | [core/modern-tools.yml](core/modern-tools.yml) | 13 packages (bat→`batcat`+symlink, fd→`fdfind`+symlink, fzf+`/etc/profile.d` hook, plus 10 more) |
 | [core/ansible.yml](core/ansible.yml) | `ansible-core` (Galaxy collections on top are a separate mechanism — see below) |
 | [cloud-cli/promtool.yml](cloud-cli/promtool.yml) | `promtool`, `amtool` (via `prometheus-alertmanager`, daemon stopped/disabled) |
