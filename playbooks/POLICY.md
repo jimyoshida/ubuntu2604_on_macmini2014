@@ -1,6 +1,6 @@
 # Playbook Policy
 
-The rules every playbook under [`playbooks/`](playbooks/) must satisfy, and the reasons behind
+The rules every playbook under [`playbooks/`](.) must satisfy, and the reasons behind
 them. This is the document to check a new or changed playbook against.
 
 The governing rule:

@@ -7,7 +7,7 @@
 #   /etc/profile.d/mise.sh                       activation hook (interactive shells only)
 #
 # The apt install itself already lands in a root-owned path, so most of this
-# migration is the same correctness work as core-tools.yml and nodejs.yml:
+# migration is the same correctness work as misc-tools.yml and nodejs.yml:
 # pin the version, replace the get_url + shell: gpg --dearmor + apt_repository
 # sequence with a declarative deb822_repository per A5, take the architecture
 # from facts. The one genuine relocation is task 6 in the source playbook,

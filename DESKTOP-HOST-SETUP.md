@@ -5,7 +5,7 @@ sleep/screen-blanking, IPv6, journald tuning and Samba. An AWS EC2 instance typi
 of this: cloud-init sets the hostname, the AMI ships `sshd` enabled, there is no lid or suspend to
 fight on a VM, and there is no desktop session to blank or lock. A fresh desktop-PC Ubuntu install
 needs most of it — work through whichever sections below apply, after
-[`playbooks/core/core-tools.yml`](playbooks/core/README.md#core-toolsyml), before treating the
+[`playbooks/core/misc-tools.yml`](playbooks/core/README.md#misc-toolsyml), before treating the
 box as ready. [Samba](#samba-file-sharing-optional) is the exception: it isn't EC2-redundant, it's
 here because sharing a home directory over SMB is something a desktop LAN workstation may want,
 EC2 or not.

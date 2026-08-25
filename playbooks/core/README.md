@@ -16,11 +16,11 @@ These playbooks follow the same rules as [`misc/`](../misc/README.md),
 [`cloud-cli/`](../cloud-cli/README.md) and [`container/`](../container/README.md) — root-owned
 system paths, pinned versions, no writes to any `$HOME`, and a closing check that runs the tool
 as an arbitrary uid (`setpriv --reuid=65534`) rather than as the connecting account. Unlike
-`container/`, nothing here installs a runtime or needs a privilege grant: `core-tools.yml` and
+`container/`, nothing here installs a runtime or needs a privilege grant: `misc-tools.yml` and
 `nodejs.yml` are apt-only and root-owned, and `mise.yml` needs nothing beyond the
 `/etc/profile.d` hook it installs itself.
 
-## core-tools.yml
+## misc-tools.yml
 
 Installs twenty-two general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`,
 `lsb-release`, `git`, `git-lfs`, `git-secret`, `python3-pip`, `cpanminus`, `mailutils`, `jq`,
@@ -344,7 +344,7 @@ Also lays down:
 
 `yq.yml` lives as its own playbook in this directory (below) rather than bundled here, and
 `jsonnet.yml` lives in [`misc/`](../misc/README.md) — each pinned and verified independently.
-`jq` used to be split out the same way, but now lives in [`core-tools.yml`](#core-toolsyml)
+`jq` used to be split out the same way, but now lives in [`misc-tools.yml`](#misc-toolsyml)
 instead, alongside the other plain-apt CLI tools.
 
 **No vendor apt repo needed for `gum` and `glow`.** Ubuntu 26.04 ("resolute") carries apt
