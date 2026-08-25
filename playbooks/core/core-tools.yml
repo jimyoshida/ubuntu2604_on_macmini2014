@@ -4,7 +4,7 @@
 #
 #   /usr/bin/<tool>                    for every package that ships a binary
 #
-# All twenty packages already come from Ubuntu's own apt archive, so unlike
+# All fourteen packages already come from Ubuntu's own apt archive, so unlike
 # most of _multi-user/tools/ this migration needed no reach work: the source
 # playbook (core/core-tools.yml, renamed from core/agent-base.yml on
 # 2026-08-14) already installs to root-owned /usr paths. What it does not do
@@ -13,7 +13,7 @@
 # idempotency (policy point 6) and per-package unprivileged verification
 # (policy point 9).
 #
-# The verification list is heterogeneous on purpose, not seventeen copies of
+# The verification list is heterogeneous on purpose, not twelve copies of
 # `--version`: two packages do not fit that shape at all.
 #   - aha has no reliable --version output. Verified by feeding it a
 #     real ANSI escape sequence and checking it did real work: converted to
@@ -27,10 +27,9 @@
 # A verify_cmd must FAIL when the binary is absent, which is not automatic:
 # `<tool> --version 2>&1 | grep -qi '<tool>'` passes with the tool uninstalled,
 # because the shell's own "bash: <tool>: command not found" contains the tool's
-# name and 2>&1 feeds it straight into the grep. Three commands here had that
-# shape (ncat, figlet, dos2unix) and were vacuous until it was found on ws02.
-# So: only redirect stderr when the tool actually writes its version there
-# (ncat does; figlet and dos2unix do not), and always grep for a version-
+# name and 2>&1 feeds it straight into the grep. ncat's verify_cmd had that
+# shape and was vacuous until it was found on ws02: only redirect stderr when
+# the tool actually writes its version there, and always grep for a version-
 # bearing string rather than the tool's own name.
 #
 # There is no shell configuration here, and the only per-user state any of
@@ -65,9 +64,9 @@
       - name: curl
         # Advanced from 8.18.0-1ubuntu2.3, which resolute-updates superseded
         # and the archive no longer carries -- so the pin was unsatisfiable on
-        # every host, and because task 3 installs all twenty packages in
+        # every host, and because task 3 installs all fourteen packages in
         # one apt transaction, that one stale pin blocked the other
-        # nineteen too.
+        # thirteen too.
         # The verify_cmd matches on the upstream version alone, so it needs no
         # change when the Ubuntu revision moves.
         version: "8.18.0-1ubuntu2.4"
@@ -84,12 +83,6 @@
       - name: git-secret
         version: "0.5.0-1build1"
         verify_cmd: "git secret --version | grep -q '^0.5.0$'"
-      - name: python3-pip
-        version: "25.1.1+dfsg-1ubuntu2"
-        verify_cmd: "python3 -m pip --version | grep -q 'pip 25.1.1'"
-      - name: cpanminus
-        version: "1.7048-1build1"
-        verify_cmd: "cpanm --version | grep -q 'version 1.7048'"
       # mailutils recommends default-mta (postfix), which task 3 no longer
       # pulls in now that install_recommends is false -- see that task.
       - name: mailutils
@@ -102,42 +95,33 @@
         version: "1:0.8.3-1build1"
         verify_cmd: "xlsx2csv --version | grep -q '^0.8.3$'"
       # docx2txt has no --version output at all (like aha): verified by
-      # building a minimal real .docx --
-      # a zip with a bare word/document.xml and word/_rels/document.xml.rels,
-      # no XML declaration or namespace attributes needed since docx2txt's
+      # building a minimal real .docx -- a zip with a bare
+      # word/document.xml and word/_rels/document.xml.rels, no XML
+      # declaration or namespace attributes needed since docx2txt's
       # extraction is regex-based, not a real XML parser -- and checking the
-      # extracted text comes back correctly. Single-quoted throughout: this
-      # verify_cmd is spliced into a double-quoted bash -c string in task 6,
-      # so it must not contain a literal double quote.
+      # extracted text comes back correctly. Built with python3's zipfile
+      # rather than the zip binary, which this playbook no longer installs.
+      # Single-quoted throughout: this verify_cmd is spliced into a
+      # double-quoted bash -c string in task 6, so it must not contain a
+      # literal double quote -- the zipfile one-liner takes its filenames as
+      # argv instead of string literals so it needs no quotes of its own.
       - name: docx2txt
         version: "1.4-5build1"
         verify_cmd: >-
           mkdir -p word/_rels
           && printf '<w:document><w:body><w:p><w:r><w:t>core-tools-smoke-test</w:t></w:r></w:p></w:body></w:document>' > word/document.xml
           && printf '<Relationships></Relationships>' > word/_rels/document.xml.rels
-          && zip -q -r smoke.docx word
+          && python3 -c 'import sys,zipfile;z=zipfile.ZipFile(sys.argv[1],sys.argv[2]);z.write(sys.argv[3]);z.write(sys.argv[4]);z.close()' smoke.docx w word/document.xml word/_rels/document.xml.rels
           && docx2txt smoke.docx - | grep -q 'core-tools-smoke-test'
-      - name: zip
-        version: "3.0-15ubuntu3"
-        verify_cmd: "zip -v | grep -q 'This is Zip 3.0'"
-      - name: unzip
-        version: "6.0-29ubuntu1"
-        verify_cmd: "unzip -v | grep -q 'UnZip 6.00'"
       - name: net-tools
         version: "2.10-2ubuntu1"
         verify_cmd: "netstat --version | grep -q 'net-tools 2.10'"
-      # ncat is the one of these three that really does print its version to
-      # stderr, so it keeps 2>&1 -- but greps for the version line, which
-      # "command not found" cannot match.
+      # ncat really does print its version to stderr, so it keeps 2>&1 --
+      # but greps for the version line, which "command not found" cannot
+      # match.
       - name: ncat
         version: "7.98+dfsg-1"
         verify_cmd: "ncat --version 2>&1 | grep -q 'Ncat: Version 7.98'"
-      - name: figlet
-        version: "2.2.5-3.1"
-        verify_cmd: "figlet -v | grep -q 'Version: 2.2.5'"
-      - name: dos2unix
-        version: "7.5.4-1"
-        verify_cmd: "dos2unix -V | grep -q '^dos2unix 7.5.4'"
       - name: make
         version: "4.4.1-3"
         verify_cmd: "make --version | grep -q 'GNU Make 4.4.1'"
@@ -205,7 +189,7 @@
       # install_recommends: false -- added for mailutils, whose only
       # recommendation is default-mta (postfix): pulling in a full mail
       # server as a side effect of a CLI tool list is not what this playbook
-      # is for. Applies to all twenty packages, not just mailutils, which
+      # is for. Applies to all fourteen packages, not just mailutils, which
       # is the intended, minimal-footprint behavior for this playbook.
       ansible.builtin.apt:
         name: "{{ core_tools_pending | default([]) }}"
