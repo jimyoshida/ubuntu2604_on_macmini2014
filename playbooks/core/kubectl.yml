@@ -33,24 +33,27 @@
 # playbook does not create, share, or pre-populate it (B2) -- it installs a
 # client and configures no cluster.
 #
-# kubectx and kubens are the partial exception to container/krew.yml's
-# retirement (README.md#retired-containerkrewyml). That note names `ctx` and
-# `ns` as things "a plain binary in /usr/local/bin" could bring back; this is
-# that, but simpler than it sounds. The Ubuntu archive already carries a
-# `kubectx` package -- a single source, with no vendor collision to pin
-# against -- that installs /usr/bin/kubectx and /usr/bin/kubens directly, plus
-# bash/zsh/fish completions under the paths bash-completion already reads. So
-# unlike kubectl there is no repository to add, no key to fetch, and no
-# completion to generate: apt does the whole job. What does NOT come back is
-# krew itself, or invoking these as `kubectl ctx` / `kubectl ns` -- the
-# package names the binaries kubectx and kubens, not kubectl-ctx / kubectl-ns,
-# so kubectl's plugin mechanism never sees them. Pinned anyway, per this
-# directory's convention, even though nothing forces the version like
-# kubectl_version does.
+# kubectx and kubens are the partial exception to krew's retirement: krew is
+# per-user by design -- KREW_ROOT defaults to ~/.krew and `kubectl krew
+# install` writes into it -- so its single-user playbook was dropped on
+# 2026-08-14 rather than migrated with the rest of this set. kubectl finds
+# plugins as `kubectl-*` executables on PATH with no manager involved, so
+# `ctx` and `ns` could always come back as plain binaries in a root-owned
+# path instead; this is that, but simpler than it sounds. The Ubuntu archive
+# already carries a `kubectx` package -- a single source, with no vendor
+# collision to pin against -- that installs /usr/bin/kubectx and
+# /usr/bin/kubens directly, plus bash/zsh/fish completions under the paths
+# bash-completion already reads. So unlike kubectl there is no repository to
+# add, no key to fetch, and no completion to generate: apt does the whole
+# job. What does NOT come back is krew itself, or invoking these as `kubectl
+# ctx` / `kubectl ns` -- the package names the binaries kubectx and kubens,
+# not kubectl-ctx / kubectl-ns, so kubectl's plugin mechanism never sees
+# them. Pinned anyway, per this directory's convention, even though nothing
+# forces the version like kubectl_version does.
 #
 # Usage:
-#   ansible-playbook container/kubectl.yml -e host=<inventory host or group>
-#   ansible-playbook container/kubectl.yml -e host=ws01 -e kubectl_version=1.36.3-1.1
+#   ansible-playbook core/kubectl.yml -e host=<inventory host or group>
+#   ansible-playbook core/kubectl.yml -e host=ws01 -e kubectl_version=1.36.3-1.1
 
 - name: Install kubectl system-wide
   hosts: "{{ host }}"
@@ -81,7 +84,7 @@
     # The OBS project key for this stream. It EXPIRES 2026-12-29, so
     # POLICY.md's A5 puts this on the URL form: fetch each run (the module
     # compares by checksum, so it stays idempotent) and pin only the
-    # fingerprint. Pinning the bytes, as container/docker.yml does for Docker's
+    # fingerprint. Pinning the bytes, as core/docker.yml does for Docker's
     # non-expiring key, would simply stop working at the end of the year.
     #
     # Unlike cloud-cli/github-cli.yml there is no published successor key to
@@ -121,9 +124,9 @@
         cache_valid_time: 3600
 
     - name: 2. Remove the single-user playbook's apt source for this repository
-      # container/kubectl.yml wrote kubernetes.list for the v1.30 stream, which
-      # is EOL. Left in place it is a second repository for the same package
-      # name, which is the class of problem this playbook is about.
+      # It wrote kubernetes.list for the v1.30 stream, which is EOL. Left in
+      # place it is a second repository for the same package name, which is
+      # the class of problem this playbook is about.
       ansible.builtin.file:
         path: "{{ kubectl_legacy_source }}"
         state: absent
@@ -147,7 +150,7 @@
 
     - name: 4. Read the fingerprints in the repository keyring
       # The URL form of A5 does write a keyring file and does return
-      # key_filename -- unlike the inline form used by container/docker.yml,
+      # key_filename -- unlike the inline form used by core/docker.yml,
       # which embeds the key in the .sources file and returns key_filename
       # empty. check_mode: false so a dry run still measures the real keyring.
       ansible.builtin.command:
@@ -182,7 +185,7 @@
         group: root
         mode: '0644'
         content: |
-          # Managed by playbooks/container/kubectl.yml
+          # Managed by playbooks/core/kubectl.yml
           #
           # packages.cloud.google.com publishes a `kubectl` package with an epoch
           # (1:...), which outranks every version pkgs.k8s.io will ever publish.
@@ -315,7 +318,7 @@
         group: root
         mode: '0644'
         content: |
-          # Managed by playbooks/container/kubectl.yml
+          # Managed by playbooks/core/kubectl.yml
           alias k=kubectl
           if ! declare -F __start_kubectl >/dev/null 2>&1 \
              && [ -r /etc/bash_completion.d/kubectl ]; then

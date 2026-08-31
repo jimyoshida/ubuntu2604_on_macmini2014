@@ -102,13 +102,12 @@ installed once is usable by every account on a **shared** workstation. Run again
 |-----------|-------------|
 | [playbooks/misc/](playbooks/misc/README.md) | Developer tools (asciidoctor, bats, certbot, dotnet-tools, dvc, gomplate, grype-syft, hadolint, jsonnet, jsmin, junit2html, k6, kube-score, maven, mocha-chai, mongodb-tools, plantuml, playwright, scc, testssl, trivy, zap) |
 | [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (auth0-deploy-cli, aws, az, az devops, databricks, gcloud, gcx, gh, glab, influx, jenkins, jira, logcli, tofu, promtool/amtool, sonar-scanner, vault, Azure PowerShell) |
-| [playbooks/container/](playbooks/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers, kubelogin/k9s/kdash) |
-| [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, eslint, Node.js/Yarn/pnpm, mise, ansible-core, .NET SDK, PowerShell, OpenJDK, Ruby |
+| [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, eslint, Node.js/Yarn/pnpm, mise, ansible-core, .NET SDK, PowerShell, OpenJDK, Ruby, plus the container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers, kubelogin/k9s/kdash) |
 
-One thing to know before running `container/docker.yml`: it grants **no** account access to the
+One thing to know before running `core/docker.yml`: it grants **no** account access to the
 Docker socket unless you name them in `docker_users` — membership of that group is equivalent to
 passwordless root, so it's typed out per account, per run. See
-[Grants](playbooks/container/README.md#grants). `podman_linger_users` works the same way.
+[Grants](playbooks/core/README.md#grants). `podman_linger_users` works the same way.
 
 ## Pinned versions and `apt upgrade` drift
 
@@ -123,7 +122,7 @@ superseded `.deb`s around, so reinstalling the old pinned version usually isn't 
 `apt-cache policy <pkg>` on the target, update that package's `*_version` var — and any version
 string baked into its `verify_cmd` — to match, then re-run the playbook to reinstall and re-verify.
 
-`container/kubectl.yml` is the one exception: it also pins the apt origin itself via
+`core/kubectl.yml` is the one exception: it also pins the apt origin itself via
 `/etc/apt/preferences.d/kubectl`, so `apt upgrade` can't swap it for a different vendor's package.
 Even there, a version bump within that same origin still needs the pin update above.
 

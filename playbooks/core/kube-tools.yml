@@ -23,7 +23,7 @@
 # unprivileged checks below run with a scratch HOME rather than near a real
 # one.
 #
-# Like container/kind.yml, these are only as multi-user as the cluster access
+# Like core/kind.yml, these are only as multi-user as the cluster access
 # behind them: this playbook installs binaries every account can execute, and
 # an account with no kubeconfig can do nothing with them. That is the honest
 # state of the tools, not a gap in the install.
@@ -33,8 +33,8 @@
 # installs it root-owned via pipx rather than into one account's ~/.local.
 #
 # Usage:
-#   ansible-playbook container/kube-tools.yml -e host=<inventory host or group>
-#   ansible-playbook container/kube-tools.yml -e host=ws01 -e k9s_version=0.51.0
+#   ansible-playbook core/kube-tools.yml -e host=<inventory host or group>
+#   ansible-playbook core/kube-tools.yml -e host=ws01 -e k9s_version=0.51.0
 
 - name: Install kubelogin, k9s and kdash system-wide
   hosts: "{{ host }}"

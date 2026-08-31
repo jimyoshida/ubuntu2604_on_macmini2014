@@ -36,7 +36,7 @@ version, no repository work needed.
 | [core/modern-tools.yml](core/modern-tools.yml) | 13 packages (bat→`batcat`+symlink, fd→`fdfind`+symlink, fzf+`/etc/profile.d` hook, plus 10 more) |
 | [core/ansible.yml](core/ansible.yml) | `ansible-core` (Galaxy collections on top are a separate mechanism — see below) |
 | [cloud-cli/promtool.yml](cloud-cli/promtool.yml) | `promtool`, `amtool` (via `prometheus-alertmanager`, daemon stopped/disabled) |
-| [container/podman.yml](container/podman.yml) | `podman`, `podman-compose` |
+| [core/podman.yml](core/podman.yml) | `podman`, `podman-compose` |
 | [misc/jsonnet.yml](misc/jsonnet.yml) | `jsonnet` |
 | [core/ruby.yml](core/ruby.yml) | `ruby`, `ruby-dev`, `ruby3.3`, `ruby-rubygems` — the metapackages pin the *series*, `ruby3.3` the interpreter |
 
@@ -58,9 +58,9 @@ The vendor publishes their own repository and it's kept current; adds a `deb822_
 | [cloud-cli/github-cli.yml](cloud-cli/github-cli.yml) | `cli.github.com` |
 | [cloud-cli/opentofu.yml](cloud-cli/opentofu.yml) | `packages.opentofu.org` |
 | [cloud-cli/vault-cli.yml](cloud-cli/vault-cli.yml) | HashiCorp apt repo (de-brewed) |
-| [container/docker.yml](container/docker.yml) | `download.docker.com` |
-| [container/helm.yml](container/helm.yml) | Helm's own apt repo |
-| [container/kubectl.yml](container/kubectl.yml) | `pkgs.k8s.io`, plus an `/etc/apt/preferences.d` pin at priority 1001 to beat `packages.cloud.google.com`'s epoched `kubectl` package — see the file's header for why a plain version pin isn't enough |
+| [core/docker.yml](core/docker.yml) | `download.docker.com` |
+| [core/helm.yml](core/helm.yml) | Helm's own apt repo |
+| [core/kubectl.yml](core/kubectl.yml) | `pkgs.k8s.io`, plus an `/etc/apt/preferences.d` pin at priority 1001 to beat `packages.cloud.google.com`'s epoched `kubectl` package — see the file's header for why a plain version pin isn't enough |
 | [core/mise.yml](core/mise.yml) | mise's own apt repo |
 | [core/nodejs.yml](core/nodejs.yml) | NodeSource, for Node.js itself (Yarn/pnpm are installed afterward — see the mechanism-6 footnote) |
 | [misc/dvc.yml](misc/dvc.yml) | Iterative's apt repo |
@@ -84,9 +84,9 @@ point goes on `PATH`.
 | [misc/hadolint.yml](misc/hadolint.yml) | single binary |
 | [misc/scc.yml](misc/scc.yml) | release tarball, verified against the release's `checksums.txt` |
 | [misc/kube-score.yml](misc/kube-score.yml) | single binary |
-| [container/kind.yml](container/kind.yml) | single binary |
-| [container/minikube.yml](container/minikube.yml) | single binary |
-| [container/kube-tools.yml](container/kube-tools.yml) | three single binaries: kubelogin, k9s, kdash |
+| [core/kind.yml](core/kind.yml) | single binary |
+| [core/minikube.yml](core/minikube.yml) | single binary |
+| [core/kube-tools.yml](core/kube-tools.yml) | three single binaries: kubelogin, k9s, kdash |
 | [cloud-cli/databricks-cli.yml](cloud-cli/databricks-cli.yml) | single Go binary |
 | [cloud-cli/gcx-cli.yml](cloud-cli/gcx-cli.yml) | release tarball (de-brewed) |
 | [cloud-cli/jira-cli.yml](cloud-cli/jira-cli.yml) | release tarball (de-brewed) |
@@ -138,7 +138,7 @@ playbooks — see the prerequisite table below.
 | [core/eslint.yml](core/eslint.yml) | `eslint` (needs `NODE_PATH` published so a project's config file can `require('eslint/config')`) |
 | [core/markdownlint.yml](core/markdownlint.yml) | `markdownlint-cli` |
 | [cloud-cli/auth0-deploy-cli.yml](cloud-cli/auth0-deploy-cli.yml) | `auth0-deploy-cli` |
-| [container/devcontainers.yml](container/devcontainers.yml) | `@devcontainers/cli` |
+| [core/devcontainers.yml](core/devcontainers.yml) | `@devcontainers/cli` |
 | [misc/jsmin.yml](misc/jsmin.yml) | `jsmin` (Crockford's ES5-era minifier; no `--version`, so the pin is read from `npm ls -g`) |
 | [misc/mocha-chai.yml](misc/mocha-chai.yml) | `mocha` (has a CLI) + `chai` (pure library, no CLI — needs `NODE_PATH` published for `require()` to resolve it) |
 | [misc/playwright.yml](misc/playwright.yml) | `playwright`, plus its own `playwright install --with-deps` browser downloader redirected to a shared `/opt/playwright-browsers` via `PLAYWRIGHT_BROWSERS_PATH` |

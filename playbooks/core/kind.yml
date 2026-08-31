@@ -4,9 +4,9 @@
 #   /usr/local/bin/kind            root-owned, mode 0755
 #   /etc/bash_completion.d/kind    shared completion, generated from the binary
 #
-# kind ships as a single static binary, and the source playbook
-# (container/kind.yml) already installed it to this same root-owned path, so
-# the reach problem here is small. The defects were elsewhere:
+# kind ships as a single static binary, and the source playbook already
+# installed it to this same root-owned path, so the reach problem here is
+# small. The defects were elsewhere:
 #
 #   - `stat.exists` as the install guard, so a version bump silently no-opped.
 #     That is not hypothetical: this host ran 0.27.0 from a playbook that could
@@ -19,7 +19,7 @@
 #
 # HOW MULTI-USER THIS ACTUALLY IS. kind drives Docker, so it is only as
 # multi-user as the `docker` group is: this playbook installs a binary every
-# account can execute, and no account outside container/docker.yml's
+# account can execute, and no account outside core/docker.yml's
 # docker_users can use it for anything. That is the honest state of the tool
 # rather than a defect in the migration, and the README says so too.
 #
@@ -28,8 +28,8 @@
 # kubeconfig (B2).
 #
 # Usage:
-#   ansible-playbook container/kind.yml -e host=<inventory host or group>
-#   ansible-playbook container/kind.yml -e host=ws01 -e kind_version=0.32.0
+#   ansible-playbook core/kind.yml -e host=<inventory host or group>
+#   ansible-playbook core/kind.yml -e host=ws01 -e kind_version=0.32.0
 
 - name: Install kind system-wide
   hosts: "{{ host }}"
@@ -222,7 +222,7 @@
                 'kind DRIVES DOCKER, so it is only as multi-user as the docker group is.',
                 'An account outside docker_users can run `kind version` and nothing else.',
                 'Grant access deliberately, per account:',
-                '  ansible-playbook container/docker.yml -e host=' ~ inventory_hostname
+                '  ansible-playbook core/docker.yml -e host=' ~ inventory_hostname
                 ~ ' -e docker_users=alice',
                 '',
                 'No cluster is created by this playbook. Each account runs, for itself:',

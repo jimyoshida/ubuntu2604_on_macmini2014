@@ -4,10 +4,10 @@
 #   <npm prefix>/bin/devcontainer                        the CLI entry point
 #   <npm prefix>/lib/node_modules/@devcontainers/cli     the package itself
 #
-# The source playbook (container/devcontainers.yml) already installed into a
-# root-owned npm prefix with `become`, so this migration is correctness work
-# rather than reach work -- the same shape as playbooks/core/markdownlint.yml,
-# which this playbook follows closely because it is the same mechanism.
+# The source playbook already installed into a root-owned npm prefix with
+# `become`, so this migration is correctness work rather than reach work --
+# the same shape as playbooks/core/markdownlint.yml, which this playbook
+# follows closely because it is the same mechanism.
 #
 # What changed versus the source playbook:
 #   - Pinned version. The source installed `@devcontainers/cli@latest`, so what
@@ -25,12 +25,12 @@
 #
 # There is no per-user state and no grant: the CLI keeps nothing under $HOME of
 # its own, and needs no group membership to run. Driving a dev container does
-# need a container runtime, which is container/docker.yml's business and its
+# need a container runtime, which is core/docker.yml's business and its
 # docker_users grant -- see the README.
 #
 # Usage:
-#   ansible-playbook container/devcontainers.yml -e host=<inventory host or group>
-#   ansible-playbook container/devcontainers.yml -e host=ws01 -e devcontainers_cli_version=0.88.0
+#   ansible-playbook core/devcontainers.yml -e host=<inventory host or group>
+#   ansible-playbook core/devcontainers.yml -e host=ws01 -e devcontainers_cli_version=0.88.0
 
 - name: Install the Dev Containers CLI system-wide
   hosts: "{{ host }}"
@@ -204,7 +204,7 @@
           - "not install, and it needs that runtime earlier than you would expect: even"
           - "`devcontainer read-configuration` calls `docker ps`, so it fails for an account"
           - "outside the `docker` group. Membership is granted per account by"
-          - "container/docker.yml, never by default -- so on a host where nobody has been"
+          - "core/docker.yml, never by default -- so on a host where nobody has been"
           - "granted it, every devcontainer subcommand except --help and --version will fail."
           - ""
           - "Usage:"

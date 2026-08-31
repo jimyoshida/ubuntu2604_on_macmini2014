@@ -9,14 +9,14 @@
 # THE DEFAULT GRANTS NOBODY ACCESS TO THE DAEMON, AND THAT IS DELIBERATE.
 # Membership of the `docker` group is equivalent to passwordless root on this
 # host: the socket it grants will start a container with the host filesystem
-# bind-mounted, as root. The source playbook (container/docker.yml) added
-# whoever ran it, read from lookup('env', 'USER'). This one adds only the
-# accounts named in docker_users, which defaults to empty -- so a fresh run
-# produces a working daemon that the invoking account cannot talk to. That is
-# the correct default on a shared box, and it will look like a regression to
-# the first person who hits it (POLICY.md B1).
+# bind-mounted, as root. The source playbook added whoever ran it, read from
+# lookup('env', 'USER'). This one adds only the accounts named in
+# docker_users, which defaults to empty -- so a fresh run produces a working
+# daemon that the invoking account cannot talk to. That is the correct
+# default on a shared box, and it will look like a regression to the first
+# person who hits it (POLICY.md B1).
 #
-#   ansible-playbook container/docker.yml -e host=ws01 -e docker_users=alice,bob
+#   ansible-playbook core/docker.yml -e host=ws01 -e docker_users=alice,bob
 #
 # Grants are additive: an account left out of the list keeps whatever it
 # already has. Revoking is a deliberate act, not a side effect of running with
@@ -25,7 +25,7 @@
 # Alternatives to the grant, both real:
 #   - rootless Docker, via the docker-ce-rootless-extras package this playbook
 #     installs (`dockerd-rootless-setuptool.sh install`, per account)
-#   - podman (container/podman.yml), which needs no grant at all
+#   - podman (core/podman.yml), which needs no grant at all
 #
 # What else changed versus the source playbook: A5 cleanup (deb822_repository
 # instead of get_url + a `force: true` re-download that reported `changed` on
@@ -38,8 +38,8 @@
 # account the first time it runs docker. This playbook touches none of it (B2).
 #
 # Usage:
-#   ansible-playbook container/docker.yml -e host=<inventory host or group>
-#   ansible-playbook container/docker.yml -e host=ws01 -e docker_users=alice,bob
+#   ansible-playbook core/docker.yml -e host=<inventory host or group>
+#   ansible-playbook core/docker.yml -e host=ws01 -e docker_users=alice,bob
 
 - name: Install Docker Engine system-wide
   hosts: "{{ host }}"
@@ -486,10 +486,10 @@
                           ['Docker is installed and running. No account was granted access to the socket.',
                            'Membership of the `docker` group is equivalent to passwordless root on this host.',
                            'Grant it deliberately, per account:',
-                           '  ansible-playbook container/docker.yml -e host=' ~ inventory_hostname
+                           '  ansible-playbook core/docker.yml -e host=' ~ inventory_hostname
                            ~ ' -e docker_users=alice,bob',
                            '',
-                           'This is NOT a bug and NOT a regression from container/docker.yml, which',
+                           'This is NOT a bug and NOT a regression from the single-user playbook, which',
                            'granted it automatically to whoever ran it. If you want the daemon usable',
                            'without a root-equivalent grant, use rootless Docker',
                            '(dockerd-rootless-setuptool.sh install, per account) or podman.']))

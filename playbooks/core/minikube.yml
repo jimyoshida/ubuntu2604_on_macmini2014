@@ -4,13 +4,12 @@
 #   /usr/local/bin/minikube            root-owned, mode 0755
 #   /etc/bash_completion.d/minikube    shared completion, generated from the binary
 #
-# minikube ships as a single static binary and the source playbook
-# (container/minikube.yml) already installed it to this same root-owned path.
-# What it got wrong:
+# minikube ships as a single static binary and the source playbook already
+# installed it to this same root-owned path. What it got wrong:
 #
 #   - `stat.exists` as the install guard, so a version bump silently no-opped
-#     (POLICY.md point 6). Its sibling container/kind.yml left this
-#     host on kind 0.27.0 for exactly that reason.
+#     (POLICY.md point 6). The source playbook for kind left this host on
+#     kind 0.27.0 for exactly that reason.
 #   - No checksum verification, and the architecture hardcoded as amd64.
 #   - `minikube config set driver docker` with `become: no` (task 6), which
 #     writes ~/.minikube/config/config.json for whoever ran the playbook and
@@ -33,8 +32,8 @@
 # shared mode to migrate it into.
 #
 # Usage:
-#   ansible-playbook container/minikube.yml -e host=<inventory host or group>
-#   ansible-playbook container/minikube.yml -e host=ws01 -e minikube_version=1.38.1
+#   ansible-playbook core/minikube.yml -e host=<inventory host or group>
+#   ansible-playbook core/minikube.yml -e host=ws01 -e minikube_version=1.38.1
 
 - name: Install minikube system-wide
   hosts: "{{ host }}"

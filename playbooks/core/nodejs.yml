@@ -226,7 +226,7 @@
     - name: 5. Read the fingerprints in the pinned signing key
       # The key is read from the playbook variable, not a file on the target:
       # with an INLINE armored key deb822_repository embeds the block in the
-      # .sources file and writes no separate keyring (container/docker.yml's
+      # .sources file and writes no separate keyring (core/docker.yml's
       # task 5 explains the mechanics this mirrors).
       ansible.builtin.command:
         cmd: gpg --show-keys --with-colons

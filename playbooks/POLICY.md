@@ -593,8 +593,8 @@ Before opening a change for review, confirm:
 
 ## Known exceptions and outstanding debt
 
-- **Three playbooks never verify under `--check`.** `container/devcontainers.yml`,
-  `container/kind.yml` and `container/minikube.yml` gate their checks on a bare
+- **Three playbooks never verify under `--check`.** `core/devcontainers.yml`,
+  `core/kind.yml` and `core/minikube.yml` gate their checks on a bare
   `not ansible_check_mode` rather than a `<tool>_can_verify` fact, so a dry run skips them even
   against a host that already has the pinned version. That is safe — it never reports an unproven
   `ok` and never fails misleadingly — but it is the conservative form, and the other 53 playbooks
@@ -613,7 +613,7 @@ Before opening a change for review, confirm:
   [core/markdownlint.yml](core/markdownlint.yml), [misc/mocha-chai.yml](misc/mocha-chai.yml),
   [misc/playwright.yml](misc/playwright.yml),
   [cloud-cli/auth0-deploy-cli.yml](cloud-cli/auth0-deploy-cli.yml) and
-  [container/devcontainers.yml](container/devcontainers.yml) predate it and still write there.
+  [core/devcontainers.yml](core/devcontainers.yml) predate it and still write there.
   The tree is root-owned and root-readable, so nothing leaks, but it is state in a `$HOME` that
   no playbook should be creating.
 - **Nothing removes `~/.bashrc` blocks or per-user trees written by earlier single-user

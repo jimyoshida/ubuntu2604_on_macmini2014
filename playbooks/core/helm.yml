@@ -7,9 +7,9 @@
 #   /etc/bash_completion.d/helm              generated from the binary
 #
 # THIS INSTALLS HELM 4, WHERE THE SOURCE PLAYBOOK MAY HAVE INSTALLED HELM 3.
-# container/helm.yml installed `helm` unpinned, so what landed depended on the
-# day it ran: anyone who ran it before Helm 4 shipped has 3.x, anyone who ran
-# it after gets 4.x, and nothing recorded which. Pinning is therefore not a
+# That playbook installed `helm` unpinned, so what landed depended on the day
+# it ran: anyone who ran it before Helm 4 shipped has 3.x, anyone who ran it
+# after gets 4.x, and nothing recorded which. Pinning is therefore not a
 # no-op -- it is choosing, on the record, which major version this repo
 # installs. 4.2.3-1 is that choice, taken because no consumer in this repo
 # templates a chart and Helm was not installed on any host here at all.
@@ -17,7 +17,7 @@
 # The 3.x line is still published from the same repository under the same
 # package name, so the fallback costs nothing to support:
 #
-#   ansible-playbook container/helm.yml -e host=ws01 -e helm_version=3.21.3-1
+#   ansible-playbook core/helm.yml -e host=ws01 -e helm_version=3.21.3-1
 #
 # What else changed versus the source playbook: A5 cleanup (deb822_repository
 # with the key pinned inline, replacing get_url + a `shell: gpg --dearmor` that
@@ -31,8 +31,8 @@
 # and adds no chart repositories on anyone's behalf.
 #
 # Usage:
-#   ansible-playbook container/helm.yml -e host=<inventory host or group>
-#   ansible-playbook container/helm.yml -e host=ws01 -e helm_version=3.21.3-1
+#   ansible-playbook core/helm.yml -e host=<inventory host or group>
+#   ansible-playbook core/helm.yml -e host=ws01 -e helm_version=3.21.3-1
 
 - name: Install Helm system-wide
   hosts: "{{ host }}"
@@ -54,7 +54,7 @@
     helm_repo_uri: "https://packages.buildkite.com/helm-linux/helm-debian/any/"
     helm_suite: any
     # Apt sources and keyrings written by predecessors of this playbook. The
-    # first two are container/helm.yml's own; the last two are the retired
+    # first two are the source playbook's own; the last two are the retired
     # baltocdn repository that playbook already removed, kept here so a host
     # that never ran the later version of it still gets cleaned up.
     helm_legacy_paths:
@@ -70,7 +70,7 @@
     # DDF78C3E6EBB2D2CC223C95C62BA89D07698DBC6 -- the same one the source
     # playbook asserted. It carries NO EXPIRY, so per POLICY.md's A5 the
     # bytes are pinned inline as well as the fingerprint, the same form
-    # container/docker.yml uses. (Contrast container/kubectl.yml, whose key
+    # core/docker.yml uses. (Contrast core/kubectl.yml, whose key
     # expires and is therefore fetched by URL each run.)
     helm_key_fingerprint: "DDF78C3E6EBB2D2CC223C95C62BA89D07698DBC6"
     helm_signing_key: |
@@ -181,7 +181,7 @@
     - name: 4. Read the fingerprints in the pinned signing key
       # Read from the variable, not from a file: with an inline armored key
       # deb822_repository writes no keyring and embeds the block in the
-      # .sources file, returning key_filename empty. See container/docker.yml
+      # .sources file, returning key_filename empty. See core/docker.yml
       # task 5 for the full note.
       ansible.builtin.command:
         cmd: gpg --show-keys --with-colons
@@ -426,7 +426,7 @@
                 'This is Helm ' ~ helm_version.split('.')[0] ~ '.x. The source playbook was '
                 ~ 'unpinned, so hosts it ran on may',
                 'carry either major version. To stay on the 3.x line:',
-                '  ansible-playbook container/helm.yml -e host=<host> -e helm_version=3.21.3-1',
+                '  ansible-playbook core/helm.yml -e host=<host> -e helm_version=3.21.3-1',
                 '',
                 'No chart repositories are configured by this playbook. Each account runs, for',
                 'itself:',
