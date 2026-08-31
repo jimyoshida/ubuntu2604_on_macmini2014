@@ -35,7 +35,8 @@ directory carries an identity:
 ## Environment variables
 
 **No playbook here sets a single environment variable, and none reads one.** Endpoint
-configuration comes from `vars:` overridable with `-e`; identity comes from each account's
+configuration comes from the inventory or `-e` (see
+[`inventory.ini.example`](../inventory.ini.example)); identity comes from each account's
 own `$HOME`. There is deliberately no shared env template file to fill in: a tracked file
 that looks like the place to write tokens is a file someone eventually commits with tokens
 in it.
@@ -95,6 +96,10 @@ be used to interpolate an instruction into a closing message.
 | `JIRA_API_TOKEN` | `jira` | secret | read |
 | `VAULT_ADDR` | `vault` | shared | read |
 | `VAULT_TOKEN` | `vault` | secret | read |
+| `SONAR_HOST_URL` | `sonar-scanner` | shared | read — it overrides `sonar.host.url` from the conf file in a dump-mode run |
+| `SONAR_TOKEN` | `sonar-scanner` | secret | read — arrives as `sonar.token` in the same dump |
+| `SONAR_USER_HOME` | `sonar-scanner` | per-identity | read — moves the `~/.sonar` analysis cache |
+| ~~`SONARQUBE_HOST_URL`, `SONAR_API_TOKEN`~~ | `sonar-scanner` | — | **not read.** The near-miss names for the two above; both leave the dump unchanged. |
 | ~~`JIRA_URL`, `JIRA_LOGIN`~~ | `jira` | — | **not read.** Both live in `~/.config/.jira/.config.yml`, written by `jira init`. |
 | ~~`AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT`~~ | `az devops` | — | **not read.** Nor is `AZURE_DEFAULTS_ORGANIZATION`. Use the `EXT__DEFAULTS` names above. |
 | ~~`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`~~ | `gcloud` | — | **not read by the CLI.** With `GOOGLE_CLOUD_PROJECT` set, `gcloud config get project` still prints `(unset)`; `CLOUDSDK_CORE_PROJECT` works. Google's *client libraries* read `GOOGLE_CLOUD_PROJECT`, which is where the confusion comes from. |
@@ -104,6 +109,11 @@ be used to interpolate an instruction into a closing message.
 [`jenkins-cli.yml`](#jenkins-cliyml) writes it to `/etc/profile.d/jenkins-cli.sh` from a play
 var. Its two credential variables, `JENKINS_USER_ID` and `JENKINS_API_TOKEN`, are per-account
 and are not written anywhere — both are read by the wrapper from your own environment.
+
+[`sonar-scanner.yml`](#sonar-scanneryml) publishes the same kind of shared value without
+touching the environment at all: `sonar.host.url` goes into the scanner's own
+`conf/sonar-scanner.properties`, which every account and every non-login session reads.
+`SONAR_TOKEN` stays where a secret belongs — in each account's own environment.
 
 ---
 
@@ -880,6 +890,87 @@ Version overrides:
 ```bash
 ansible-playbook cloud-cli/promtool.yml -e host=ws01 \
   -e promtool_version=2.53.5+ds1-3 -e alertmanager_version=0.28.1+ds-3
+```
+
+## sonar-scanner.yml
+
+Installs the [SonarScanner CLI](https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/)
+from SonarSource's own download site.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/sonar-scanner/<version>/` | the unpacked distribution, root-owned |
+| `/usr/local/bin/sonar-scanner` | symlink to the active version's `bin/sonar-scanner` |
+
+The versioned directory plus a symlink is the [`misc/maven.yml`](../misc/README.md#mavenyml)
+and [`misc/zap.yml`](../misc/README.md#zapyml) shape: bumping `sonar_scanner_version` installs
+beside the old tree and moves the symlink, and `ls -l /usr/local/bin/sonar-scanner` says which
+version is active. The role this replaces
+unpacked the archive into `/opt` and chowned the tree to one named account, which is what
+[POLICY.md](../POLICY.md) point 1 and B2 rule out on a shared host.
+
+**No JDK prerequisite, unlike every other Java tool here.** The `linux-x64` and `linux-aarch64`
+archives bundle their own JRE and `bin/sonar-scanner` sets `JAVA_HOME` to it unconditionally
+(`use_embedded_jre=true` in the launcher), so the scanner never looks at the host's Java —
+confirmed by the verification below, which reads `java.home` back out of a real run and finds it
+inside the install tree. That is also why the download is ~60 MB rather than ~2 MB. Unlike
+[`misc/maven.yml`](../misc/README.md#mavenyml), [`misc/zap.yml`](../misc/README.md#zapyml) and
+[`jenkins-cli.yml`](#jenkins-cliyml), this playbook therefore
+does not check for [`core/openjdk.yml`](../core/README.md#openjdkyml).
+
+The archive is fetched from `binaries.sonarsource.com` (GitHub's releases carry no assets for
+this project) and verified against the `.sha256` published beside it, resolved at run time so
+that overriding the version stays a one-flag change. Upstream publishes no tarball for Linux,
+so this is the one playbook here that unpacks a real `.zip` tree: `unarchive` passes
+`extra_opts` to `unzip`, which has no `--strip-components`, so the archive's own top-level
+directory is moved into place instead.
+
+**The server URL is shared configuration; the token is not.** `sonar.host.url` names one server
+for the whole host, so it is written into the distribution's own
+`conf/sonar-scanner.properties` from an explicit play var — [POLICY.md](../POLICY.md)'s A1 first
+row, and A2 on where the value comes from. The default is `http://localhost:9000`, SonarQube's
+own default, rather than any particular site's server: which server a host analyses against is a
+per-site decision, so it is set in [`inventory.ini`](../inventory.ini.example) or with `-e`
+rather than committed here. The playbook resolves the name through a `default()` filter rather
+than declaring `sonar_scanner_host_url` in the play's own `vars`, because a play var outranks an
+inventory group var — a value set in `[workstations:vars]` would otherwise be read and then
+ignored. Setting `sonar_scanner_host_url` to an empty string leaves the shipped conf file untouched
+rather than replacing it with dead configuration, the reasoning
+[`misc/maven.yml`](../misc/README.md#mavenyml) gives for not shipping a `settings.xml`.
+
+A token is per-identity and secret, so every account exports `SONAR_TOKEN` for itself and
+nothing here writes one anywhere (A1, A3).
+
+Not to be confused with `dotnet-sonarscanner`, which
+[`misc/dotnet-tools.yml`](../misc/README.md#dotnet-toolsyml) installs: that one is the
+MSBuild-integrated scanner for .NET projects, this one is the standalone CLI for everything
+else.
+
+### Verification
+
+`sonar.scanner.internal.dumpToFile` makes the scanner do everything except contact the server —
+it resolves its properties, its project base directory and its own bootstrap, writes them to a
+file and reports `EXECUTION SUCCESS`. So the unprivileged check is real work and entirely
+offline: no server, no token, no network. The dump it writes is what the assertions read, and it
+proves four things at once — the run succeeded, the shared `sonar.host.url` reached the scanner
+though it appears nowhere on the command line, the JRE that ran is the one inside the install
+tree, and the properties passed on the command line arrived.
+
+`SONAR_USER_HOME` is pointed at a scratch directory for that run: the scanner caches under
+`~/.sonar`, and uid 65534's home is `/nonexistent` — the dump records `user.home=/nonexistent`
+even with `HOME` set, which is [POLICY.md](../POLICY.md)'s C6 exactly.
+
+Version overrides:
+
+```bash
+ansible-playbook cloud-cli/sonar-scanner.yml -e host=ws01 -e sonar_scanner_version=8.2.0.1234
+ansible-playbook cloud-cli/sonar-scanner.yml -e host=ws01 -e sonar_scanner_host_url=https://sonar.example.com
+```
+
+The current release:
+
+```bash
+curl -sS https://api.github.com/repos/SonarSource/sonar-scanner-cli/releases/latest | jq -r .tag_name
 ```
 
 ## vault-cli.yml

@@ -151,7 +151,7 @@ own URL on this machine (`http://localhost:9000`, `http://localhost:8080`), neve
 site's server: which server a host talks to is a per-site decision, and committing one makes
 every copy of this repository point at it. The two instances are
 [cloud-cli/jenkins-cli.yml](cloud-cli/jenkins-cli.yml) and
-[misc/sonar-scanner.yml](misc/sonar-scanner.yml), and both names are listed with their
+[cloud-cli/sonar-scanner.yml](cloud-cli/sonar-scanner.yml), and both names are listed with their
 localhost defaults in [inventory.ini.example](inventory.ini.example).
 
 ### A3. Per-identity setup is out of the playbook, into the README

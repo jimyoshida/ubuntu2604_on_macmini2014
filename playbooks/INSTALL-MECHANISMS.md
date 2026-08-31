@@ -100,7 +100,7 @@ point goes on `PATH`.
 | [cloud-cli/aws-cli.yml](cloud-cli/aws-cli.yml) | vendor's own zip + `install` program (not ansible's `unarchive`) — versioned directory + symlinks, GPG-signature verified |
 | [cloud-cli/jenkins-cli.yml](cloud-cli/jenkins-cli.yml) | single jar from `repo.jenkins-ci.org` (a Maven repository, not GitHub) |
 | [cloud-cli/gitlab-cli.yml](cloud-cli/gitlab-cli.yml) | vendor `.deb` fetched and installed with `apt: deb=` — no vendor apt repo exists |
-| [misc/sonar-scanner.yml](misc/sonar-scanner.yml) | zip from `binaries.sonarsource.com` (GitHub's releases carry no assets), verified against the `.sha256` beside it — versioned directory + symlink; bundles its own JRE, so no JDK prerequisite |
+| [cloud-cli/sonar-scanner.yml](cloud-cli/sonar-scanner.yml) | zip from `binaries.sonarsource.com` (GitHub's releases carry no assets), verified against the `.sha256` beside it — versioned directory + symlink; bundles its own JRE, so no JDK prerequisite |
 
 **Footnote:** [misc/mongodb-tools.yml](misc/mongodb-tools.yml) (mechanism 2 above,
 via MongoDB's apt repo) installs `mongosh` this same `apt: deb=` way instead, inside the same

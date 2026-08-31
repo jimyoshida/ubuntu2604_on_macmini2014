@@ -44,7 +44,7 @@ ansible_user=ubuntu
 #
 #   jenkins_url              cloud-cli/jenkins-cli.yml  -> the jenkins-cli wrapper
 #                                                          and /etc/profile.d
-#   sonar_scanner_host_url   misc/sonar-scanner.yml     -> conf/sonar-scanner.properties
+#   sonar_scanner_host_url   cloud-cli/sonar-scanner.yml -> conf/sonar-scanner.properties
 #
 # Both playbooks resolve these names through a default() filter rather than
 # declaring them in the play's own vars: a play var outranks an inventory group

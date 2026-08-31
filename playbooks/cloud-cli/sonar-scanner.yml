@@ -4,7 +4,8 @@
 #   /usr/local/lib/sonar-scanner/<version>/   the unpacked distribution, root-owned
 #   /usr/local/bin/sonar-scanner              symlink to the active version's bin/sonar-scanner
 #
-# The versioned directory plus a symlink is the maven.yml/zap.yml shape:
+# The versioned directory plus a symlink is the misc/maven.yml, misc/zap.yml
+# shape:
 # bumping sonar_scanner_version installs beside the old tree and moves the
 # symlink, and `ls -l /usr/local/bin/sonar-scanner` says which version is
 # active. The source role unpacked the archive straight into /opt and chowned
@@ -15,8 +16,8 @@
 # linux-aarch64 archives bundle their own JRE, and bin/sonar-scanner sets
 # JAVA_HOME to it unconditionally (`use_embedded_jre=true` in the launcher),
 # so the scanner never looks at the host's Java. That is why this playbook
-# does not check for core/openjdk.yml the way maven.yml, zap.yml and
-# jenkins-cli.yml do -- and it is also why the download is ~60 MB.
+# does not check for core/openjdk.yml the way misc/maven.yml, misc/zap.yml
+# and jenkins-cli.yml do -- and it is also why the download is ~60 MB.
 #
 # THE SERVER URL IS SHARED CONFIGURATION; THE TOKEN IS NOT. sonar.host.url
 # names one server for the whole host, so it is written into the
@@ -37,9 +38,9 @@
 # is /nonexistent (POLICY.md's C6).
 #
 # Usage:
-#   ansible-playbook misc/sonar-scanner.yml -e host=<inventory host or group>
-#   ansible-playbook misc/sonar-scanner.yml -e host=ws01 -e sonar_scanner_version=8.2.0.1234
-#   ansible-playbook misc/sonar-scanner.yml -e host=ws01 -e sonar_scanner_host_url=https://sonar.example.com
+#   ansible-playbook cloud-cli/sonar-scanner.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/sonar-scanner.yml -e host=ws01 -e sonar_scanner_version=8.2.0.1234
+#   ansible-playbook cloud-cli/sonar-scanner.yml -e host=ws01 -e sonar_scanner_host_url=https://sonar.example.com
 
 - name: Install the SonarScanner CLI system-wide
   hosts: "{{ host }}"
@@ -180,7 +181,7 @@
 
     - name: 7. Extract the expected checksum
       # SonarSource's .sha256 holds the bare digest and nothing else -- no
-      # filename column, the same shape as maven.yml's .sha512.
+      # filename column, the same shape as misc/maven.yml's .sha512.
       ansible.builtin.set_fact:
         sonar_scanner_sha256: "{{ sonar_scanner_checksum_file.content | default('') | trim }}"
       when: sonar_scanner_install_needed | bool
@@ -212,7 +213,7 @@
         - not ansible_check_mode
 
     - name: 10. Unpack the distribution into the staging directory
-      # No --strip-components here, unlike maven.yml and zap.yml: those
+      # No --strip-components here, unlike misc/maven.yml and misc/zap.yml: those
       # unpack a tarball, and unarchive passes extra_opts to unzip for a
       # .zip, which has no such option. The archive's own
       # sonar-scanner-<version>-<platform>/ top level is dropped by moving
@@ -281,7 +282,7 @@
       # The one setting this playbook makes for everyone, and it is only
       # written when there is a value to write: an empty
       # sonar_scanner_host_url leaves the shipped file alone rather than
-      # replacing it with dead configuration (the reasoning maven.yml gives
+      # replacing it with dead configuration (the reasoning misc/maven.yml gives
       # for not shipping a settings.xml). No token, ever: that is per
       # account, and secret (A1).
       ansible.builtin.copy:
@@ -290,7 +291,7 @@
         group: root
         mode: '0644'
         content: |
-          # Managed by misc/sonar-scanner.yml. Shared, non-secret settings only.
+          # Managed by cloud-cli/sonar-scanner.yml. Shared, non-secret settings only.
           #
           # A token is per account and must never be added here: export
           # SONAR_TOKEN in your own environment instead.
