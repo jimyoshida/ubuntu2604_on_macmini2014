@@ -57,7 +57,7 @@ The vendor publishes their own repository and it's kept current; adds a `deb822_
 | [cloud-cli/gcloud-cli.yml](cloud-cli/gcloud-cli.yml) | `packages.cloud.google.com` |
 | [cloud-cli/github-cli.yml](cloud-cli/github-cli.yml) | `cli.github.com` |
 | [cloud-cli/opentofu.yml](cloud-cli/opentofu.yml) | `packages.opentofu.org` |
-| [cloud-cli/vault-cli.yml](cloud-cli/vault-cli.yml) | HashiCorp apt repo |
+| [cloud-cli/vault-cli.yml](cloud-cli/vault-cli.yml) | HashiCorp apt repo (de-brewed) |
 | [container/docker.yml](container/docker.yml) | `download.docker.com` |
 | [container/helm.yml](container/helm.yml) | Helm's own apt repo |
 | [container/kubectl.yml](container/kubectl.yml) | `pkgs.k8s.io`, plus an `/etc/apt/preferences.d` pin at priority 1001 to beat `packages.cloud.google.com`'s epoched `kubectl` package — see the file's header for why a plain version pin isn't enough |
@@ -87,7 +87,7 @@ point goes on `PATH`.
 | [container/kind.yml](container/kind.yml) | single binary |
 | [container/minikube.yml](container/minikube.yml) | single binary |
 | [container/kube-tools.yml](container/kube-tools.yml) | three single binaries: kubelogin, k9s, kdash |
-| [cloud-cli/databricks-cli.yml](cloud-cli/databricks-cli.yml) | single Go binary (de-brewed) |
+| [cloud-cli/databricks-cli.yml](cloud-cli/databricks-cli.yml) | single Go binary |
 | [cloud-cli/gcx-cli.yml](cloud-cli/gcx-cli.yml) | release tarball (de-brewed) |
 | [cloud-cli/jira-cli.yml](cloud-cli/jira-cli.yml) | release tarball (de-brewed) |
 | [cloud-cli/influx-cli.yml](cloud-cli/influx-cli.yml) | tarball from `dl.influxdata.com`, not GitHub — versioned directory + symlink (de-brewed) |
