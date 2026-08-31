@@ -139,11 +139,17 @@
       # escaping, the dots in the version would match any character. This
       # release's checksums.txt lists 35 assets, several differing only by
       # architecture or suffix.
+      #
+      # default([], true) is what keeps task 8 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error ("'NoneType' object is
+      # not iterable") that would kill the play here with a message about
+      # Jinja instead of about the asset naming.
       ansible.builtin.set_fact:
         gitlab_cli_sha256: >-
           {{ (gitlab_cli_checksums.content | default('')
               | regex_search('(?m)^([0-9a-f]{64})\s+' ~ (gitlab_cli_deb | regex_escape) ~ '$', '\1')
-              | first | default('')) }}
+              | default([], true) | first | default('')) }}
       when: gitlab_cli_install_needed | bool
 
     - name: 8. Fail if the checksums file does not list this asset

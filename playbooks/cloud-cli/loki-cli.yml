@@ -156,11 +156,17 @@
       # optional directory prefix is the same allowance influx-cli.yml makes:
       # cheap here, and the difference between a working playbook and a
       # confusing failure if upstream ever republishes with paths.
+      #
+      # default([], true) is what keeps task 8 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error ("'NoneType' object is
+      # not iterable") that would kill the play here with a message about
+      # Jinja instead of about the asset naming.
       ansible.builtin.set_fact:
         loki_cli_sha256: >-
           {{ (loki_cli_checksums.content | default('')
               | regex_search('(?m)^([0-9a-f]{64})\s+(?:\S*/)?' ~ (loki_cli_asset | regex_escape) ~ '$', '\1')
-              | first | default('')) }}
+              | default([], true) | first | default('')) }}
       when: loki_cli_install_needed | bool
 
     - name: 8. Fail if SHA256SUMS does not describe this asset

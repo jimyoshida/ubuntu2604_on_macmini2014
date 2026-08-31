@@ -127,11 +127,17 @@
       # version escaped. This release's SHA256SUMS lists twelve assets (three
       # OSes, two architectures, two archive formats each), differing only by
       # platform and format.
+      #
+      # default([], true) is what keeps task 8 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error ("'NoneType' object is
+      # not iterable") that would kill the play here with a message about
+      # Jinja instead of about the asset naming.
       ansible.builtin.set_fact:
         databricks_cli_sha256: >-
           {{ (databricks_cli_checksums.content | default('')
               | regex_search('(?m)^([0-9a-f]{64})\s+' ~ (databricks_cli_tarball | regex_escape) ~ '$', '\1')
-              | first | default('')) }}
+              | default([], true) | first | default('')) }}
       when: databricks_cli_install_needed | bool
 
     - name: 8. Fail if the checksums file does not list this asset

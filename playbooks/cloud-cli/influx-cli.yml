@@ -157,11 +157,17 @@
       # whitespace. Checksum files vary in how they spell the filename -- a
       # bin/ prefix is the other form seen here -- so confirm the format
       # before pinning a pattern; anchoring on the bare filename finds nothing.
+      #
+      # default([], true) is what keeps task 8 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error ("'NoneType' object is
+      # not iterable") that would kill the play here with a message about
+      # Jinja instead of about the asset naming.
       ansible.builtin.set_fact:
         influx_cli_sha256: >-
           {{ (influx_cli_checksum_file.content | default('')
               | regex_search('(?m)^([0-9a-f]{64})\s+(?:\S*/)?' ~ (influx_cli_tarball | regex_escape) ~ '$', '\1')
-              | first | default('')) }}
+              | default([], true) | first | default('')) }}
       when: influx_cli_install_needed | bool
 
     - name: 8. Fail if the checksum file does not describe this asset

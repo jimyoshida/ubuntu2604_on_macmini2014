@@ -181,11 +181,16 @@
       when: jenkins_cli_install_needed | bool
 
     - name: 9. Extract the expected checksum
+      # default([], true) is what keeps task 10 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error ("'NoneType' object is
+      # not iterable") that would kill the play here with a message about
+      # Jinja instead of about the missing checksum.
       ansible.builtin.set_fact:
         jenkins_cli_sha256: >-
           {{ (jenkins_cli_checksum_file.content | default('')
               | regex_search('([0-9a-f]{64})', '\1')
-              | first | default('')) }}
+              | default([], true) | first | default('')) }}
       when: jenkins_cli_install_needed | bool
 
     - name: 10. Fail if no checksum was published for this version

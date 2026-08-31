@@ -136,11 +136,17 @@
       # Anchored at both ends against the exact filename, with the dots in the
       # version escaped. The file lists six assets differing only by platform
       # and architecture.
+      #
+      # default([], true) is what keeps task 8 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error ("'NoneType' object is
+      # not iterable") that would kill the play here with a message about
+      # Jinja instead of about the asset naming.
       ansible.builtin.set_fact:
         gcx_cli_sha256: >-
           {{ (gcx_cli_checksums.content | default('')
               | regex_search('(?m)^([0-9a-f]{64})\s+' ~ (gcx_cli_tarball | regex_escape) ~ '$', '\1')
-              | first | default('')) }}
+              | default([], true) | first | default('')) }}
       when: gcx_cli_install_needed | bool
 
     - name: 8. Fail if the checksums file does not list this asset
