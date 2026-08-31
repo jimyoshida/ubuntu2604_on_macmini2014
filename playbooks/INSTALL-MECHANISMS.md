@@ -14,9 +14,9 @@ shared prerequisite rather than installing a runtime themselves.
 
 | Mechanism | Playbooks |
 | --- | ---: |
-| 1. Ubuntu apt package | 11 |
+| 1. Ubuntu apt package | 10 |
 | 2. Vendor apt repository | 15 |
-| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 21 |
+| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 22 |
 | 4. Upstream git tag + install script / tree | 2 |
 | 5. pipx as root | 2 |
 | 6. `npm install -g` with `become` | 5 |
@@ -38,7 +38,6 @@ version, no repository work needed.
 | [cloud-cli/promtool.yml](cloud-cli/promtool.yml) | `promtool`, `amtool` (via `prometheus-alertmanager`, daemon stopped/disabled) |
 | [container/podman.yml](container/podman.yml) | `podman`, `podman-compose` |
 | [misc/jsonnet.yml](misc/jsonnet.yml) | `jsonnet` |
-| [misc/plantuml.yml](misc/plantuml.yml) | `plantuml` |
 | [core/ruby.yml](core/ruby.yml) | `ruby`, `ruby-dev`, `ruby3.3`, `ruby-rubygems` — the metapackages pin the *series*, `ruby3.3` the interpreter |
 
 Two apt gotchas worth knowing before assuming a distro package is fine as-is: Ubuntu's `yq` is
@@ -99,6 +98,7 @@ point goes on `PATH`.
 | [core/pwsh.yml](core/pwsh.yml) | tarball from Microsoft — no `powershell` package exists for Ubuntu 26.04 at all; versioned directory + symlink |
 | [cloud-cli/aws-cli.yml](cloud-cli/aws-cli.yml) | vendor's own zip + `install` program (not ansible's `unarchive`) — versioned directory + symlinks, GPG-signature verified |
 | [cloud-cli/jenkins-cli.yml](cloud-cli/jenkins-cli.yml) | single jar from `repo.jenkins-ci.org` (a Maven repository, not GitHub) |
+| [misc/plantuml.yml](misc/plantuml.yml) | single jar from Maven Central, verified against the `.sha256` beside it — the GitHub release publishes only detached `.asc` signatures; apt's `plantuml` is PlantUML 1.2020.2 |
 | [cloud-cli/gitlab-cli.yml](cloud-cli/gitlab-cli.yml) | vendor `.deb` fetched and installed with `apt: deb=` — no vendor apt repo exists |
 | [cloud-cli/sonar-scanner.yml](cloud-cli/sonar-scanner.yml) | zip from `binaries.sonarsource.com` (GitHub's releases carry no assets), verified against the `.sha256` beside it — versioned directory + symlink; bundles its own JRE, so no JDK prerequisite |
 
@@ -175,7 +175,7 @@ carrying its own copy of the pin.
 | Prerequisite | Provisioned by | Checked (not installed) by |
 | --- | --- | --- |
 | Node.js | [core/nodejs.yml](core/nodejs.yml) | markdownlint.yml, auth0-deploy-cli.yml, devcontainers.yml, mocha-chai.yml, playwright.yml |
-| OpenJDK | [core/openjdk.yml](core/openjdk.yml) | jenkins-cli.yml, maven.yml, zap.yml, asciidoctor.yml |
+| OpenJDK | [core/openjdk.yml](core/openjdk.yml) | jenkins-cli.yml, maven.yml, zap.yml, asciidoctor.yml, plantuml.yml |
 | .NET SDK | [core/dotnet.yml](core/dotnet.yml) | dotnet-tools.yml |
 | PowerShell | [core/pwsh.yml](core/pwsh.yml) | azure-pwsh.yml |
 | Ruby | [core/ruby.yml](core/ruby.yml) | asciidoctor.yml |

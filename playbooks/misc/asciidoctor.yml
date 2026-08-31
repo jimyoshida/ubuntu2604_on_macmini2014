@@ -36,11 +36,11 @@
 # for the asciidoctor-diagram-plantuml gem, then a DIAGRAM_PLANTUML_CLASSPATH
 # environment variable, then a plantuml-native binary on PATH, and raises if
 # it finds none (lib/asciidoctor-diagram/plantuml/converter.rb). So the jar
-# gem is pinned here alongside it -- at 1.2026.2, far newer than the
-# 1:1.2020.2 jar Ubuntu's plantuml package carries -- and rendering shells
-# out to `java`, which core/openjdk.yml provisions and task 3 checks for.
+# gem is pinned here alongside it -- at 1.2026.2 -- and rendering shells out
+# to `java`, which core/openjdk.yml provisions and task 3 checks for.
 # misc/plantuml.yml is unrelated to this playbook: it installs the standalone
-# CLI, which asciidoctor-diagram does not call.
+# CLI (also an upstream jar, pinned separately), which asciidoctor-diagram
+# does not call. The two PlantUML versions are not expected to match.
 #
 # Per-user state: none. Every account converts documents with the same
 # root-owned gems, and asciidoctor writes only where it is told to write its

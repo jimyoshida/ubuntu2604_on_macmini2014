@@ -281,22 +281,79 @@ ansible-playbook misc/kube-score.yml -e host=ws01 -e kube_score_version=1.20.0
 
 ## plantuml.yml
 
-Installs [PlantUML](https://plantuml.com/) from the Ubuntu apt package, `/usr/bin/plantuml`,
-root-owned. There is no per-user state and nothing to add to a shell profile.
+Installs [PlantUML](https://plantuml.com/) from the upstream release jar, root-owned, with a
+wrapper script that runs it. There is no per-user state and nothing to add to a shell profile.
 
-A plain apt install, pinned by exact dpkg version the same way [`jsonnet.yml`](#jsonnetyml)
-and [`core/shellcheck.yml`](../core/README.md) are — including the epoch prefix (`1:`) apt
-carries in this package's version string.
+| Path | Contents |
+| --- | --- |
+| `/usr/local/lib/plantuml.jar` | the release jar, mode `0644` — read by every account, executed by none |
+| `/usr/local/bin/plantuml` | wrapper: `java -Djava.awt.headless=true -jar …` |
 
-The unprivileged verification step pipes a two-line sequence diagram into
-`plantuml -pipe -tsvg` as `nobody` and checks the output contains `<svg`. A sequence diagram
-only exercises the bundled Java renderer, not the `Recommends`-only `graphviz` dependency
-(needed for activity/state diagrams), so this proves the zero-configuration path.
+**Not the apt package, deliberately — and this changed.** This playbook used to install
+Ubuntu's `plantuml`, pinned at `1:1.2020.2+ds-6build1`. That is PlantUML **1.2020.2**, a 2020
+release, and it is still what resolute carries; upstream ships roughly monthly and is at
+1.2026.x, so the distro package is six years of diagram syntax and rendering fixes behind. The
+jar is fetched from Maven Central instead, `net.sourceforge.plantuml:plantuml` — the GPL
+distribution, the same artifact the GitHub release page calls `plantuml.jar`.
+
+Central rather than the GitHub release for one reason: it publishes a `.sha256` beside every
+artifact, so the hash is resolved at run time ([POLICY.md](../POLICY.md) point 7) and changing
+`plantuml_version` stays a one-flag change. GitHub's assets carry only detached `.asc`
+signatures and no checksum file. The two jars for a given version are *not* byte-identical —
+they are packed separately — so a hash taken from one will not verify the other.
+
+Do not read the newest version out of Central's `maven-metadata.xml`: its `<latest>` is `8059`,
+from PlantUML's pre-2017 numbering, which sorts after every `1.20xx.y` release.
+[The GitHub releases page](https://github.com/plantuml/plantuml/releases) is the authority.
+
+A JRE is a prerequisite, provisioned by [`core/openjdk.yml`](../core/README.md#openjdkyml) —
+this playbook only checks for `/usr/bin/java` and fails with that instruction if it is missing,
+the shape [`cloud-cli/jenkins-cli.yml`](../cloud-cli/README.md#jenkins-cliyml) and
+[`maven.yml`](#mavenyml) use. There is no architecture map: a jar is a jar.
+
+**`graphviz` is now an explicit prerequisite.** The apt package pulled it in through
+`Recommends`; a jar has no packaging to do that, and every diagram family except sequence and
+timing — class, activity, state, component, deployment — shells out to `dot`. So the playbook
+installs `graphviz` itself, and verifies PlantUML can find it, rather than leaving a host that
+renders sequence diagrams and fails on everything else.
+
+**A leftover apt `plantuml` is reported, never removed.** Hosts that ran the earlier version of
+this playbook still have `/usr/bin/plantuml` at 1.2020.2. `/usr/local/bin` precedes `/usr/bin`
+on the default `PATH`, so the wrapper wins — and the verification proves that rather than
+assuming it. The summary names the package and the `sudo apt remove plantuml` line; running it
+is a deliberate act, the same convention [`asciidoctor.yml`](#asciidoctoryml) uses for the
+converters apt also ships.
+
+### Verification
+
+Three checks, all as `nobody`:
+
+- **A rendered sequence diagram.** A two-line diagram is piped into `plantuml -pipe -tsvg` and
+  the output must contain both `<svg` and `<?plantuml 1.2026.7?>` — PlantUML opens the SVG it
+  writes with that processing instruction, so the second assertion proves *this* jar rendered
+  it and not an older copy earlier on `PATH`. A sequence diagram needs only the Java renderer,
+  so this half stands on its own if graphviz is unavailable.
+- **`plantuml -testdot`**, PlantUML's own installation check, which must answer
+  `Installation seems OK` — the graphviz half of the install, asserted on its text rather than
+  its exit status.
+- **A login shell**, `env -i … bash -lc`, which must resolve `plantuml` to
+  `/usr/local/bin/plantuml` *and* report `PlantUML version 1.2026.7` — an apt copy winning the
+  lookup fails the run.
+
+### Per-account
+
+Nothing is configured per account. A diagram large enough to exhaust the JVM's default heap is
+a property of the diagram, not of the install, so each user sets their own heap for themselves
+and the wrapper passes it through:
+
+```bash
+export PLANTUML_JAVA_OPTS=-Xmx2g
+```
 
 Version overrides:
 
 ```bash
-ansible-playbook misc/plantuml.yml -e host=ws01 -e plantuml_version=1:1.2020.2+ds-6build1
+ansible-playbook misc/plantuml.yml -e host=ws01 -e plantuml_version=1.2026.7
 ```
 
 ## k6.yml
@@ -1018,11 +1075,11 @@ on its own.
 **The diagram extension needs Java, and its own PlantUML gem.** asciidoctor-diagram 3.x no
 longer bundles the PlantUML jar the way 2.x did: it looks for the `asciidoctor-diagram-plantuml`
 gem, then `DIAGRAM_PLANTUML_CLASSPATH`, then a `plantuml-native` binary on `PATH`, and raises if
-it finds none. So the jar gem is pinned here alongside it — at 1.2026.2, far newer than the
-`1:1.2020.2` jar Ubuntu's `plantuml` package carries — and rendering shells out to `java`, which
-[`core/openjdk.yml`](../core/README.md#openjdkyml) provisions and this playbook checks for.
-[`plantuml.yml`](#plantumlyml) is unrelated: it installs the standalone CLI, which
-asciidoctor-diagram does not call.
+it finds none. So the jar gem is pinned here alongside it — at 1.2026.2 — and rendering shells
+out to `java`, which [`core/openjdk.yml`](../core/README.md#openjdkyml) provisions and this
+playbook checks for. [`plantuml.yml`](#plantumlyml) is unrelated: it installs the standalone
+CLI, which asciidoctor-diagram does not call, so the two PlantUML versions are pinned
+independently and are not expected to match.
 
 ### Verification
 

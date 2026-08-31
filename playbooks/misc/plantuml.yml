@@ -1,16 +1,68 @@
 ---
 # Install PlantUML system-wide on a multi-user workstation.
 #
-# PlantUML's Ubuntu apt package is current enough to use as-is, so the
-# multi-user story is simple:
-#
-#   /usr/bin/plantuml   installed by apt, root-owned
+#   /usr/local/lib/plantuml.jar     the release jar, root-owned, mode 0644
+#   /usr/local/bin/plantuml         wrapper script (`java -jar`)
 #
 # There is no per-user state and nothing to add to a shell profile.
 #
+# WHY NOT APT ANY MORE. This playbook used to install Ubuntu's `plantuml`
+# package, pinned at 1:1.2020.2+ds-6build1 -- PlantUML 1.2020.2, a 2020
+# release, still what resolute carries. Upstream ships roughly monthly and is
+# at 1.2026.x, so the distro package is six years of diagram syntax behind:
+# no JSON/YAML/EBNF diagrams, no @startuml ... theme support as it exists
+# today, and none of the sequence/class rendering fixes since. That gap is
+# the reason for the mechanism change; nothing was wrong with the apt
+# playbook mechanically.
+#
+# WHERE THE JAR COMES FROM. Maven Central, net.sourceforge.plantuml:plantuml
+# -- the GPL distribution, the same artifact `plantuml.jar` names on the
+# GitHub release page (Main-Class net.sourceforge.plantuml.Run,
+# Implementation-Version matching the release, ~29MB). Central is chosen over
+# the GitHub release for one reason: it publishes a `.sha256` beside every
+# artifact, so POLICY.md point 7's "resolve the hash at run time" is
+# available and overriding plantuml_version stays a one-flag change. The
+# GitHub assets carry only detached `.asc` signatures and no checksum file.
+# The two jars for a given version are NOT byte-identical (they are packed
+# separately; same entries, same sizes, different bytes), so do not expect a
+# hash from one to verify the other.
+#
+# Do not read the newest version out of Central's maven-metadata.xml: its
+# <latest> is 8059, from PlantUML's pre-2017 numbering, which sorts after
+# every 1.20xx.y release. The <versions> list and the directory listing are
+# ordered correctly; https://github.com/plantuml/plantuml/releases is the
+# authority.
+#
+# No architecture map, unlike most of this directory: a jar is a jar. The JRE
+# is the only native dependency and it is a declared prerequisite provisioned
+# by core/openjdk.yml -- this only checks for java and fails with that
+# instruction, the shape cloud-cli/jenkins-cli.yml, misc/maven.yml and
+# misc/zap.yml use.
+#
+# GRAPHVIZ IS NOW AN EXPLICIT PREREQUISITE. The apt package pulled graphviz in
+# through Recommends; a jar has no packaging to do that for it, and every
+# diagram family except sequence/timing (class, activity, state, component,
+# deployment) shells out to `dot`. So graphviz is installed by task 1 and
+# task 19 asserts PlantUML can find it, rather than leaving a host that
+# renders sequence diagrams and fails on the rest.
+#
+# THE APT PACKAGE IS REPORTED, NEVER REMOVED. A host that ran the earlier
+# version of this playbook still has /usr/bin/plantuml at 1.2020.2.
+# /usr/local/bin precedes /usr/bin on the default PATH, so the wrapper wins
+# and task 20 proves it on a real login PATH as an unprivileged uid -- an apt
+# copy winning would fail the run rather than quietly render with the 2020
+# engine. Removing it is a deliberate act (`sudo apt remove plantuml`), not
+# something this playbook does behind an operator's back; task 15 names it in
+# the summary. This is misc/asciidoctor.yml's convention for the same
+# situation.
+#
+# misc/asciidoctor.yml is unrelated: its asciidoctor-diagram-plantuml gem
+# carries its own PlantUML and never calls this CLI, so the two versions are
+# pinned independently and are not expected to match.
+#
 # Usage:
 #   ansible-playbook misc/plantuml.yml -e host=<inventory host or group>
-#   ansible-playbook misc/plantuml.yml -e host=ws01 -e plantuml_version=1:1.2020.2+ds-6build1
+#   ansible-playbook misc/plantuml.yml -e host=ws01 -e plantuml_version=1.2026.7
 
 - name: Install PlantUML system-wide
   hosts: "{{ host }}"
@@ -21,94 +73,376 @@
   gather_facts: true
 
   vars:
-    # dpkg-query's status field for a package that is really installed.
-    # One removed but not purged (`deinstall ok config-files`) still reports
-    # its version, so every guard below compares the status too, or a removed
-    # package reads as "already at the pin" (POLICY.md's C2).
+    # The newest upstream release; PlantUML ships roughly monthly.
+    #   curl -sS https://api.github.com/repos/plantuml/plantuml/releases/latest | jq -r .tag_name
+    plantuml_version: "1.2026.7"
+    # Maven Central's GPL distribution -- see the header for why not GitHub.
+    plantuml_base_url: >-
+      https://repo1.maven.org/maven2/net/sourceforge/plantuml/plantuml/{{ plantuml_version }}
+    plantuml_artifact: "plantuml-{{ plantuml_version }}.jar"
+    plantuml_jar: /usr/local/lib/plantuml.jar
+    plantuml_wrapper: /usr/local/bin/plantuml
+    # Provisioned by core/openjdk.yml; checked, never installed here.
+    plantuml_java_bin: /usr/bin/java
+    # dpkg-query's status field for a package that is really installed, used
+    # by task 15 to tell a superseded apt plantuml from a removed-but-not-
+    # purged one (C2).
     plantuml_dpkg_ok: "install ok installed|"
-    # dpkg version, including the epoch prefix, so the comparison in task 2
-    # is exact. This is Ubuntu 26.04 (resolute)'s current candidate. apt is
-    # the chosen mechanism here, so overriding this only helps if that exact
-    # dpkg version is available from the target's configured apt sources.
-    plantuml_version: "1:1.2020.2+ds-6build1"
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and
+    # the jar is ~29MiB (C4).
+    plantuml_stage_dir: "/var/tmp/plantuml-install-{{ plantuml_version }}"
+    plantuml_smoke_home: /var/tmp/plantuml-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
     plantuml_verify_uid: 65534    # nobody
     plantuml_verify_gid: 65534    # nogroup
 
   tasks:
-    - name: 1. Check the currently installed plantuml version
-      # ${Status} as well as ${Version} -- see plantuml_dpkg_ok above.
-      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' plantuml
-      register: plantuml_installed
-      changed_when: false
+    - name: 1. Install prerequisites
+      # unzip reads the version out of the jar's manifest in task 5.
+      # graphviz is PlantUML's `dot` renderer -- see the header. No
+      # bash-completion: PlantUML ships no completion script.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - unzip
+          - graphviz
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Check that a JRE is present
+      ansible.builtin.stat:
+        path: "{{ plantuml_java_bin }}"
+      register: plantuml_jre_stat
       # check_mode: false throughout this playbook wherever a task only
       # READS state: without it a dry run skips them, and the guards and
       # checks below then act on output that was never produced.
       check_mode: false
-      failed_when: false
 
-    - name: 2. Decide whether plantuml needs installing
+    - name: 3. Fail with the prerequisite if the JRE is missing
+      ansible.builtin.fail:
+        msg: >-
+          {{ plantuml_java_bin }} is not installed, and the PlantUML jar is run
+          as `java -jar`. Run core/openjdk.yml against this host first:
+          ansible-playbook core/openjdk.yml -e host={{ inventory_hostname }}
+      when: not plantuml_jre_stat.stat.exists
+
+    - name: 4. Check whether the PlantUML jar is present
+      ansible.builtin.stat:
+        path: "{{ plantuml_jar }}"
+      register: plantuml_stat
+      check_mode: false
+
+    - name: 5. Read the installed jar's version from its manifest
+      # The jar carries Implementation-Version in META-INF/MANIFEST.MF, so the
+      # artifact is asked what it is rather than the filesystem being asked to
+      # remember -- no versioned directory and symlink needed. This is also
+      # what keeps the guard able to see the tool absent (C2): task 4's stat
+      # covers "no jar at all", this covers "a jar at the wrong version".
+      ansible.builtin.command:
+        cmd: "unzip -p {{ plantuml_jar }} META-INF/MANIFEST.MF"
+      register: plantuml_manifest
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      when: plantuml_stat.stat.exists
+
+    - name: 6. Decide whether PlantUML needs installing
       ansible.builtin.set_fact:
         plantuml_install_needed: >-
-          {{ plantuml_installed.rc != 0
-             or plantuml_installed.stdout != (plantuml_dpkg_ok ~ plantuml_version) }}
+          {{ not plantuml_stat.stat.exists
+             or ('Implementation-Version: ' ~ plantuml_version)
+                not in (plantuml_manifest.stdout | default('')) }}
         plantuml_can_verify: >-
           {{ not (ansible_check_mode
-                  and (plantuml_installed.rc != 0
-                       or plantuml_installed.stdout != (plantuml_dpkg_ok ~ plantuml_version))) }}
+                  and (not plantuml_stat.stat.exists
+                       or ('Implementation-Version: ' ~ plantuml_version)
+                          not in (plantuml_manifest.stdout | default('')))) }}
 
-    - name: 2a. Note that verification is deferred in this dry run
+    - name: 6a. Note that verification is deferred in this dry run
       ansible.builtin.debug:
         msg: >-
           --check did not install plantuml {{ plantuml_version }}, so the version
-          check and the unprivileged render below are skipped rather than failed.
-          Re-run without --check to verify.
+          check and the unprivileged renders below are skipped rather than
+          failed. Re-run without --check to verify the install.
       when: not (plantuml_can_verify | bool)
 
-    - name: 3. Install plantuml via apt
-      ansible.builtin.apt:
-        name: "plantuml={{ plantuml_version }}"
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
+    - name: 7. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ plantuml_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
       when: plantuml_install_needed | bool
 
-    - name: 4. Verify the installed plantuml version
+    - name: 8. Fetch the published checksum for this release
+      # Resolved at run time from Central's own .sha256 sibling rather than
+      # hardcoded, so overriding plantuml_version stays a one-flag change.
+      # Like repo.jenkins-ci.org and unlike the GitHub-hosted tools there is
+      # no shared checksums file: each artifact has its own, holding the bare
+      # hash with no filename beside it.
+      #
+      # check_mode: false because uri skips itself under --check and registers
+      # no content, which task 10 would then report as a missing release --
+      # a dry run accusing a good version pin of not existing (C1).
+      ansible.builtin.uri:
+        url: "{{ plantuml_base_url }}/{{ plantuml_artifact }}.sha256"
+        return_content: true
+      register: plantuml_checksum_file
+      check_mode: false
+      when: plantuml_install_needed | bool
+
+    - name: 9. Extract the expected checksum
+      # default([], true) is what keeps task 10 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error that would kill the play
+      # here with a message about Jinja instead of about the missing checksum.
+      ansible.builtin.set_fact:
+        plantuml_sha256: >-
+          {{ (plantuml_checksum_file.content | default('')
+              | regex_search('([0-9a-f]{64})', '\1')
+              | default([], true) | first | default('')) }}
+      when: plantuml_install_needed | bool
+
+    - name: 10. Fail if no checksum was published for this version
+      ansible.builtin.fail:
+        msg: >-
+          No sha256 published for {{ plantuml_artifact }} at
+          {{ plantuml_base_url }}. Check plantuml_version against
+          https://github.com/plantuml/plantuml/releases -- and note that
+          maven-metadata.xml's <latest> is the legacy 8059 numbering, not the
+          newest release.
+      when:
+        - plantuml_install_needed | bool
+        - (plantuml_sha256 | default('')) | length != 64
+
+    - name: 11. Download the PlantUML jar and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check.
+      #
+      # Not under --check: get_url is not skipped in check mode and validates
+      # its destination, which task 7 has not really created (C1).
+      ansible.builtin.get_url:
+        url: "{{ plantuml_base_url }}/{{ plantuml_artifact }}"
+        dest: "{{ plantuml_stage_dir }}/{{ plantuml_artifact }}"
+        checksum: "sha256:{{ plantuml_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - plantuml_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Install the PlantUML jar
+      # World-readable and not executable: it is run as `java -jar`, never
+      # directly, and every account must be able to read it.
+      ansible.builtin.copy:
+        src: "{{ plantuml_stage_dir }}/{{ plantuml_artifact }}"
+        dest: "{{ plantuml_jar }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - plantuml_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 13. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ plantuml_stage_dir }}"
+        state: absent
+
+    - name: 14. Install the plantuml wrapper
+      # -Djava.awt.headless=true is what Debian's own /usr/bin/plantuml
+      # wrapper sets, and for the same reason: PlantUML uses AWT for font
+      # metrics, and a headless server with DISPLAY set to something
+      # unreachable should not have a diagram render block on an X connection.
+      #
+      # PLANTUML_JAVA_OPTS is read from each account's own environment at run
+      # time and nothing here writes it anywhere: heap size is a property of
+      # the diagram someone is rendering, not of the installation. The array
+      # (rather than an unquoted expansion) is so that a multi-word value
+      # splits on spaces without the wrapper being at the mercy of IFS.
+      ansible.builtin.copy:
+        dest: "{{ plantuml_wrapper }}"
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Managed by playbooks/misc/plantuml.yml -- do not edit by hand.
+          # Per-account override for large diagrams: export PLANTUML_JAVA_OPTS=-Xmx2g
+          JAVA_OPTS=()
+          if [ -n "${PLANTUML_JAVA_OPTS:-}" ]; then
+            read -r -a JAVA_OPTS <<< "${PLANTUML_JAVA_OPTS}"
+          fi
+          exec {{ plantuml_java_bin }} -Djava.awt.headless=true "${JAVA_OPTS[@]}" \
+            -jar {{ plantuml_jar }} "$@"
+      register: plantuml_wrapper_file
+
+    - name: 15. Check for an apt-installed plantuml this install now shadows
+      # ${Status} as well as ${Version}: a package in `deinstall ok
+      # config-files` state still answers with its version, and reporting
+      # that as an installed collision would send someone hunting a binary
+      # that is not there (C2).
       ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' plantuml
-      register: plantuml_version_out
+      register: plantuml_apt_pkg
       changed_when: false
-      failed_when: plantuml_version_out.stdout != (plantuml_dpkg_ok ~ plantuml_version)
+      check_mode: false
+      failed_when: false
+
+    - name: 16. Verify the installed jar's version
+      ansible.builtin.command:
+        cmd: "unzip -p {{ plantuml_jar }} META-INF/MANIFEST.MF"
+      register: plantuml_installed_manifest
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('Implementation-Version: ' ~ plantuml_version)
+        not in plantuml_installed_manifest.stdout
+      when: plantuml_can_verify | bool
+
+    - name: 17. Create a scratch HOME for the unprivileged checks
+      # PlantUML writes nothing to $HOME for these workloads, but it is given
+      # a writable one anyway so no code path can fall over on an unwritable
+      # one, and it doubles as the working directory (chdir) -- uid 65534
+      # cannot necessarily traverse the directory ansible happens to run
+      # from (C6). Disk-backed, not /tmp, which is a size-capped tmpfs on
+      # these hosts (C4). check_mode: false because `command` validates chdir
+      # before check mode skips the task (C1).
+      ansible.builtin.file:
+        path: "{{ plantuml_smoke_home }}"
+        state: directory
+        owner: "{{ plantuml_verify_uid }}"
+        group: "{{ plantuml_verify_gid }}"
+        mode: '0700'
       check_mode: false
       when: plantuml_can_verify | bool
 
-    - name: 5. Render a sequence diagram as an unprivileged user
-      # A sequence diagram needs only the bundled Java renderer, not the
-      # Recommends-only graphviz dependency (that's for activity/state
-      # diagrams), so this proves the zero-configuration path.
+    - name: 18. Render a sequence diagram as an unprivileged user
+      # Real work, offline, on the zero-configuration path (A4): no
+      # PLANTUML_JAVA_OPTS, no -config, no DISPLAY. Both assertions matter --
+      # `<svg` proves something was rendered, and the `<?plantuml <version>?>`
+      # processing instruction PlantUML opens its SVG with proves it was THIS
+      # jar that rendered it and not a 1.2020.2 apt copy earlier on PATH.
+      # A sequence diagram needs only the Java renderer, so this half stands
+      # on its own if graphviz is ever unavailable; task 19 covers dot.
       ansible.builtin.shell:
         cmd: >-
           printf '@startuml\nAlice -> Bob: hello\n@enduml\n' |
           setpriv --reuid={{ plantuml_verify_uid }} --regid={{ plantuml_verify_gid }} --clear-groups
-          plantuml -pipe -tsvg
-        chdir: /tmp
-      environment:
-        HOME: /tmp
+          env HOME={{ plantuml_smoke_home }}
+          {{ plantuml_wrapper }} -pipe -tsvg
+        chdir: "{{ plantuml_smoke_home }}"
       register: plantuml_smoke
       changed_when: false
-      failed_when: "'<svg' not in plantuml_smoke.stdout"
       check_mode: false
-      when: plantuml_can_verify | bool
+      failed_when: >-
+        '<svg' not in plantuml_smoke.stdout
+        or ('<?plantuml ' ~ plantuml_version ~ '?>') not in plantuml_smoke.stdout
+      # Also skipped when --check is the run that would have written the
+      # wrapper: task 14 only simulates it, so there is nothing to execute.
+      when:
+        - plantuml_can_verify | bool
+        - not (ansible_check_mode and plantuml_wrapper_file is changed)
 
-    - name: 6. Display installation summary
+    - name: 19. Confirm an unprivileged user's PlantUML can find graphviz
+      # -testdot is PlantUML's own installation check: it locates dot, runs
+      # it, and renders a test file. Asserting on its text rather than its
+      # exit status because "Installation seems OK" is the only thing that
+      # distinguishes a working dot from one that was found and then failed.
+      # This is the class/activity/state half of the tool, which the apt
+      # package used to cover through its Recommends on graphviz.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ plantuml_verify_uid }} --regid={{ plantuml_verify_gid }} --clear-groups
+          env HOME={{ plantuml_smoke_home }}
+          {{ plantuml_wrapper }} -testdot
+        chdir: "{{ plantuml_smoke_home }}"
+      register: plantuml_testdot
+      changed_when: false
+      check_mode: false
+      failed_when: "'Installation seems OK' not in plantuml_testdot.stdout"
+      when:
+        - plantuml_can_verify | bool
+        - not (ansible_check_mode and plantuml_wrapper_file is changed)
+
+    - name: 20. Confirm a login shell resolves the wrapper, not an apt plantuml
+      # The regression this guards: /usr/bin/plantuml from the package this
+      # playbook used to install is still on many of these hosts.
+      # /usr/local/bin precedes /usr/bin on the default PATH, so the wrapper
+      # should win -- but that is exactly the kind of "should" that wants an
+      # assertion on a real login PATH, as an account that is not the
+      # connecting user. env -i so PATH comes purely from /etc/profile.
+      # Grepping version-bearing output, never the tool's own name, which a
+      # `command not found` message would also contain (C3).
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ plantuml_verify_uid }} --regid={{ plantuml_verify_gid }} --clear-groups
+          env -i HOME={{ plantuml_smoke_home }}
+          bash -lc 'command -v plantuml; plantuml -version'
+        chdir: "{{ plantuml_smoke_home }}"
+      register: plantuml_smoke_path
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        plantuml_wrapper not in plantuml_smoke_path.stdout
+        or ('PlantUML version ' ~ plantuml_version) not in plantuml_smoke_path.stdout
+      # Also skipped when --check is the run that would have written the
+      # wrapper: task 14 only simulates it, so there is nothing to resolve.
+      when:
+        - plantuml_can_verify | bool
+        - not (ansible_check_mode and plantuml_wrapper_file is changed)
+
+    - name: 21. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ plantuml_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 22. Report an apt-installed plantuml this install now shadows
+      # Reported, never removed -- misc/asciidoctor.yml's convention for the
+      # same situation. The check above already proved the wrapper wins on the
+      # login PATH, so this is information, not a warning to act on.
       ansible.builtin.debug:
         msg:
-          - "plantuml {{ plantuml_version }} installed system-wide."
+          - >-
+            NOTE: the apt package plantuml is also installed at /usr/bin/plantuml,
+            version {{ plantuml_apt_pkg.stdout.split('|')[-1] }}
+            -- this playbook installed it before it moved to the upstream jar.
+          - >-
+            {{ plantuml_wrapper }} shadows it on the default PATH. Remove it yourself
+            if you want it gone: sudo apt remove plantuml
+      when:
+        - plantuml_apt_pkg.stdout is defined
+        - plantuml_apt_pkg.stdout.startswith(plantuml_dpkg_ok)
+
+    - name: 23. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            PlantUML {{ plantuml_version }}
+            {{ plantuml_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
           - ""
-          - "  /usr/bin/plantuml"
+          - "  {{ plantuml_jar }}"
+          - "  {{ plantuml_wrapper }}"
           - ""
-          - "Verified runnable by an unprivileged user (uid {{ plantuml_verify_uid }})."
+          - "The jar is checked against the sha256 published beside it on Maven Central."
+          - >-
+            {{ plantuml_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ plantuml_verify_uid
+                         ~ '): it rendered a sequence diagram to SVG stamped with this version,'
+                         ~ ' found graphviz for the dot-based diagram families, and a login shell'
+                         ~ ' resolves ' ~ plantuml_wrapper ~ '.',
+                         'Not verified: this was a --check run against a host without this version.') }}
           - ""
           - "Usage:"
           - "  plantuml diagram.puml         # Render diagram.puml to diagram.png"
           - "  plantuml -tsvg diagram.puml   # Render to SVG instead"
-      when: plantuml_can_verify | bool
+          - "  plantuml -testdot             # Check the graphviz half of the install"
+          - ""
+          - "Nothing is configured per account. For a diagram large enough to exhaust the"
+          - "JVM's default heap, each user sets their own, for themselves:"
+          - "  export PLANTUML_JAVA_OPTS=-Xmx2g"
