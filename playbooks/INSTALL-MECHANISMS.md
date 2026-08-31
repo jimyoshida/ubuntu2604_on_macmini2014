@@ -8,7 +8,7 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 58 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 59 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
@@ -16,7 +16,7 @@ shared prerequisite rather than installing a runtime themselves.
 | --- | ---: |
 | 1. Ubuntu apt package | 11 |
 | 2. Vendor apt repository | 15 |
-| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 20 |
+| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 21 |
 | 4. Upstream git tag + install script / tree | 2 |
 | 5. pipx as root | 2 |
 | 6. `npm install -g` with `become` | 5 |
@@ -100,6 +100,7 @@ point goes on `PATH`.
 | [cloud-cli/aws-cli.yml](cloud-cli/aws-cli.yml) | vendor's own zip + `install` program (not ansible's `unarchive`) — versioned directory + symlinks, GPG-signature verified |
 | [cloud-cli/jenkins-cli.yml](cloud-cli/jenkins-cli.yml) | single jar from `repo.jenkins-ci.org` (a Maven repository, not GitHub) |
 | [cloud-cli/gitlab-cli.yml](cloud-cli/gitlab-cli.yml) | vendor `.deb` fetched and installed with `apt: deb=` — no vendor apt repo exists |
+| [misc/sonar-scanner.yml](misc/sonar-scanner.yml) | zip from `binaries.sonarsource.com` (GitHub's releases carry no assets), verified against the `.sha256` beside it — versioned directory + symlink; bundles its own JRE, so no JDK prerequisite |
 
 **Footnote:** [misc/mongodb-tools.yml](misc/mongodb-tools.yml) (mechanism 2 above,
 via MongoDB's apt repo) installs `mongosh` this same `apt: deb=` way instead, inside the same

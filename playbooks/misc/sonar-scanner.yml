@@ -1,0 +1,443 @@
+---
+# Install the SonarScanner CLI system-wide on a multi-user workstation.
+#
+#   /usr/local/lib/sonar-scanner/<version>/   the unpacked distribution, root-owned
+#   /usr/local/bin/sonar-scanner              symlink to the active version's bin/sonar-scanner
+#
+# The versioned directory plus a symlink is the maven.yml/zap.yml shape:
+# bumping sonar_scanner_version installs beside the old tree and moves the
+# symlink, and `ls -l /usr/local/bin/sonar-scanner` says which version is
+# active. The source role unpacked the archive straight into /opt and chowned
+# the tree to one named account, which is what POLICY.md point 1 and B2 rule
+# out on a shared host.
+#
+# NO JDK PREREQUISITE, UNLIKE EVERY OTHER JAVA TOOL HERE. The linux-x64 and
+# linux-aarch64 archives bundle their own JRE, and bin/sonar-scanner sets
+# JAVA_HOME to it unconditionally (`use_embedded_jre=true` in the launcher),
+# so the scanner never looks at the host's Java. That is why this playbook
+# does not check for core/openjdk.yml the way maven.yml, zap.yml and
+# jenkins-cli.yml do -- and it is also why the download is ~60 MB.
+#
+# THE SERVER URL IS SHARED CONFIGURATION; THE TOKEN IS NOT. sonar.host.url
+# names one server for the whole host, so it is written into the
+# distribution's own conf/sonar-scanner.properties from an explicit play var
+# (POLICY.md's A1 first row, A2). The default is http://localhost:9000 --
+# SonarQube's own default -- not a site server: which server a host analyses
+# against is a per-site decision, so it is passed with -e (or set in the
+# inventory) rather than committed here. Set sonar_scanner_host_url to an
+# empty string to leave the shipped conf file untouched instead.
+#
+# A token is per-identity and secret: every account exports SONAR_TOKEN for
+# itself, and nothing here writes one anywhere (A1, A3).
+#
+# Per-user state: none is created here. The scanner keeps its analysis cache
+# in ~/.sonar under whichever account runs it, which is exactly where
+# per-identity state belongs; the unprivileged checks below point
+# SONAR_USER_HOME at a scratch directory instead, because uid 65534's home
+# is /nonexistent (POLICY.md's C6).
+#
+# Usage:
+#   ansible-playbook misc/sonar-scanner.yml -e host=<inventory host or group>
+#   ansible-playbook misc/sonar-scanner.yml -e host=ws01 -e sonar_scanner_version=8.2.0.1234
+#   ansible-playbook misc/sonar-scanner.yml -e host=ws01 -e sonar_scanner_host_url=https://sonar.example.com
+
+- name: Install the SonarScanner CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current release as of 2026-08-31:
+    #   curl -sS https://api.github.com/repos/SonarSource/sonar-scanner-cli/releases/latest | jq -r .tag_name
+    # The artifacts themselves are not on GitHub; they are published to
+    # binaries.sonarsource.com, which also carries a .sha256 beside each one.
+    sonar_scanner_version: "8.1.0.6389"
+    # The SonarQube server every account on this host analyses against.
+    # Defaults to a local server on SonarQube's own default port rather than
+    # to any particular site's: a real server URL belongs on the command line
+    # (-e) or in an inventory variable, not committed here. Empty leaves the
+    # distribution's own conf/sonar-scanner.properties as shipped.
+    sonar_scanner_host_url: "http://localhost:9000"
+    sonar_scanner_base_url: https://binaries.sonarsource.com/Distribution/sonar-scanner-cli
+    # Upstream's asset suffix per CPU (point 8: never assume amd64).
+    sonar_scanner_arch_map:
+      x86_64: linux-x64
+      aarch64: linux-aarch64
+    sonar_scanner_platform: "{{ sonar_scanner_arch_map[ansible_facts['architecture']] | default('') }}"
+    sonar_scanner_asset: "sonar-scanner-cli-{{ sonar_scanner_version }}-{{ sonar_scanner_platform }}.zip"
+    # The directory name inside the archive, which the install moves aside.
+    sonar_scanner_archive_dir: "sonar-scanner-{{ sonar_scanner_version }}-{{ sonar_scanner_platform }}"
+    sonar_scanner_lib_dir: /usr/local/lib/sonar-scanner
+    sonar_scanner_home: "/usr/local/lib/sonar-scanner/{{ sonar_scanner_version }}"
+    sonar_scanner_versioned_bin: "/usr/local/lib/sonar-scanner/{{ sonar_scanner_version }}/bin/sonar-scanner"
+    sonar_scanner_jar: >-
+      /usr/local/lib/sonar-scanner/{{ sonar_scanner_version }}/lib/sonar-scanner-cli-{{ sonar_scanner_version }}.jar
+    sonar_scanner_conf: >-
+      /usr/local/lib/sonar-scanner/{{ sonar_scanner_version }}/conf/sonar-scanner.properties
+    sonar_scanner_bin: /usr/local/bin/sonar-scanner
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts, and
+    # the archive plus its unpacked tree is roughly 200 MB (C4).
+    sonar_scanner_stage_dir: "/var/tmp/sonar-scanner-install-{{ sonar_scanner_version }}"
+    sonar_scanner_smoke_dir: /var/tmp/sonar-scanner-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    sonar_scanner_verify_uid: 65534    # nobody
+    sonar_scanner_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # unzip: ansible's unarchive shells out to it for a .zip, and upstream
+      # publishes no tarball for Linux.
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unmapped CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No SonarScanner CLI asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Upstream publishes linux-x64
+          and linux-aarch64; add the mapping to sonar_scanner_arch_map if this
+          host is neither.
+      when: sonar_scanner_platform | length == 0
+
+    - name: 3. Inspect the current install
+      # follow: false on the symlink -- what matters is where it points, not
+      # whether the target happens to resolve. check_mode: false because
+      # these read state that already exists.
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: sonar_scanner_stat
+      loop:
+        - "{{ sonar_scanner_versioned_bin }}"
+        - "{{ sonar_scanner_bin }}"
+        - "{{ sonar_scanner_jar }}"
+      loop_control:
+        label: "{{ item }}"
+      check_mode: false
+
+    - name: 4. Decide whether the scanner needs installing
+      # Three conditions, not one: the pinned version's own tree must exist,
+      # it must carry the jar whose filename bears that version -- an empty
+      # or half-unpacked directory does not count -- and
+      # /usr/local/bin/sonar-scanner must be the symlink into it. A stray
+      # plain binary at that path, such as the source role's link into /opt,
+      # is replaced rather than trusted.
+      ansible.builtin.set_fact:
+        sonar_scanner_install_needed: >-
+          {{ not (sonar_scanner_stat.results[0].stat.exists
+                  and sonar_scanner_stat.results[2].stat.exists
+                  and sonar_scanner_stat.results[1].stat.islnk | default(false)
+                  and sonar_scanner_stat.results[1].stat.lnk_target | default('')
+                      == sonar_scanner_versioned_bin) }}
+
+    - name: 4a. Decide whether this run can verify what it installed
+      ansible.builtin.set_fact:
+        sonar_scanner_can_verify: >-
+          {{ not (ansible_check_mode and (sonar_scanner_install_needed | bool)) }}
+
+    - name: 4b. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install SonarScanner CLI {{ sonar_scanner_version }},
+          so the version check and the unprivileged analysis below are skipped
+          rather than failed. Re-run without --check to verify the install.
+      when: not (sonar_scanner_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ sonar_scanner_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: sonar_scanner_install_needed | bool
+
+    - name: 6. Fetch the published checksum for this artifact
+      # check_mode: false -- fetching a checksum changes nothing on the host,
+      # so a dry run still validates the version pin against upstream (C1).
+      ansible.builtin.uri:
+        url: "{{ sonar_scanner_base_url }}/{{ sonar_scanner_asset }}.sha256"
+        return_content: true
+      register: sonar_scanner_checksum_file
+      check_mode: false
+      when: sonar_scanner_install_needed | bool
+
+    - name: 7. Extract the expected checksum
+      # SonarSource's .sha256 holds the bare digest and nothing else -- no
+      # filename column, the same shape as maven.yml's .sha512.
+      ansible.builtin.set_fact:
+        sonar_scanner_sha256: "{{ sonar_scanner_checksum_file.content | default('') | trim }}"
+      when: sonar_scanner_install_needed | bool
+
+    - name: 8. Fail if the published checksum is not a SHA-256 digest
+      ansible.builtin.fail:
+        msg: >-
+          {{ sonar_scanner_asset }}.sha256 did not return a 64-character hex
+          digest. Check the version pin against
+          https://github.com/SonarSource/sonar-scanner-cli/releases.
+      when:
+        - sonar_scanner_install_needed | bool
+        - not (sonar_scanner_sha256 is match('^[0-9a-f]{64}$'))
+
+    - name: 9. Download the distribution and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check. Not under --check: get_url is
+      # not skipped in check mode and would validate a staging directory
+      # task 5 has not really created.
+      ansible.builtin.get_url:
+        url: "{{ sonar_scanner_base_url }}/{{ sonar_scanner_asset }}"
+        dest: "{{ sonar_scanner_stage_dir }}/{{ sonar_scanner_asset }}"
+        checksum: "sha256:{{ sonar_scanner_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - sonar_scanner_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Unpack the distribution into the staging directory
+      # No --strip-components here, unlike maven.yml and zap.yml: those
+      # unpack a tarball, and unarchive passes extra_opts to unzip for a
+      # .zip, which has no such option. The archive's own
+      # sonar-scanner-<version>-<platform>/ top level is dropped by moving
+      # that directory into place in task 13 instead.
+      ansible.builtin.unarchive:
+        src: "{{ sonar_scanner_stage_dir }}/{{ sonar_scanner_asset }}"
+        dest: "{{ sonar_scanner_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - sonar_scanner_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Create the library directory
+      # /usr/local/lib/sonar-scanner holds one subdirectory per installed
+      # version; the move below fails outright if it does not exist yet.
+      ansible.builtin.file:
+        path: "{{ sonar_scanner_lib_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - sonar_scanner_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Remove any previous tree at this version
+      # An interrupted earlier run can leave a partial tree behind, and task
+      # 13 would then move the new one inside it rather than over it.
+      ansible.builtin.file:
+        path: "{{ sonar_scanner_home }}"
+        state: absent
+      when:
+        - sonar_scanner_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 13. Move the unpacked tree to its versioned directory
+      ansible.builtin.command:
+        cmd: >-
+          mv {{ sonar_scanner_stage_dir }}/{{ sonar_scanner_archive_dir }}
+          {{ sonar_scanner_home }}
+        creates: "{{ sonar_scanner_home }}"
+      when:
+        - sonar_scanner_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 14. Make the install tree world-readable
+      # The archive is already 0644/0755 root-owned, but this is asserted
+      # rather than assumed: every account has to be able to read the tree
+      # and execute both the launcher and the bundled JRE. 'X' only adds the
+      # execute bit to directories and already-executable files, so the jars
+      # and the JRE's shared libraries stay non-executable.
+      ansible.builtin.file:
+        path: "{{ sonar_scanner_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when:
+        - sonar_scanner_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 15. Write the shared server URL into the distribution's conf file
+      # The one setting this playbook makes for everyone, and it is only
+      # written when there is a value to write: an empty
+      # sonar_scanner_host_url leaves the shipped file alone rather than
+      # replacing it with dead configuration (the reasoning maven.yml gives
+      # for not shipping a settings.xml). No token, ever: that is per
+      # account, and secret (A1).
+      ansible.builtin.copy:
+        dest: "{{ sonar_scanner_conf }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Managed by misc/sonar-scanner.yml. Shared, non-secret settings only.
+          #
+          # A token is per account and must never be added here: export
+          # SONAR_TOKEN in your own environment instead.
+          sonar.host.url={{ sonar_scanner_host_url }}
+      register: sonar_scanner_conf_file
+      when:
+        - sonar_scanner_host_url | length > 0
+        - not (ansible_check_mode and (sonar_scanner_install_needed | bool))
+
+    - name: 16. Point /usr/local/bin/sonar-scanner at the pinned version
+      # force: true so an existing plain file or a link into the source
+      # role's /opt tree is replaced rather than causing a "refusing to
+      # convert" failure.
+      ansible.builtin.file:
+        src: "{{ sonar_scanner_versioned_bin }}"
+        dest: "{{ sonar_scanner_bin }}"
+        state: link
+        owner: root
+        group: root
+        force: true
+      when:
+        - sonar_scanner_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 17. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ sonar_scanner_stage_dir }}"
+        state: absent
+
+    - name: 18. Create the scratch project for the unprivileged checks
+      # Owned by the verifying uid: the scanner writes its analysis output
+      # under the project directory and its cache under SONAR_USER_HOME.
+      ansible.builtin.file:
+        path: "{{ sonar_scanner_smoke_dir }}/{{ item }}"
+        state: directory
+        owner: "{{ sonar_scanner_verify_uid }}"
+        group: "{{ sonar_scanner_verify_gid }}"
+        mode: '0755'
+      loop:
+        - project
+        - userhome
+      check_mode: false
+      when: sonar_scanner_can_verify | bool
+
+    - name: 19. Write the source file the unprivileged analysis reads
+      ansible.builtin.copy:
+        dest: "{{ sonar_scanner_smoke_dir }}/project/smoke.py"
+        owner: "{{ sonar_scanner_verify_uid }}"
+        group: "{{ sonar_scanner_verify_gid }}"
+        mode: '0644'
+        content: |
+          def smoke():
+              return "sonar-scanner-smoke-test"
+      check_mode: false
+      when: sonar_scanner_can_verify | bool
+
+    - name: 20. Report the version as an unprivileged user
+      # Through the symlink on PATH, which proves it resolves, and with no
+      # JAVA_HOME set: the launcher must find its own bundled JRE. The
+      # configuration-file line is asserted too, because that is the file
+      # task 15 wrote the shared server URL into.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ sonar_scanner_verify_uid }} --regid={{ sonar_scanner_verify_gid }} --clear-groups
+          env HOME={{ sonar_scanner_smoke_dir }}/userhome
+          SONAR_USER_HOME={{ sonar_scanner_smoke_dir }}/userhome
+          {{ sonar_scanner_bin }} --version
+        chdir: "{{ sonar_scanner_smoke_dir }}/project"
+      register: sonar_scanner_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        ('SonarScanner CLI ' ~ sonar_scanner_version) not in sonar_scanner_version_out.stdout
+        or ('Scanner configuration file: ' ~ sonar_scanner_conf)
+           not in sonar_scanner_version_out.stdout
+      when: sonar_scanner_can_verify | bool
+
+    - name: 21. Run an analysis in simulation mode as an unprivileged user
+      # Real work, entirely offline, which A4 prefers over any --version:
+      # sonar.scanner.internal.dumpToFile makes the scanner do everything
+      # except contact the server -- it resolves its properties, the project
+      # base directory and its own bootstrap, then writes the lot to a file
+      # and reports EXECUTION SUCCESS. No server, no token, no network.
+      #
+      # The dump is what the assertions read, and it proves four separate
+      # things: the run succeeded, the shared sonar.host.url really reached
+      # the scanner (it is set nowhere on this command line), the JRE that
+      # ran is the one inside the install tree rather than any host Java,
+      # and the properties given on the command line arrived.
+      #
+      # The URL half of that is skipped in the one case where it would lie:
+      # a --check run that would have rewritten the conf file only simulated
+      # the write, so the scanner still reads the previous URL and failing on
+      # it would report a mismatch that does not exist (C1).
+      #
+      # SONAR_USER_HOME is set because the scanner keeps its cache under
+      # ~/.sonar and uid 65534's home is /nonexistent -- the dump records
+      # user.home=/nonexistent even with HOME set, C6 exactly. The values in
+      # the dump are Java-properties-escaped (`https\://...`), so the
+      # backslashes are stripped before matching.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ sonar_scanner_verify_uid }} --regid={{ sonar_scanner_verify_gid }} --clear-groups
+          env HOME={{ sonar_scanner_smoke_dir }}/userhome
+          SONAR_USER_HOME={{ sonar_scanner_smoke_dir }}/userhome
+          {{ sonar_scanner_bin }}
+          -Dsonar.projectKey=sonar-scanner-smoke-test
+          -Dsonar.scanner.internal.dumpToFile={{ sonar_scanner_smoke_dir }}/dump.properties
+          && tr -d '\\' < {{ sonar_scanner_smoke_dir }}/dump.properties
+        chdir: "{{ sonar_scanner_smoke_dir }}/project"
+      register: sonar_scanner_smoke
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        'EXECUTION SUCCESS' not in sonar_scanner_smoke.stdout
+        or 'sonar.projectKey=sonar-scanner-smoke-test' not in sonar_scanner_smoke.stdout
+        or ('java.home=' ~ sonar_scanner_home ~ '/jre') not in sonar_scanner_smoke.stdout
+        or (sonar_scanner_host_url | length > 0
+            and not (ansible_check_mode and sonar_scanner_conf_file is changed)
+            and ('sonar.host.url=' ~ sonar_scanner_host_url) not in sonar_scanner_smoke.stdout)
+      when: sonar_scanner_can_verify | bool
+
+    - name: 22. Remove the scratch project
+      ansible.builtin.file:
+        path: "{{ sonar_scanner_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 23. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "SonarScanner CLI {{ sonar_scanner_version }} installed system-wide."
+          - ""
+          - "  {{ sonar_scanner_home }}   (bundled JRE, no host JDK needed)"
+          - "  {{ sonar_scanner_bin }} -> {{ sonar_scanner_versioned_bin }}"
+          - ""
+          - >-
+            {{ (sonar_scanner_host_url | length > 0)
+            | ternary('sonar.host.url=' ~ sonar_scanner_host_url ~ ' is set for every account in '
+            ~ sonar_scanner_conf ~ '.',
+            'No server URL is configured: the distribution conf file is as upstream ships it.') }}
+          - "No token is set anywhere on this host: it is per account, and secret."
+          - ""
+          - >-
+            {{ sonar_scanner_can_verify | bool
+            | ternary('Verified as an unprivileged user (uid ' ~ sonar_scanner_verify_uid
+            ~ '): an offline simulation run reported EXECUTION SUCCESS, picked up the shared'
+            ~ ' server URL, and ran on the JRE inside the install tree.',
+            'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "Each account gets its own ~/.sonar analysis cache on first use."
+          - ""
+          - "Usage (per account, in a project directory):"
+          - "  export SONAR_TOKEN=...                     # your own token; never set on the host"
+          - "  sonar-scanner -Dsonar.projectKey=<key>"
+          - "  sonar-scanner -Dsonar.scanner.internal.dumpToFile=/tmp/dump.properties -Dsonar.projectKey=<key>"
+          - "                                             # resolve settings without contacting the server"
+      when: sonar_scanner_can_verify | bool
