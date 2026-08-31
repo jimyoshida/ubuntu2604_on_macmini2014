@@ -135,6 +135,25 @@ Every `lookup('env', 'X')` is a `vars:` entry overridable by `-e`, exactly as to
 `export JENKINS_URL=...` in one operator's shell does not — it silently makes one person's
 environment everyone else's default.
 
+**But the name operators set is not itself a `vars:` entry, because a play var outranks an
+inventory group var.** Measured, not assumed: with `sonar_scanner_host_url` set in
+`[workstations:vars]` and a play var of the same name, every task sees the play var — the
+inventory value is read, ignored, and never reported. So a playbook whose endpoint should be
+settable per site leaves that name undefined and resolves it once:
+
+```yaml
+vars:
+  sonar_scanner_server_url: "{{ sonar_scanner_host_url | default('http://localhost:9000') }}"
+```
+
+`inventory.ini` then wins over the default and `-e` wins over both. The default is the tool's
+own URL on this machine (`http://localhost:9000`, `http://localhost:8080`), never a particular
+site's server: which server a host talks to is a per-site decision, and committing one makes
+every copy of this repository point at it. The two instances are
+[cloud-cli/jenkins-cli.yml](cloud-cli/jenkins-cli.yml) and
+[misc/sonar-scanner.yml](misc/sonar-scanner.yml), and both names are listed with their
+localhost defaults in [inventory.ini.example](inventory.ini.example).
+
 ### A3. Per-identity setup is out of the playbook, into the README
 
 `az devops configure --defaults`, `jira init`, `influx config create`, `gcloud auth login`,

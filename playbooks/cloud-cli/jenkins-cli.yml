@@ -15,7 +15,7 @@
 # jar comes from:
 #
 #   * The source playbook downloaded it from a RUNNING JENKINS,
-#     {{ jenkins_url }}/jnlpJars/jenkins-cli.jar. A host with no reachable
+#     {{ jenkins_cli_server_url }}/jnlpJars/jenkins-cli.jar. A host with no reachable
 #     Jenkins could not install the CLI at all -- fatal for provisioning a
 #     fresh workstation -- and the version installed was whatever server
 #     happened to be up, with no pin and nothing to verify the bytes against.
@@ -62,11 +62,17 @@
 
   vars:
     jenkins_cli_version: "2.576"
-    # The shared, non-secret default (A1/A2). A play var overridable with -e,
-    # never lookup('env', 'JENKINS_URL'): -e jenkins_url=... is reproducible and
+    # The shared, non-secret default (A1/A2), never
+    # lookup('env', 'JENKINS_URL'): -e jenkins_url=... is reproducible and
     # shows up in the run record; one operator's exported shell variable does
     # not. Tasks 12 and 13 render this into the two places it is needed.
-    jenkins_url: "http://localhost:8080"
+    #
+    # jenkins_url -- the name operators set -- is deliberately NOT a play var
+    # of its own. A play var outranks an inventory group var (measured), so a
+    # jenkins_url in [workstations:vars] would be read and then ignored. It is
+    # resolved through default() instead, so inventory.ini wins over this
+    # default and -e wins over both.
+    jenkins_cli_server_url: "{{ jenkins_url | default('http://localhost:8080') }}"
     jenkins_cli_base_url: >-
       https://repo.jenkins-ci.org/releases/org/jenkins-ci/main/cli/{{ jenkins_cli_version }}
     jenkins_cli_artifact: "cli-{{ jenkins_cli_version }}.jar"
@@ -244,7 +250,7 @@
 
     - name: 14. Install the jenkins-cli wrapper
       # The one behavioural change versus the source playbook: the default URL
-      # comes from the jenkins_url play var, not from the environment of
+      # comes from the resolved jenkins_url value, not from the environment of
       # whoever ran the playbook. A user's own $JENKINS_URL still wins at run
       # time -- that is per-account and correct -- but the fallback baked into
       # this shared file is now reproducible from the command line.
@@ -259,13 +265,13 @@
         content: |
           #!/bin/bash
           # Managed by playbooks/cloud-cli/jenkins-cli.yml -- do not edit by hand.
-          # Default server: {{ jenkins_url }} (override per-account with $JENKINS_URL)
+          # Default server: {{ jenkins_cli_server_url }} (override per-account with $JENKINS_URL)
           AUTH_ARGS=()
           if [ -n "${JENKINS_USER_ID:-}" ] && [ -n "${JENKINS_API_TOKEN:-}" ]; then
             AUTH_ARGS=(-auth "${JENKINS_USER_ID}:${JENKINS_API_TOKEN}")
           fi
           exec java -jar {{ jenkins_cli_jar }} \
-            -s "${JENKINS_URL:-{{ jenkins_url }}}" "${AUTH_ARGS[@]}" "$@"
+            -s "${JENKINS_URL:-{{ jenkins_cli_server_url }}}" "${AUTH_ARGS[@]}" "$@"
       register: jenkins_cli_wrapper_file
 
     - name: 15. Publish the shared default JENKINS_URL
@@ -287,7 +293,7 @@
           # Managed by playbooks/cloud-cli/jenkins-cli.yml -- do not edit by hand.
           # Shared, non-secret default. JENKINS_USER_ID and JENKINS_API_TOKEN are
           # per-account secrets and must NOT be set here: this file is world-readable.
-          : "${JENKINS_URL:={{ jenkins_url }}}"
+          : "${JENKINS_URL:={{ jenkins_cli_server_url }}}"
           export JENKINS_URL
       register: jenkins_cli_profile_file
 
@@ -361,10 +367,10 @@
       # The regression the source playbook had: this line used to come from the
       # installing account's environment. Asserting the file content is the
       # deterministic way to check it -- running the wrapper with JENKINS_URL
-      # unset would instead contact whatever is at jenkins_url, which is not
+      # unset would instead contact whatever is at the configured server, which is not
       # this playbook's business and may not answer.
       ansible.builtin.command:
-        cmd: "grep -F -- '-s \"${JENKINS_URL:-{{ jenkins_url }}}\"' {{ jenkins_cli_wrapper }}"
+        cmd: "grep -F -- '-s \"${JENKINS_URL:-{{ jenkins_cli_server_url }}}\"' {{ jenkins_cli_wrapper }}"
       register: jenkins_cli_wrapper_check
       changed_when: false
       check_mode: false
@@ -391,7 +397,7 @@
       check_mode: false
       failed_when: >-
         jenkins_cli_wrapper not in jenkins_cli_smoke_path.stdout
-        or jenkins_url not in jenkins_cli_smoke_path.stdout
+        or jenkins_cli_server_url not in jenkins_cli_smoke_path.stdout
       # Same reasoning as task 20, for both /etc drop-ins this play writes.
       when:
         - jenkins_cli_can_verify | bool
@@ -426,8 +432,9 @@
                          ~ ' resolves both the wrapper and the shared JENKINS_URL.',
                          'Not verified: this was a --check run against a host without this version.') }}
           - ""
-          - "Default server: {{ jenkins_url }}"
-          - "  Change it for everyone:  re-run with -e jenkins_url=http://<host>:8080"
+          - "Default server: {{ jenkins_cli_server_url }}"
+          - "  Change it for everyone:  set jenkins_url in inventory.ini, or re-run"
+          - "                           with -e jenkins_url=http://<host>:8080"
           - "  Change it for yourself:  export JENKINS_URL=http://<host>:8080"
           - ""
           - "No identity is configured by this playbook. Each user exports, for themselves:"

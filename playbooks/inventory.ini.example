@@ -36,3 +36,22 @@ ansible_user=ubuntu
 
 # Uncomment when the key for these hosts is not the SSH client's default.
 # ansible_ssh_private_key_file=~/.ssh/id_ed25519
+
+# Server URLs for the two playbooks that talk to a server. Both default to one on
+# the workstation itself, on that tool's own default port, so a fresh copy of this
+# file points at nobody else's environment. Replace them with the real servers and
+# every run picks them up; -e <name>=... still overrides them for a single run.
+#
+#   jenkins_url              cloud-cli/jenkins-cli.yml  -> the jenkins-cli wrapper
+#                                                          and /etc/profile.d
+#   sonar_scanner_host_url   misc/sonar-scanner.yml     -> conf/sonar-scanner.properties
+#
+# Both playbooks resolve these names through a default() filter rather than
+# declaring them in the play's own vars: a play var outranks an inventory group
+# var, so a value set here would otherwise be read and then ignored.
+#
+# Non-secret endpoints only. A token is per identity and secret, so it never
+# belongs in an inventory (POLICY.md's A1): each account exports its own
+# JENKINS_TOKEN / SONAR_TOKEN instead.
+jenkins_url=http://localhost:8080
+sonar_scanner_host_url=http://localhost:9000

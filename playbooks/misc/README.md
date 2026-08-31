@@ -1084,8 +1084,11 @@ for the whole host, so it is written into the distribution's own
 `conf/sonar-scanner.properties` from an explicit play var — [POLICY.md](../POLICY.md)'s A1 first
 row, and A2 on where the value comes from. The default is `http://localhost:9000`, SonarQube's
 own default, rather than any particular site's server: which server a host analyses against is a
-per-site decision, so it is passed with `-e` (or set in the inventory) rather than committed
-here. Setting `sonar_scanner_host_url` to an empty string leaves the shipped conf file untouched
+per-site decision, so it is set in [`inventory.ini`](../inventory.ini.example) or with `-e`
+rather than committed here. The playbook resolves the name through a `default()` filter rather
+than declaring `sonar_scanner_host_url` in the play's own `vars`, because a play var outranks an
+inventory group var — a value set in `[workstations:vars]` would otherwise be read and then
+ignored. Setting `sonar_scanner_host_url` to an empty string leaves the shipped conf file untouched
 rather than replacing it with dead configuration, the reasoning [`maven.yml`](#mavenyml) gives
 for not shipping a `settings.xml`.
 

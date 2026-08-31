@@ -23,9 +23,9 @@
 # distribution's own conf/sonar-scanner.properties from an explicit play var
 # (POLICY.md's A1 first row, A2). The default is http://localhost:9000 --
 # SonarQube's own default -- not a site server: which server a host analyses
-# against is a per-site decision, so it is passed with -e (or set in the
-# inventory) rather than committed here. Set sonar_scanner_host_url to an
-# empty string to leave the shipped conf file untouched instead.
+# against is a per-site decision, so it is set in inventory.ini (per host or
+# per group) or with -e rather than committed here. Set sonar_scanner_host_url
+# to an empty string to leave the shipped conf file untouched instead.
 #
 # A token is per-identity and secret: every account exports SONAR_TOKEN for
 # itself, and nothing here writes one anywhere (A1, A3).
@@ -57,10 +57,18 @@
     sonar_scanner_version: "8.1.0.6389"
     # The SonarQube server every account on this host analyses against.
     # Defaults to a local server on SonarQube's own default port rather than
-    # to any particular site's: a real server URL belongs on the command line
-    # (-e) or in an inventory variable, not committed here. Empty leaves the
-    # distribution's own conf/sonar-scanner.properties as shipped.
-    sonar_scanner_host_url: "http://localhost:9000"
+    # to any particular site's: a real server URL belongs in the inventory or
+    # on the command line, not committed here. Empty leaves the distribution's
+    # own conf/sonar-scanner.properties as shipped.
+    #
+    # sonar_scanner_host_url is deliberately NOT a play var of its own. A play
+    # var outranks an inventory group var -- measured, not assumed: with
+    # sonar_scanner_host_url set in [workstations:vars] and a play var of the
+    # same name, the play var is what every task sees, so the inventory value
+    # would be read, ignored, and never reported. The name operators set is
+    # therefore left undefined here and resolved through default() below, so
+    # inventory.ini wins over this default and -e wins over both.
+    sonar_scanner_server_url: "{{ sonar_scanner_host_url | default('http://localhost:9000') }}"
     sonar_scanner_base_url: https://binaries.sonarsource.com/Distribution/sonar-scanner-cli
     # Upstream's asset suffix per CPU (point 8: never assume amd64).
     sonar_scanner_arch_map:
@@ -286,10 +294,10 @@
           #
           # A token is per account and must never be added here: export
           # SONAR_TOKEN in your own environment instead.
-          sonar.host.url={{ sonar_scanner_host_url }}
+          sonar.host.url={{ sonar_scanner_server_url }}
       register: sonar_scanner_conf_file
       when:
-        - sonar_scanner_host_url | length > 0
+        - sonar_scanner_server_url | length > 0
         - not (ansible_check_mode and (sonar_scanner_install_needed | bool))
 
     - name: 16. Point /usr/local/bin/sonar-scanner at the pinned version
@@ -400,9 +408,9 @@
         'EXECUTION SUCCESS' not in sonar_scanner_smoke.stdout
         or 'sonar.projectKey=sonar-scanner-smoke-test' not in sonar_scanner_smoke.stdout
         or ('java.home=' ~ sonar_scanner_home ~ '/jre') not in sonar_scanner_smoke.stdout
-        or (sonar_scanner_host_url | length > 0
+        or (sonar_scanner_server_url | length > 0
             and not (ansible_check_mode and sonar_scanner_conf_file is changed)
-            and ('sonar.host.url=' ~ sonar_scanner_host_url) not in sonar_scanner_smoke.stdout)
+            and ('sonar.host.url=' ~ sonar_scanner_server_url) not in sonar_scanner_smoke.stdout)
       when: sonar_scanner_can_verify | bool
 
     - name: 22. Remove the scratch project
@@ -420,11 +428,13 @@
           - "  {{ sonar_scanner_bin }} -> {{ sonar_scanner_versioned_bin }}"
           - ""
           - >-
-            {{ (sonar_scanner_host_url | length > 0)
-            | ternary('sonar.host.url=' ~ sonar_scanner_host_url ~ ' is set for every account in '
+            {{ (sonar_scanner_server_url | length > 0)
+            | ternary('sonar.host.url=' ~ sonar_scanner_server_url ~ ' is set for every account in '
             ~ sonar_scanner_conf ~ '.',
             'No server URL is configured: the distribution conf file is as upstream ships it.') }}
           - "No token is set anywhere on this host: it is per account, and secret."
+          - "  Change the server for everyone:  set sonar_scanner_host_url in inventory.ini,"
+          - "                                   or re-run with -e sonar_scanner_host_url=..."
           - ""
           - >-
             {{ sonar_scanner_can_verify | bool

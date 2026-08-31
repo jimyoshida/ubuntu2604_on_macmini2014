@@ -672,9 +672,14 @@ fails with that instruction if it is missing, the shape
 
 The jar is pinned and checksum-verified (`jenkins_cli_version`) from
 `repo.jenkins-ci.org/releases/org/jenkins-ci/main/cli/<version>/`, where each release
-publishes the jar with a `.sha256` sibling. `jenkins_url` is a play var, rendered into both
-the wrapper's fallback and the `/etc/profile.d` default in the same run, so the two cannot
-drift.
+publishes the jar with a `.sha256` sibling. `jenkins_url` is rendered into both the wrapper's
+fallback and the `/etc/profile.d` default in the same run, so the two cannot drift.
+
+It defaults to `http://localhost:8080` and is set per site in
+[`inventory.ini`](../inventory.ini.example) or with `-e`. The playbook resolves it through a
+`default()` filter rather than declaring `jenkins_url` in the play's own `vars`, because a play
+var outranks an inventory group var — a `jenkins_url` in `[workstations:vars]` would otherwise
+be read and then ignored.
 
 Overrides:
 
@@ -683,8 +688,8 @@ ansible-playbook cloud-cli/jenkins-cli.yml -e host=ws01 \
   -e jenkins_url=http://ci.example.com:8080 -e jenkins_cli_version=2.576
 ```
 
-Changing `jenkins_url` re-renders the wrapper and the profile drop-in without touching the
-jar, so pointing a fleet at a new Jenkins is a cheap re-run.
+Changing `jenkins_url` — in the inventory or with `-e` — re-renders the wrapper and the profile
+drop-in without touching the jar, so pointing a fleet at a new Jenkins is a cheap re-run.
 
 ### Pinning a jar the server also serves
 
