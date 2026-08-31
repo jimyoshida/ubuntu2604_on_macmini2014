@@ -1,0 +1,425 @@
+---
+# Install scc (Sloc, Cloc and Code) system-wide on a multi-user workstation.
+#
+#   /usr/local/bin/scc            root-owned, mode 0755
+#   /etc/bash_completion.d/scc    shared completion, generated from the binary
+#
+# scc is a single static Go binary that counts lines of code, comments and
+# cyclomatic complexity across a tree. Ubuntu packages nothing under this
+# name -- confirmed against the archive rather than assumed:
+#
+#   curl -sS 'https://api.launchpad.net/1.0/ubuntu/+archive/primary?ws.op=getPublishedSources&source_name=scc&exact_match=true&status=Published'
+#   => {"start": 0, "total_size": 0, "entries": []}
+#
+# and upstream publishes no apt repository, so this is INSTALL-MECHANISMS.md
+# mechanism 3: the release tarball, checksum-verified, straight to
+# /usr/local/bin.
+#
+# Three things measured on the binary before this playbook was written:
+#
+# 1. NO PER-USER STATE, AND NO RUNTIME DEPENDENCIES. Run under `env -i`, with
+#    neither HOME nor PATH set, scc counts a tree and even renders its git
+#    history reports (--hotspots, --coupling, --by-author, --timeline) --
+#    it reads .git itself rather than shelling out to git. Nothing is written
+#    to $HOME on any invocation, so task 3 may simply run the installed binary
+#    to read its version (B2).
+# 2. CONFIGURATION IS PER-PERSON OR PER-PROJECT, SO THIS PLAYBOOK SETS NONE.
+#    scc 4.x discovers a global config from the SCC_CONFIG_PATH environment
+#    variable and a project one from ./.sccconfig, in that precedence order
+#    (global < project < CLI). Neither is a site-wide fact -- which COCOMO
+#    wage, currency or output format a run should use belongs to the person
+#    or the repository, not to the workstation -- so SCC_CONFIG_PATH is left
+#    unset here per A1/A3, including in the smoke test, where the whole point
+#    is to prove the zero-configuration path (point 9).
+# 3. `scc --version` PRINTS "scc version <x.y.z>" ON STDOUT AND EXITS 0.
+#    Stdout, not the stderr logcli's kingpin uses; the guard below reads the
+#    first line and compares it exactly, so 4.0.0 cannot match a future
+#    4.0.01.
+#
+# The tarball is flat -- LICENSE, README.md and scc, with no top-level
+# directory -- so it is unpacked into a per-version staging directory under
+# /var/tmp (disk, not the size-capped /tmp tmpfs on these hosts, per C4) and
+# only the binary is copied into place, root-owned at an explicit mode rather
+# than whatever the caller's umask would give it. The staging directory is
+# removed afterwards.
+#
+# Usage:
+#   ansible-playbook misc/scc.yml -e host=<inventory host or group>
+#   ansible-playbook misc/scc.yml -e host=ws01 -e scc_version=4.0.0
+
+- name: Install scc system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Current boyter/scc release as of 2026-08-31, read from the releases API
+    # rather than assumed:
+    #   curl -sS https://api.github.com/repos/boyter/scc/releases/latest | jq -r .tag_name
+    scc_version: "4.0.0"
+    scc_repo: boyter/scc
+    scc_bin: /usr/local/bin/scc
+    scc_completion: /etc/bash_completion.d/scc
+    # ansible_facts['architecture'] -> upstream release asset suffix. The
+    # release also carries Linux i386, Darwin and Windows assets; only the two
+    # Linux ones this repo's hosts can run are mapped.
+    scc_arch_map:
+      x86_64: x86_64
+      aarch64: arm64
+    scc_arch: "{{ scc_arch_map.get(ansible_facts['architecture'], '') }}"
+    scc_asset: "scc_Linux_{{ scc_arch }}.tar.gz"
+    # The tarball has no top-level directory: LICENSE, README.md, scc.
+    scc_archive_member: scc
+    scc_base_url: >-
+      https://github.com/{{ scc_repo }}/releases/download/v{{ scc_version }}
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts (C4).
+    scc_stage_dir: "/var/tmp/scc-install-{{ scc_version }}"
+    scc_smoke_dir: /var/tmp/scc-smoke
+    # A two-language sample tree written by the playbook, so the counts the
+    # smoke test asserts are a property of scc and not of whatever happens to
+    # be on the host.
+    scc_smoke_files:
+      - name: sample.py
+        content: |
+          # a comment
+
+          print("hello")
+          print("world")
+      - name: sample.go
+        content: |
+          package main
+
+          // entry point
+          func main() {
+              if true {
+                  println("hi")
+              }
+          }
+    # language -> [lines, code, comment, blank, complexity] for that tree.
+    # Measured against the pinned release; the Go `if` is what makes the
+    # complexity column non-zero, so this exercises the complexity estimator
+    # and the language classifier rather than only the file walker.
+    scc_smoke_expected:
+      Go: [8, 6, 1, 1, 1]
+      Python: [4, 2, 1, 1, 0]
+    # uid/gid used to prove the install is usable by an arbitrary user
+    scc_verify_uid: 65534    # nobody
+    scc_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion is a hard prerequisite for B3's shared completion:
+      # /etc/bash_completion.d is only read because that package's
+      # /etc/profile.d/bash_completion.sh sources it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No scc release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to scc_arch_map.
+      when: scc_arch | length == 0
+
+    - name: 3. Check the currently installed scc version
+      # Running the installed binary is safe here -- scc writes nothing to
+      # $HOME (see the header comment). check_mode: false because this only
+      # READS state: a skipped command registers empty output, which task 4
+      # would misread as "the pinned version is absent".
+      ansible.builtin.command: "{{ scc_bin }} --version"
+      register: scc_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether scc needs installing
+      # The version is compared, not merely the presence of the file, so that
+      # bumping scc_version actually replaces the binary (point 6). The first
+      # line is matched in full rather than as a substring: `4.0.0 in stdout`
+      # would also be satisfied by a future 4.0.01.
+      ansible.builtin.set_fact:
+        scc_install_needed: >-
+          {{ (scc_installed.stdout_lines | default([]) | first | default('') | trim)
+             != ('scc version ' ~ scc_version) }}
+        scc_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (scc_installed.stdout_lines | default([]) | first | default('') | trim)
+                      != ('scc version ' ~ scc_version)) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install scc {{ scc_version }}, so the version check
+          and the unprivileged count below are skipped rather than failed.
+          Re-run without --check to verify the install.
+      when: not (scc_can_verify | bool)
+
+    - name: 5. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ scc_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: scc_install_needed | bool
+
+    - name: 6. Fetch the release's checksums.txt
+      # check_mode: false -- fetching a published checksum file changes
+      # nothing on the host, so a dry run still validates the version pin
+      # against upstream rather than skipping and blaming the guard in task 8.
+      ansible.builtin.uri:
+        url: "{{ scc_base_url }}/checksums.txt"
+        return_content: true
+      register: scc_checksums
+      check_mode: false
+      when: scc_install_needed | bool
+
+    - name: 7. Extract the expected checksum for this asset
+      # checksums.txt covers every asset in the release -- Linux, Darwin and
+      # Windows -- so the entry is selected by exact asset name, with the same
+      # optional directory prefix allowance loki-cli.yml makes in case
+      # upstream ever republishes with paths.
+      #
+      # default([], true) is what keeps task 8 reachable: regex_search
+      # returns None rather than an empty list when nothing matches, and
+      # `None | first` is a templating type error ("'NoneType' object is not
+      # iterable") that would kill the play here with a message about Jinja
+      # instead of about the asset naming.
+      ansible.builtin.set_fact:
+        scc_sha256: >-
+          {{ (scc_checksums.content | default('')
+              | regex_search('(?m)^([0-9a-f]{64})\s+(?:\S*/)?' ~ (scc_asset | regex_escape) ~ '$', '\1')
+              | default([], true) | first | default('')) }}
+      when: scc_install_needed | bool
+
+    - name: 8. Fail if checksums.txt does not describe this asset
+      ansible.builtin.fail:
+        msg: >-
+          The checksums.txt for v{{ scc_version }} has no entry for
+          {{ scc_asset }}. Check the version pin and the asset naming against
+          the release page.
+      when:
+        - scc_install_needed | bool
+        - (scc_sha256 | default('')) | length != 64
+
+    - name: 9. Download the scc archive and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check (point 7). Not under --check:
+      # get_url is not skipped in check mode and would validate a destination
+      # directory task 5 has not really created.
+      ansible.builtin.get_url:
+        url: "{{ scc_base_url }}/{{ scc_asset }}"
+        dest: "{{ scc_stage_dir }}/{{ scc_asset }}"
+        checksum: "sha256:{{ scc_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - scc_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Unpack the archive
+      ansible.builtin.unarchive:
+        src: "{{ scc_stage_dir }}/{{ scc_asset }}"
+        dest: "{{ scc_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - scc_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Install the scc binary
+      ansible.builtin.copy:
+        src: "{{ scc_stage_dir }}/{{ scc_archive_member }}"
+        dest: "{{ scc_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - scc_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ scc_stage_dir }}"
+        state: absent
+
+    - name: 13. Verify the installed scc version
+      # Matches version-bearing output, never the tool's own name: `scc
+      # --version | grep -qi scc` would also succeed against a missing binary,
+      # because the shell's "scc: command not found" contains it (C3).
+      ansible.builtin.command: "{{ scc_bin }} --version"
+      register: scc_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        (scc_version_out.stdout_lines | default([]) | first | default('') | trim)
+        != ('scc version ' ~ scc_version)
+      when: scc_can_verify | bool
+
+    - name: 14. Generate the shared bash completion from the installed binary
+      # B3: a snapshot generated by the binary just installed, not
+      # `source <(scc completion bash)` in a profile, which would re-run scc
+      # on every interactive shell start.
+      ansible.builtin.command: "{{ scc_bin }} completion bash"
+      register: scc_completion_out
+      changed_when: false
+      check_mode: false
+      when: scc_can_verify | bool
+
+    - name: 15. Install the shared bash completion
+      ansible.builtin.copy:
+        content: "{{ scc_completion_out.stdout }}\n"
+        dest: "{{ scc_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: scc_can_verify | bool
+
+    - name: 16. Create the sample tree for the unprivileged checks
+      # Root-owned and world-readable rather than owned by uid 65534: scc only
+      # needs to read it, and nothing here may depend on a writable HOME.
+      ansible.builtin.file:
+        path: "{{ scc_smoke_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      check_mode: false
+      when: scc_can_verify | bool
+
+    - name: 17. Write the sample files
+      ansible.builtin.copy:
+        dest: "{{ scc_smoke_dir }}/{{ item.name }}"
+        content: "{{ item.content }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ scc_smoke_files }}"
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: false
+      when: scc_can_verify | bool
+
+    - name: 18. Count the sample tree as an unprivileged user
+      # A4 level 1 -- real work, entirely offline. HOME points at the sample
+      # directory only so that it is not left pointing at /root; scc reads
+      # neither it nor anything under it. SCC_CONFIG_PATH is deliberately not
+      # set and no .sccconfig is written, so what this proves is the
+      # zero-configuration path an account with no setup of its own gets.
+      # chdir into the sample directory, not the checkout: uid 65534 cannot
+      # stat that path (C6).
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ scc_verify_uid }} --regid={{ scc_verify_gid }} --clear-groups
+          env HOME={{ scc_smoke_dir }} {{ scc_bin }} --format json {{ scc_smoke_dir }}
+        chdir: "{{ scc_smoke_dir }}"
+      register: scc_smoke
+      changed_when: false
+      check_mode: false
+      when: scc_can_verify | bool
+
+    - name: 19. Assert the counts scc returned for the sample tree
+      # The JSON is folded down to language -> [lines, code, comment, blank,
+      # complexity] so the comparison ignores the columns that are not being
+      # asserted (Bytes, ULOC) and does not depend on the order scc reports
+      # languages in. map('list') is load-bearing: zip yields tuples, and a
+      # tuple never compares equal to the YAML list in scc_smoke_expected, so
+      # without it this task fires on every run.
+      vars:
+        scc_smoke_langs: "{{ scc_smoke.stdout | default('[]') | from_json }}"
+        scc_smoke_counts: >-
+          {{ dict(scc_smoke_langs | map(attribute='Name')
+                  | zip(scc_smoke_langs | map(attribute='Lines')
+                        | zip(scc_smoke_langs | map(attribute='Code'),
+                              scc_smoke_langs | map(attribute='Comment'),
+                              scc_smoke_langs | map(attribute='Blank'),
+                              scc_smoke_langs | map(attribute='Complexity'))
+                        | map('list'))) }}
+      ansible.builtin.fail:
+        msg: >-
+          scc {{ scc_version }} counted {{ scc_smoke_counts }} for the sample
+          tree, expected {{ scc_smoke_expected }} (language ->
+          [lines, code, comment, blank, complexity]). If this is a version
+          bump rather than a broken install, re-measure the sample and update
+          scc_smoke_expected.
+      when:
+        - scc_can_verify | bool
+        - scc_smoke_counts != scc_smoke_expected
+
+    - name: 20. Confirm the shared completion is loaded by an unprivileged shell
+      # Proves B3 end to end rather than merely writing a file: a non-login
+      # interactive shell for an arbitrary uid must have the completion
+      # registered, which only happens if bash-completion reads
+      # /etc/bash_completion.d.
+      #
+      # Also gated on not ansible_check_mode, unlike the count above: task 15
+      # only simulates the write under --check, so on a host that already has
+      # the pinned binary but has never had the completion installed this
+      # would fail on a file the dry run deliberately did not write.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ scc_verify_uid }} --regid={{ scc_verify_gid }} --clear-groups
+          env -i HOME={{ scc_smoke_dir }} TERM=xterm PS1=$
+          bash -ic 'complete -p scc >/dev/null 2>&1 && echo COMPLETION_OK'
+        chdir: "{{ scc_smoke_dir }}"
+      register: scc_smoke_completion
+      changed_when: false
+      check_mode: false
+      failed_when: "'COMPLETION_OK' not in scc_smoke_completion.stdout"
+      when:
+        - scc_can_verify | bool
+        - not ansible_check_mode
+
+    - name: 21. Remove the sample tree
+      ansible.builtin.file:
+        path: "{{ scc_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 22. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ([
+               (scc_can_verify | bool)
+               | ternary(scc_version_out.stdout | default('') | trim,
+                         'scc ' ~ scc_version)
+               ~ ' (' ~ scc_arch ~ ') '
+               ~ (ansible_check_mode
+                  | ternary('would be installed system-wide.', 'installed system-wide.')),
+               '',
+               '  ' ~ scc_bin,
+               '  ' ~ scc_completion ~ '   shared, generated from the binary',
+               '',
+             ]
+             + ((scc_can_verify | bool)
+                | ternary(['Verified: an unprivileged account (uid ' ~ scc_verify_uid
+                           ~ ') counted a sample tree offline',
+                           'with no configuration of its own, and gets the shared completion.'],
+                          ['Not verified: this was a --check run against a host without this',
+                           'version. The version pin WAS validated against the published',
+                           'checksums.txt upstream.']))
+             + ['',
+                'No configuration is set for anyone. scc reads a global config from',
+                'SCC_CONFIG_PATH and a project one from ./.sccconfig (global < project <',
+                'CLI); both are per-person or per-repository, so each account sets its own:',
+                '',
+                '  export SCC_CONFIG_PATH=~/.sccconfig     # optional, per account',
+                '',
+                'Usage:',
+                '  scc                                     # count the current directory',
+                '  scc src/ docs/ README.md                # count several paths',
+                '  scc --by-file --format csv              # per-file breakdown as CSV',
+                '  scc --report=out.html --report-title x  # self-contained HTML report',
+                '  scc --hotspots --coupling               # git-history reports, no git binary needed',
+               ]) }}

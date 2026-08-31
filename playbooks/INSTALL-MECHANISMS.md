@@ -8,7 +8,7 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 55 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 56 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
@@ -16,7 +16,7 @@ shared prerequisite rather than installing a runtime themselves.
 | --- | ---: |
 | 1. Ubuntu apt package | 10 |
 | 2. Vendor apt repository | 15 |
-| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 19 |
+| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 20 |
 | 4. Upstream git tag + install script / tree | 2 |
 | 5. pipx as root | 2 |
 | 6. `npm install -g` with `become` | 5 |
@@ -82,6 +82,7 @@ point goes on `PATH`.
 | [core/yq.yml](core/yq.yml) | single binary — apt's `yq` is the wrong tool (see mechanism 1's gotcha) |
 | [misc/gomplate.yml](misc/gomplate.yml) | single binary |
 | [misc/hadolint.yml](misc/hadolint.yml) | single binary |
+| [misc/scc.yml](misc/scc.yml) | release tarball, verified against the release's `checksums.txt` |
 | [misc/kube-score.yml](misc/kube-score.yml) | single binary |
 | [container/kind.yml](container/kind.yml) | single binary |
 | [container/minikube.yml](container/minikube.yml) | single binary |

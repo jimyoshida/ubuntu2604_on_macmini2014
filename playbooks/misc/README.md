@@ -907,3 +907,71 @@ Version overrides — one variable per tool:
 ```bash
 ansible-playbook misc/dotnet-tools.yml -e host=ws01 -e dotnet_sonarscanner_version=11.2.1
 ```
+
+## scc.yml
+
+Installs [scc](https://github.com/boyter/scc) — *Sloc, Cloc and Code*, a code counter with
+complexity and cost estimation — as a single static binary, root-owned.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/scc` | the binary, mode `0755` |
+| `/etc/bash_completion.d/scc` | shared completion, generated from the installed binary |
+
+Ubuntu publishes no `scc` package and upstream runs no apt repository, so this takes the
+release tarball, the same shape [`cloud-cli/loki-cli.yml`](../cloud-cli/README.md#loki-cliyml)
+uses:
+
+- **Checksum verification** against the release's published `checksums.txt`, resolved at run
+  time so that changing `scc_version` stays a one-flag change. An asset the checksums file
+  does not describe fails with that as the message, rather than a Jinja type error.
+- **Architecture from facts.** `ansible_facts['architecture']` is mapped to the release asset
+  (`x86_64` → `scc_Linux_x86_64.tar.gz`, `aarch64` → `scc_Linux_arm64.tar.gz`). The release
+  also carries i386, Darwin and Windows assets; only the two Linux ones these hosts can run
+  are mapped, and an unmapped architecture fails with a clear message.
+- **Version-aware idempotency.** `scc --version` prints `scc version 4.0.0` on stdout, and the
+  guard compares that first line in full rather than as a substring, so `4.0.0` cannot be
+  satisfied by a future `4.0.01`.
+- **Staged on disk.** The tarball is flat (`LICENSE`, `README.md`, `scc`, no top-level
+  directory), so it is unpacked in `/var/tmp/scc-install-<version>` — not the size-capped
+  `/tmp` tmpfs — and only the binary is copied into place, root-owned at an explicit mode.
+
+### No configuration is set for anyone
+
+scc 4.x reads a global config from the path in `SCC_CONFIG_PATH` and a project one from
+`./.sccconfig`, in precedence order global < project < CLI. Neither is a site-wide fact —
+which COCOMO wage, currency or output format a run should use belongs to the person or the
+repository, not to the workstation — so this playbook sets neither, and the closing summary
+prints the export for an account that wants one.
+
+There is nothing else per-user: measured under `env -i`, with neither `HOME` nor `PATH` set,
+scc counts a tree and renders its git-history reports (`--hotspots`, `--coupling`,
+`--by-author`, `--timeline`) without writing anything to `$HOME` — it reads `.git` itself
+rather than shelling out to a `git` binary, so there is no runtime prerequisite either.
+
+### Verification
+
+The playbook writes a two-file sample tree (one Python, one Go) under `/var/tmp/scc-smoke`,
+counts it as `nobody` with `SCC_CONFIG_PATH` unset and no `.sccconfig` anywhere — the
+zero-configuration path an account with no setup of its own gets — and asserts the exact
+result, language → `[lines, code, comment, blank, complexity]`:
+
+| Language | Lines | Code | Comment | Blank | Complexity |
+| --- | --- | --- | --- | --- | --- |
+| Go | 8 | 6 | 1 | 1 | 1 |
+| Python | 4 | 2 | 1 | 1 | 0 |
+
+The Go `if` is what makes the complexity column non-zero, so this exercises the language
+classifier and the complexity estimator rather than only the file walker. It is entirely
+offline. A second check opens an interactive shell as `nobody` and requires `complete -p scc`
+to answer, proving the shared completion is really loaded rather than merely written.
+
+A version bump that changes how scc counts that sample will fail this assertion with both the
+counts it got and the counts it expected; re-measure the sample and update
+`scc_smoke_expected`.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/scc.yml -e host=ws01 -e scc_version=4.0.0
+```
