@@ -2,6 +2,78 @@
 
 This directory contains Ansible playbooks for multi-user Ubuntu 26.04 agent workstation setup.
 
+## Motivation
+
+Every tool here is installed for **every** account on the host, and that one requirement is what
+the repository is about. This is a shared workstation: several identities — people and agents —
+reach the same box over SSH and expect the same toolchain, including accounts created after the
+tools were installed. Almost every convenient way to install a developer tool on Linux installs it
+for exactly one account instead, and most playbooks here are rewrites of single-user predecessors
+that did just that. [POLICY.md](playbooks/POLICY.md) is the rule set that came out of those
+rewrites.
+
+### Why Homebrew is the wrong tool for a shared box
+
+Homebrew is the usual answer to "just install it", and on Linux it works — for one user. Five
+separate properties make it unusable here:
+
+- **The prefix is owned by whoever installed it.** `/home/linuxbrew/.linuxbrew` belongs to a
+  single account, and Homebrew upstream does not support multi-user installs. No mode or group
+  setting turns one account's Cellar into shared infrastructure.
+- **That account can then rewrite the binaries everyone else runs.** Once other users' `PATH`
+  reaches into a prefix one unprivileged account owns, that account holds write access to every
+  binary the rest of the host executes — a root-adjacent privilege acquired by accident of install
+  order rather than granted on purpose. Contrast `docker_users` below, where a comparable grant is
+  typed out per account, per run, precisely because it is worth that much.
+- **Nothing reaches anyone else's `PATH` without editing their `$HOME`.** Using a brew prefix
+  means a `brew shellenv` line in each account's own `~/.bashrc`: a per-identity file no playbook
+  here may write (POLICY point 3, B2), repeated once per account, and absent from every account
+  created afterwards. The `/etc/environment` and `/etc/profile.d` route these playbooks use has
+  none of those properties — it applies to accounts that don't exist yet.
+- **It refuses to run as root, so automation has to pick an owner.** A play that is `become: true`
+  throughout cannot call `brew` at all; the single-user playbooks worked around it by dropping to
+  `lookup('env', 'USER')`, which quietly made whoever happened to run the play the owner of the
+  install. Four playbooks — [jira-cli.yml](playbooks/cloud-cli/jira-cli.yml),
+  [gcx-cli.yml](playbooks/cloud-cli/gcx-cli.yml),
+  [influx-cli.yml](playbooks/cloud-cli/influx-cli.yml) and
+  [vault-cli.yml](playbooks/cloud-cli/vault-cli.yml) — exist in their present form specifically to
+  undo that.
+- **`brew install` has no version pin.** It installs whatever the tap currently carries, and
+  `brew pin` only freezes what is already installed — it cannot fetch a version the tap has moved
+  past. Every playbook here pins an exact version in the play's `vars` and asserts it again after
+  install; see [Pinned versions and `apt upgrade` drift](#pinned-versions-and-apt-upgrade-drift).
+
+Per-user version managers fail the same test in the same way, so they are out for the same
+reasons. [core/ruby.yml](playbooks/core/ruby.yml)'s predecessor cloned rbenv and ruby-build into
+`~/.rbenv`, built Ruby from source there, and appended `eval "$(rbenv init - bash)"` to that one
+account's `~/.bashrc`: every part of it is per-identity, and a second account on the same host got
+no `ruby` at all.
+
+### What replaces it
+
+Root-owned system paths (`/usr/local/bin`, `/usr/lib/<tool>`, or apt), `/etc` drop-ins for shell
+configuration, exact pinned versions, world-readable modes set explicitly rather than inherited
+from the operator's umask, and privilege grants that default to granting nothing. The load-bearing
+rule is point 9 of [POLICY.md](playbooks/POLICY.md)'s core ten: every playbook ends by exercising
+the tool as an arbitrary uid (`setpriv --reuid=65534`), never as the connecting account, so an
+install that only works for the operator fails the run instead of passing unnoticed and breaking
+for everyone else.
+
+### What stays per-user on purpose
+
+The goal is not "everything global". Identity and secrets are per-account by design —
+`gh auth login`, `jira init`, `~/.databrickscfg`, every `*_TOKEN` — and `/etc/environment` is
+world-readable, which is exactly why nothing secret goes there. Per-user caches stay per-user too:
+Trivy still builds its vulnerability database under each account's `~/.cache/trivy`. Playbooks
+install the client and stop; the interactive, credential-bearing setup each person runs for
+themselves is printed in the closing summary and documented in the directory READMEs.
+
+One consequence worth knowing: nothing here removes what a single-user install already left
+behind. A surviving brew prefix still shadows the system-wide binary for any account whose
+`~/.bashrc` points at it, and cleaning that up would mean writing into accounts' `$HOME`, which
+this policy forbids — so it is done by hand. See
+[Replacing the Homebrew installs](playbooks/cloud-cli/README.md#replacing-the-homebrew-installs).
+
 ## Prerequisites
 
 Ubuntu 24.04 or 26.04 with system packages up to date and Ansible 2.16 or 2.20 installed respectively:
