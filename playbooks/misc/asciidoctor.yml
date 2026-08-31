@@ -1,0 +1,452 @@
+---
+# Install AsciiDoctor and its diagram/PDF extensions system-wide on a
+# multi-user workstation, as root-owned gems.
+#
+#   /var/lib/gems/<abi>/gems/       the gems themselves, and their dependencies
+#   /usr/local/bin/asciidoctor      the converter
+#   /usr/local/bin/asciidoctor-pdf  the PDF converter
+#
+# Ruby is a prerequisite, provisioned by core/ruby.yml; this playbook only
+# checks for it and fails with that instruction if it is missing -- the shape
+# misc/mocha-chai.yml uses for Node.js and misc/maven.yml for the JDK. Both
+# paths above are resolved at run time from RubyGems itself rather than
+# assumed (POLICY.md's C5): they carry the Ruby ABI version, so they move
+# when the interpreter does.
+#
+# WHY GEMS AND NOT APT. Ubuntu 26.04 does package some of this -- asciidoctor
+# 2.0.26 and ruby-asciidoctor-pdf 2.3.19 -- but not all of it: there is no
+# ruby-asciidoctor-diagram package at all, and the PDF converter lags
+# upstream. Since the diagram extension has to come from RubyGems regardless,
+# all four gems come from there, pinned, so one mechanism explains the whole
+# install.
+#
+# IF THE apt PACKAGES ARE ALSO INSTALLED, THESE GEMS SHADOW THEM, and that is
+# the intended outcome rather than a collision to resolve: RubyGems' bindir
+# for a root install is /usr/local/bin, which is ahead of /usr/bin on the
+# default PATH, and where two copies of a gem are visible RubyGems activates
+# the higher version. Task 19 proves it: it resolves `asciidoctor` on the
+# login PATH and asserts both the path and the version, so an apt package
+# winning would fail the run rather than quietly answer with an older
+# converter. Task 11 reports any such packages in the summary; removing them
+# is a deliberate act (`sudo apt remove asciidoctor ruby-asciidoctor-pdf`),
+# not something this playbook does behind an operator's back.
+#
+# THE DIAGRAM EXTENSION NEEDS JAVA, AND ITS OWN PlantUML GEM. asciidoctor-
+# diagram 3.x no longer bundles the PlantUML jar the way 2.x did: it looks
+# for the asciidoctor-diagram-plantuml gem, then a DIAGRAM_PLANTUML_CLASSPATH
+# environment variable, then a plantuml-native binary on PATH, and raises if
+# it finds none (lib/asciidoctor-diagram/plantuml/converter.rb). So the jar
+# gem is pinned here alongside it -- at 1.2026.2, far newer than the
+# 1:1.2020.2 jar Ubuntu's plantuml package carries -- and rendering shells
+# out to `java`, which core/openjdk.yml provisions and task 3 checks for.
+# misc/plantuml.yml is unrelated to this playbook: it installs the standalone
+# CLI, which asciidoctor-diagram does not call.
+#
+# Per-user state: none. Every account converts documents with the same
+# root-owned gems, and asciidoctor writes only where it is told to write its
+# output. No shell configuration is needed either -- /usr/local/bin is
+# already on the default PATH.
+#
+# Usage:
+#   ansible-playbook misc/asciidoctor.yml -e host=<inventory host or group>
+#   ansible-playbook misc/asciidoctor.yml -e host=ws01 -e asciidoctor_version=2.0.27
+
+- name: Install AsciiDoctor system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Latest releases on rubygems.org as of 2026-08-31:
+    #   curl -sS https://rubygems.org/api/v1/gems/<gem>.json | jq -r .version
+    asciidoctor_version: "2.0.26"
+    asciidoctor_diagram_version: "3.2.1"
+    # PlantUML itself, wrapped in a gem: the version IS the PlantUML version.
+    asciidoctor_diagram_plantuml_version: "1.2026.2"
+    asciidoctor_pdf_version: "2.3.24"
+    asciidoctor_gems:
+      - name: asciidoctor
+        version: "{{ asciidoctor_version }}"
+      - name: asciidoctor-diagram
+        version: "{{ asciidoctor_diagram_version }}"
+      - name: asciidoctor-diagram-plantuml
+        version: "{{ asciidoctor_diagram_plantuml_version }}"
+      - name: asciidoctor-pdf
+        version: "{{ asciidoctor_pdf_version }}"
+    # apt packages that ship the same converters; reported, never removed.
+    asciidoctor_apt_packages:
+      - asciidoctor
+      - ruby-asciidoctor
+      - ruby-asciidoctor-pdf
+      - ruby-asciidoctor-plantuml
+    asciidoctor_java_bin: /usr/bin/java
+    # Disk-backed, not /tmp, which is a size-capped tmpfs on these hosts (C4).
+    asciidoctor_root_home: /var/tmp/asciidoctor-root-home
+    asciidoctor_smoke_dir: /var/tmp/asciidoctor-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    asciidoctor_verify_uid: 65534    # nobody
+    asciidoctor_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that Ruby is installed as a system package
+      ansible.builtin.command: dpkg -s ruby
+      register: asciidoctor_ruby_dpkg
+      changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Fail with the prerequisite if Ruby is missing
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Ruby is not installed, and every gem here needs it. Run
+          core/ruby.yml against this host first:
+          ansible-playbook core/ruby.yml -e host={{ inventory_hostname }}
+      when: asciidoctor_ruby_dpkg.rc != 0
+
+    - name: 3. Resolve the ruby binary on PATH
+      ansible.builtin.command: which ruby
+      register: asciidoctor_ruby_path
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Fail if ruby on PATH is not the system install
+      # The rbenv/rvm/mise guard: a gem installed under become through a
+      # per-account version manager's shim lands in that account's home, not
+      # in a root-owned path every account can read.
+      ansible.builtin.fail:
+        msg: >-
+          ruby resolved to '{{ asciidoctor_ruby_path.stdout | default('') }}',
+          which is not /usr/bin/ruby. It looks like a per-user version manager
+          (rbenv, rvm, mise) is shadowing the system Ruby for this account.
+      when: (asciidoctor_ruby_path.stdout | default('')) != '/usr/bin/ruby'
+
+    - name: 5. Check that Java is present for the diagram extension
+      ansible.builtin.stat:
+        path: "{{ asciidoctor_java_bin }}"
+      register: asciidoctor_java_stat
+      check_mode: false
+
+    - name: 6. Fail with the prerequisite if Java is missing
+      ansible.builtin.fail:
+        msg: >-
+          {{ asciidoctor_java_bin }} is not installed, and asciidoctor-diagram
+          renders PlantUML by shelling out to java. Run core/openjdk.yml
+          against this host first:
+          ansible-playbook core/openjdk.yml -e host={{ inventory_hostname }}
+      when: not asciidoctor_java_stat.stat.exists
+
+    - name: 7. Create the root-side scratch HOME
+      # `gem` writes ~/.local/share/gem and ~/.cache/gem on invocations as
+      # innocuous as `list`, and under become that would be /root, which B2
+      # forbids. Removed again by task 14.
+      ansible.builtin.file:
+        path: "{{ asciidoctor_root_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+
+    - name: 8. Read the gem install and executable directories
+      # Resolved, not assumed (C5): both paths carry the Ruby ABI version.
+      ansible.builtin.command:
+        cmd: ruby -e 'require "rubygems"; puts Gem.default_dir; puts Gem.bindir'
+        chdir: "{{ asciidoctor_root_home }}"
+      environment: &asciidoctor_root_env
+        HOME: "{{ asciidoctor_root_home }}"
+        GEM_SPEC_CACHE: "{{ asciidoctor_root_home }}/spec-cache"
+      register: asciidoctor_gem_dirs
+      changed_when: false
+      check_mode: false
+
+    - name: 9. Check which gems are already installed at the pinned versions
+      # GEM_PATH restricted to the gem install directory on purpose: without
+      # it, apt's own copy of a gem (/usr/share/rubygems-integration) answers
+      # "true" for a version this playbook never installed, and the guard
+      # then skips an install whose binstub in /usr/local/bin does not exist
+      # -- a C2 blind spot with a different cause than dpkg's.
+      #
+      # --exact matters as much: `gem list --installed asciidoctor` without
+      # it matches asciidoctor-pdf and asciidoctor-diagram too, so three of
+      # the four pins here would answer for each other.
+      ansible.builtin.command:
+        cmd: >-
+          gem list --local --exact --installed
+          --version {{ item.version }} {{ item.name }}
+        chdir: "{{ asciidoctor_root_home }}"
+      environment:
+        <<: *asciidoctor_root_env
+        GEM_PATH: "{{ asciidoctor_gem_dirs.stdout_lines[0] }}"
+      register: asciidoctor_installed
+      loop: "{{ asciidoctor_gems }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 10. Decide which gems need installing
+      ansible.builtin.set_fact:
+        asciidoctor_pending: >-
+          {{ asciidoctor_installed.results
+             | selectattr('rc', 'ne', 0)
+             | map(attribute='item') | list }}
+
+    - name: 10a. Decide whether this run can verify what it installed
+      ansible.builtin.set_fact:
+        asciidoctor_can_verify: >-
+          {{ not (ansible_check_mode and (asciidoctor_pending | length > 0)) }}
+
+    - name: 10b. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install
+          {{ asciidoctor_pending | map(attribute='name') | join(', ') }}, so
+          the version checks and the unprivileged conversions below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (asciidoctor_can_verify | bool)
+
+    - name: 11. Report apt packages these gems will shadow
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ item }}"
+      register: asciidoctor_apt_installed
+      loop: "{{ asciidoctor_apt_packages }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 12. Install each gem at its pinned version
+      # --install-dir and --bindir are the values task 8 just read back from
+      # RubyGems, passed explicitly so that what gets installed is what the
+      # later tasks verify. --install-dir also keeps dependency resolution
+      # inside this tree: prawn, treetop and the rest are installed here at
+      # the versions the pinned gems ask for, rather than being satisfied by
+      # whatever apt happens to have put in the vendor gem directory.
+      ansible.builtin.command:
+        cmd: >-
+          gem install {{ item.name }} --version {{ item.version }}
+          --install-dir {{ asciidoctor_gem_dirs.stdout_lines[0] }}
+          --bindir {{ asciidoctor_gem_dirs.stdout_lines[1] }}
+          --no-user-install --no-document
+        chdir: "{{ asciidoctor_root_home }}"
+      environment: *asciidoctor_root_env
+      loop: "{{ asciidoctor_pending }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: 13. Make the gem tree world-readable
+      # The whole install directory, not just the four gems named above:
+      # their dependencies land here too and are just as unusable to another
+      # account if root's umask left them unreadable. 'X' only adds the
+      # execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ asciidoctor_gem_dirs.stdout_lines[0] }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 14. Remove the root-side scratch HOME
+      ansible.builtin.file:
+        path: "{{ asciidoctor_root_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 15. Verify every gem is installed at its pinned version
+      ansible.builtin.command:
+        cmd: >-
+          gem list --local --exact --installed
+          --version {{ item.version }} {{ item.name }}
+        chdir: /var/tmp
+      environment:
+        HOME: /var/tmp
+        GEM_PATH: "{{ asciidoctor_gem_dirs.stdout_lines[0] }}"
+      register: asciidoctor_verify
+      loop: "{{ asciidoctor_gems }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.version }}"
+      changed_when: false
+      failed_when: asciidoctor_verify.rc != 0
+      check_mode: false
+      when: asciidoctor_can_verify | bool
+
+    - name: 16. Read the login PATH
+      # The smoke tests below run with the PATH a real login or SSH session
+      # gets, not with ansible's own: what has to be proven is that the gem
+      # binstub is what an account's `asciidoctor` resolves to, ahead of any
+      # apt-installed copy in /usr/bin.
+      ansible.builtin.command:
+        cmd: grep -E '^PATH=' /etc/environment
+      register: asciidoctor_env_path
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 17. Create the scratch directory for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ asciidoctor_smoke_dir }}"
+        state: directory
+        owner: "{{ asciidoctor_verify_uid }}"
+        group: "{{ asciidoctor_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: asciidoctor_can_verify | bool
+
+    - name: 18. Write the documents the unprivileged checks convert
+      ansible.builtin.copy:
+        dest: "{{ asciidoctor_smoke_dir }}/{{ item.name }}"
+        owner: "{{ asciidoctor_verify_uid }}"
+        group: "{{ asciidoctor_verify_gid }}"
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: smoke.adoc
+          content: |
+            = AsciiDoctor Smoke Test
+
+            asciidoctor-smoke-test
+
+            [plantuml, smoke-diagram, svg]
+            ----
+            @startuml
+            Alice -> Bob: hello
+            @enduml
+            ----
+        - name: smoke-pdf.adoc
+          content: |
+            = AsciiDoctor PDF Smoke Test
+
+            asciidoctor-smoke-test
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: false
+      when: asciidoctor_can_verify | bool
+
+    - name: 19. Convert a document with a PlantUML diagram as an unprivileged user
+      # Real offline work, and the strongest guard here (A4's first
+      # preference): it resolves `asciidoctor` on the login PATH, converts a
+      # document that requires the diagram extension, and asserts three
+      # separate things -- the binary that ran is the gem binstub, the
+      # converter is at the pinned version, and PlantUML really rendered.
+      # The last one is exact rather than approximate: PlantUML opens the SVG
+      # it writes with a `<?plantuml <version>?>` processing instruction, so
+      # the first bytes of the rendered file name the jar that produced them
+      # and the pinned gem version is matched against it.
+      #
+      # HOME points at the scratch directory: RubyGems reads ~/.gemrc on
+      # startup and uid 65534's home is /nonexistent (C6).
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ asciidoctor_verify_uid }} --regid={{ asciidoctor_verify_gid }} --clear-groups
+          env HOME={{ asciidoctor_smoke_dir }}
+          PATH='{{ asciidoctor_login_path }}'
+          bash -c
+          "command -v asciidoctor
+          && asciidoctor --version | head -1
+          && asciidoctor -r asciidoctor-diagram -o smoke.html smoke.adoc
+          && head -c 120 smoke-diagram.svg"
+        chdir: "{{ asciidoctor_smoke_dir }}"
+      vars:
+        asciidoctor_login_path: >-
+          {{ (asciidoctor_env_path.stdout | default('') | regex_replace('^PATH=', '') | trim('"'))
+             if (asciidoctor_env_path.rc | default(1)) == 0
+             else '/usr/local/bin:/usr/bin:/bin' }}
+      register: asciidoctor_smoke_html
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        (asciidoctor_gem_dirs.stdout_lines[1] ~ '/asciidoctor')
+          not in asciidoctor_smoke_html.stdout
+        or ('Asciidoctor ' ~ asciidoctor_version) not in asciidoctor_smoke_html.stdout
+        or '<svg' not in asciidoctor_smoke_html.stdout
+        or ('<?plantuml ' ~ asciidoctor_diagram_plantuml_version)
+          not in asciidoctor_smoke_html.stdout
+      when: asciidoctor_can_verify | bool
+
+    - name: 20. Convert a document to PDF as an unprivileged user
+      # A PDF is not readable output to grep for a marker in, so this checks
+      # the two things that prove asciidoctor-pdf itself ran: the file starts
+      # with the %PDF magic, and it is not empty.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ asciidoctor_verify_uid }} --regid={{ asciidoctor_verify_gid }} --clear-groups
+          env HOME={{ asciidoctor_smoke_dir }}
+          PATH='{{ asciidoctor_login_path }}'
+          bash -c
+          "command -v asciidoctor-pdf
+          && asciidoctor-pdf -o smoke.pdf smoke-pdf.adoc
+          && head -c 5 smoke.pdf
+          && echo
+          && stat -c %s smoke.pdf"
+        chdir: "{{ asciidoctor_smoke_dir }}"
+      vars:
+        asciidoctor_login_path: >-
+          {{ (asciidoctor_env_path.stdout | default('') | regex_replace('^PATH=', '') | trim('"'))
+             if (asciidoctor_env_path.rc | default(1)) == 0
+             else '/usr/local/bin:/usr/bin:/bin' }}
+      register: asciidoctor_smoke_pdf
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        (asciidoctor_gem_dirs.stdout_lines[1] ~ '/asciidoctor-pdf')
+          not in asciidoctor_smoke_pdf.stdout
+        or '%PDF' not in asciidoctor_smoke_pdf.stdout
+        or (asciidoctor_smoke_pdf.stdout_lines | last | int) < 1000
+      when: asciidoctor_can_verify | bool
+
+    - name: 21. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ asciidoctor_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 22. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['AsciiDoctor installed system-wide as root-owned gems:']
+             + (asciidoctor_gems | map(attribute='name') | list
+                | zip(asciidoctor_gems | map(attribute='version') | list)
+                | map('join', ' ')
+                | map('regex_replace', '^', '  ')
+                | list)
+             + ['',
+                '  gems in:          ' ~ asciidoctor_gem_dirs.stdout_lines[0],
+                '  executables in:   ' ~ asciidoctor_gem_dirs.stdout_lines[1]
+                ~ '   (already on PATH)',
+                '',
+                'Verified as an unprivileged user (uid ' ~ asciidoctor_verify_uid
+                ~ '): asciidoctor on the login PATH is the gem binstub at '
+                ~ asciidoctor_version ~ ', it rendered a PlantUML diagram to SVG'
+                ~ ' through java, and asciidoctor-pdf produced a real PDF.']
+             + ((asciidoctor_apt_shadowed | length > 0)
+                | ternary(['',
+                           'These apt packages ship the same converters and are now shadowed by'
+                           ~ ' the gems above (/usr/local/bin precedes /usr/bin on PATH):',
+                           '  ' ~ (asciidoctor_apt_shadowed | join(', ')),
+                           'Remove them by hand if you want only one copy on this host:',
+                           '  sudo apt remove ' ~ (asciidoctor_apt_shadowed | join(' '))],
+                          []))
+             + ['',
+                'Usage:',
+                '  asciidoctor doc.adoc                            # HTML',
+                '  asciidoctor -r asciidoctor-diagram doc.adoc     # HTML with rendered diagrams',
+                '  asciidoctor-pdf doc.adoc                        # PDF',
+                '',
+                'No per-user state is created and no shell configuration was changed.'] }}
+      vars:
+        asciidoctor_apt_shadowed: >-
+          {{ asciidoctor_apt_installed.results
+             | selectattr('stdout', 'match', '^install ok installed\|')
+             | map(attribute='item') | list }}
+      when: asciidoctor_can_verify | bool

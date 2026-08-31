@@ -1,8 +1,8 @@
 # Core Playbooks (multi-user workstations)
 
 Standalone playbooks that install the base CLI toolset, Node.js, mise, ansible-core, the .NET
-SDK, PowerShell and OpenJDK on a **shared** Ubuntu workstation, to root-owned system paths usable
-by every account on the host. See [POLICY.md](../POLICY.md) for the rules they follow.
+SDK, PowerShell, OpenJDK and Ruby on a **shared** Ubuntu workstation, to root-owned system
+paths usable by every account on the host. See [POLICY.md](../POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -535,6 +535,58 @@ Version overrides:
 
 ```bash
 ansible-playbook core/yq.yml -e host=ws01 -e yq_version=4.53.3
+```
+
+## ruby.yml
+
+Installs Ruby and RubyGems from the Ubuntu archive.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/ruby`, `/usr/bin/gem` | via `update-alternatives` |
+| `/var/lib/gems/3.3.0/` | where a root `gem install` puts gems |
+| `/usr/local/bin/<binstub>` | and where it puts their executables |
+
+**One pinned Ruby for every gem-based playbook to share**, the shape
+[`openjdk.yml`](#openjdkyml), [`nodejs.yml`](#nodejsyml), [`dotnet.yml`](#dotnetyml) and
+[`pwsh.yml`](#pwshyml) already use for their runtimes:
+[`misc/asciidoctor.yml`](../misc/README.md#asciidoctoryml) checks for `ruby` and fails with the
+instruction to run this playbook first, rather than carrying a second copy of the pin.
+
+**apt, not rbenv.** The single-user role this replaces cloned rbenv and ruby-build into
+`~/.rbenv`, built Ruby from source there, and appended `eval "$(rbenv init - bash)"` to that one
+account's `~/.bashrc` — all of it per-identity, which [POLICY.md](../POLICY.md) points 1 and 3
+rule out. Ubuntu 26.04 carries Ruby 3.3.8, current enough for everything this repository
+installs on top of it, so apt is the first mechanism that applies.
+
+**Both the metapackage and the interpreter are pinned**, because they are different versions of
+different things. `ruby` and `ruby-dev` are metapackages whose version (`1:3.3build1`) names the
+*series*: they stay put across a 3.3.8 → 3.3.9 update, so pinning them alone pins almost
+nothing. `ruby3.3` carries the real version, and the verification asserts what `ruby -v` and
+`gem --version` report rather than trusting dpkg's answer for either.
+
+`ruby-dev` is included so a gem with a C extension (nokogiri, ffi) can be built at all — it
+brings `ruby3.3-dev`, the headers. It does **not** bring a compiler: `gcc` and `make` come from
+`build-essential`, which this playbook deliberately does not install. Nothing installed by this
+repository needs one, since every gem
+[`misc/asciidoctor.yml`](../misc/README.md#asciidoctoryml) installs is pure Ruby.
+
+**No shell configuration is written, and none is needed.** RubyGems' own default for a root
+install is `Gem.bindir` = `/usr/local/bin`, already ahead of `/usr/bin` on the default `PATH`, so
+a gem's executables are on every account's `PATH` with no `/etc/profile.d` drop-in. An
+unprivileged `gem install` (no `sudo`) still goes to that account's own
+`~/.local/share/gem`, which is where per-user state belongs; this playbook writes nothing there.
+
+The unprivileged verification runs `ruby -v`, round-trips a JSON document through the stdlib —
+real work, not just a version string — and checks `gem --version` and `gem list`, all as
+`nobody` with a scratch `HOME`.
+
+This is the prerequisite for [`misc/asciidoctor.yml`](../misc/README.md#asciidoctoryml).
+
+Version overrides:
+
+```bash
+ansible-playbook core/ruby.yml -e host=ws01 -e ruby_interpreter_version=3.3.9
 ```
 
 ## What is *not* here

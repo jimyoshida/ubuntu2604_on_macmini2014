@@ -975,3 +975,74 @@ Version overrides:
 ```bash
 ansible-playbook misc/scc.yml -e host=ws01 -e scc_version=4.0.0
 ```
+
+## asciidoctor.yml
+
+Installs [AsciiDoctor](https://asciidoctor.org/) with its diagram and PDF extensions as
+root-owned gems.
+
+| Path | Contents |
+| --- | --- |
+| `/var/lib/gems/3.3.0/gems/` | the four pinned gems and their dependencies |
+| `/usr/local/bin/asciidoctor` | the converter |
+| `/usr/local/bin/asciidoctor-pdf` | the PDF converter |
+
+| Gem | Version | What it is |
+| --- | --- | --- |
+| `asciidoctor` | 2.0.26 | the converter |
+| `asciidoctor-diagram` | 3.2.1 | the diagram extension (`-r asciidoctor-diagram`) |
+| `asciidoctor-diagram-plantuml` | 1.2026.2 | PlantUML wrapped in a gem — its version *is* PlantUML's |
+| `asciidoctor-pdf` | 2.3.24 | the PDF backend |
+
+Ruby is a prerequisite, provisioned by [`core/ruby.yml`](../core/README.md#rubyyml); this
+playbook only checks for it and fails with that instruction if it is missing, the shape
+[`mocha-chai.yml`](#mocha-chaiyml) uses for Node.js and [`maven.yml`](#mavenyml) for the JDK.
+Both install paths above are read back from RubyGems at run time rather than assumed — they
+carry the Ruby ABI version, so they move when the interpreter does.
+
+**Gems, not apt.** Ubuntu 26.04 packages some of this — `asciidoctor` 2.0.26 and
+`ruby-asciidoctor-pdf` 2.3.19 — but not all of it: there is no `ruby-asciidoctor-diagram`
+package at all, and the PDF converter lags upstream. Since the diagram extension has to come
+from RubyGems regardless, all four gems come from there, pinned, so one mechanism explains the
+whole install.
+
+**If those apt packages are also installed, these gems shadow them** — the intended outcome,
+not a collision to resolve. RubyGems' bindir for a root install is `/usr/local/bin`, ahead of
+`/usr/bin` on the default `PATH`, and where two copies of a gem are visible RubyGems activates
+the higher version. The verification proves it rather than assuming it: it resolves
+`asciidoctor` on the *login* `PATH` and asserts both the path and the version, so an apt
+package winning the lookup fails the run. The summary lists any such packages and the
+`apt remove` line for them; removing them is a deliberate act, not something the playbook does
+on its own.
+
+**The diagram extension needs Java, and its own PlantUML gem.** asciidoctor-diagram 3.x no
+longer bundles the PlantUML jar the way 2.x did: it looks for the `asciidoctor-diagram-plantuml`
+gem, then `DIAGRAM_PLANTUML_CLASSPATH`, then a `plantuml-native` binary on `PATH`, and raises if
+it finds none. So the jar gem is pinned here alongside it — at 1.2026.2, far newer than the
+`1:1.2020.2` jar Ubuntu's `plantuml` package carries — and rendering shells out to `java`, which
+[`core/openjdk.yml`](../core/README.md#openjdkyml) provisions and this playbook checks for.
+[`plantuml.yml`](#plantumlyml) is unrelated: it installs the standalone CLI, which
+asciidoctor-diagram does not call.
+
+### Verification
+
+As `nobody`, with the `PATH` a real login session gets, the playbook converts a document
+carrying a PlantUML block and asserts four things at once: `asciidoctor` resolved to the gem
+binstub, it reported the pinned version, the diagram rendered, and it was *this* PlantUML that
+rendered it — PlantUML opens the SVG it writes with a `<?plantuml <version>?>` processing
+instruction, which is matched against the pinned gem version. A second check converts a
+document with `asciidoctor-pdf` and requires a real PDF back (`%PDF` magic, non-trivial size),
+since a PDF has no marker text to grep for.
+
+Version overrides:
+
+```bash
+ansible-playbook misc/asciidoctor.yml -e host=ws01 -e asciidoctor_version=2.0.27
+ansible-playbook misc/asciidoctor.yml -e host=ws01 -e asciidoctor_pdf_version=2.3.25
+```
+
+Each gem's latest release:
+
+```bash
+curl -sS https://rubygems.org/api/v1/gems/asciidoctor.json | jq -r .version
+```

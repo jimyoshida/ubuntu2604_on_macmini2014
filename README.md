@@ -28,10 +28,10 @@ installed once is usable by every account on a **shared** workstation. Run again
 
 | Directory | Description |
 |-----------|-------------|
-| [playbooks/misc/](playbooks/misc/README.md) | Developer tools (bats, certbot, dotnet-tools, dvc, gomplate, grype-syft, hadolint, jsonnet, junit2html, k6, kube-score, maven, mocha-chai, mongodb-tools, plantuml, playwright, scc, testssl, trivy, zap) |
+| [playbooks/misc/](playbooks/misc/README.md) | Developer tools (asciidoctor, bats, certbot, dotnet-tools, dvc, gomplate, grype-syft, hadolint, jsonnet, junit2html, k6, kube-score, maven, mocha-chai, mongodb-tools, plantuml, playwright, scc, testssl, trivy, zap) |
 | [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (auth0-deploy-cli, aws, az, az devops, databricks, gcloud, gcx, gh, glab, influx, jenkins, jira, logcli, tofu, promtool/amtool, vault, Azure PowerShell) |
 | [playbooks/container/](playbooks/container/README.md) | Container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers, kubelogin/k9s/kdash) |
-| [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise, ansible-core, .NET SDK, PowerShell, OpenJDK |
+| [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, Node.js/Yarn/pnpm, mise, ansible-core, .NET SDK, PowerShell, OpenJDK, Ruby |
 
 One thing to know before running `container/docker.yml`: it grants **no** account access to the
 Docker socket unless you name them in `docker_users` — membership of that group is equivalent to

@@ -8,19 +8,19 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 56 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 58 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
 | Mechanism | Playbooks |
 | --- | ---: |
-| 1. Ubuntu apt package | 10 |
+| 1. Ubuntu apt package | 11 |
 | 2. Vendor apt repository | 15 |
 | 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 20 |
 | 4. Upstream git tag + install script / tree | 2 |
 | 5. pipx as root | 2 |
 | 6. `npm install -g` with `become` | 5 |
-| Second-layer package manager (see below) | 2 |
+| Second-layer package manager (see below) | 3 |
 
 ## 1. Ubuntu apt package
 
@@ -39,6 +39,7 @@ version, no repository work needed.
 | [container/podman.yml](container/podman.yml) | `podman`, `podman-compose` |
 | [misc/jsonnet.yml](misc/jsonnet.yml) | `jsonnet` |
 | [misc/plantuml.yml](misc/plantuml.yml) | `plantuml` |
+| [core/ruby.yml](core/ruby.yml) | `ruby`, `ruby-dev`, `ruby3.3`, `ruby-rubygems` — the metapackages pin the *series*, `ruby3.3` the interpreter |
 
 Two apt gotchas worth knowing before assuming a distro package is fine as-is: Ubuntu's `yq` is
 the unrelated Python jq-wrapper, not mikefarah's Go `yq` — hence [core/yq.yml](core/yq.yml)
@@ -153,6 +154,7 @@ distinct from how the tool itself got there.
 | --- | --- | --- |
 | [cloud-cli/azure-pwsh.yml](cloud-cli/azure-pwsh.yml) | `Install-Module -Scope AllUsers` from the PowerShell Gallery (8 `Az.*` modules) | [core/pwsh.yml](core/pwsh.yml) |
 | [misc/dotnet-tools.yml](misc/dotnet-tools.yml) | `dotnet tool install --tool-path` | [core/dotnet.yml](core/dotnet.yml) |
+| [misc/asciidoctor.yml](misc/asciidoctor.yml) | `gem install` as root, into RubyGems' own `Gem.default_dir` with binstubs in `Gem.bindir` (4 gems) | [core/ruby.yml](core/ruby.yml), [core/openjdk.yml](core/openjdk.yml) |
 
 Two more instances of the same pattern live inside playbooks already classified above, layered
 on top of their own apt package rather than a separate file:
@@ -172,10 +174,11 @@ carrying its own copy of the pin.
 | Prerequisite | Provisioned by | Checked (not installed) by |
 | --- | --- | --- |
 | Node.js | [core/nodejs.yml](core/nodejs.yml) | markdownlint.yml, auth0-deploy-cli.yml, devcontainers.yml, mocha-chai.yml, playwright.yml |
-| OpenJDK | [core/openjdk.yml](core/openjdk.yml) | jenkins-cli.yml, maven.yml, zap.yml |
+| OpenJDK | [core/openjdk.yml](core/openjdk.yml) | jenkins-cli.yml, maven.yml, zap.yml, asciidoctor.yml |
 | .NET SDK | [core/dotnet.yml](core/dotnet.yml) | dotnet-tools.yml |
 | PowerShell | [core/pwsh.yml](core/pwsh.yml) | azure-pwsh.yml |
+| Ruby | [core/ruby.yml](core/ruby.yml) | asciidoctor.yml |
 
-Each of these four runtimes is intentionally installed and pinned in exactly one place, so a
-Java (or Node, .NET, PowerShell) version bump happens once instead of drifting across every
-playbook that happens to need it.
+Each of these five runtimes is intentionally installed and pinned in exactly one place, so a
+Java (or Node, .NET, PowerShell, Ruby) version bump happens once instead of drifting across
+every playbook that happens to need it.

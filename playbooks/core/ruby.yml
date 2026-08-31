@@ -1,0 +1,285 @@
+---
+# Install Ruby and RubyGems system-wide on a multi-user workstation.
+#
+#   /usr/bin/ruby, /usr/bin/gem       apt, via update-alternatives
+#   /var/lib/gems/3.3.0/              where a root `gem install` puts gems
+#   /usr/local/bin/<binstub>          where a root `gem install` puts executables
+#
+# One pinned Ruby for every gem-based playbook in this repository to share,
+# the shape core/openjdk.yml, core/nodejs.yml, core/dotnet.yml and
+# core/pwsh.yml already use for their runtimes: misc/asciidoctor.yml only
+# checks for `ruby` and fails with the instruction to run this playbook
+# first, rather than carrying a second copy of the pin.
+#
+# WHY APT AND NOT rbenv. The single-user role this replaces cloned rbenv and
+# ruby-build into ~/.rbenv, built Ruby from source there, and appended
+# `eval "$(rbenv init - bash)"` to that one account's ~/.bashrc. Every part
+# of that is per-identity: another account on the same host gets no ruby at
+# all, which is what POLICY.md points 1 and 3 rule out. Ubuntu 26.04 carries
+# Ruby 3.3.8, which is current enough for everything this repository installs
+# on top of it, so apt is the first mechanism that applies
+# (INSTALL-MECHANISMS.md, mechanism 1).
+#
+# BOTH THE METAPACKAGE AND THE INTERPRETER ARE PINNED. `ruby` and `ruby-dev`
+# are metapackages whose version (1:3.3build1) names the *series*, not the
+# interpreter: they stay put across a 3.3.8 -> 3.3.9 update, so pinning them
+# alone pins almost nothing. `ruby3.3` carries the real version, and task 10
+# asserts what `ruby -v` and `gem --version` actually report rather than
+# trusting dpkg's answer for either.
+#
+# ruby-dev is here so that a gem with a C extension (nokogiri, ffi, ...) can
+# be built at all -- it brings ruby3.3-dev, the headers. It does NOT bring a
+# compiler: `gcc` and `make` come from build-essential, which this playbook
+# deliberately does not install, since a C toolchain is not part of what
+# "Ruby" means on this host. Nothing installed by this repository needs one
+# (every gem misc/asciidoctor.yml installs is pure Ruby).
+#
+# NO SHELL CONFIGURATION IS WRITTEN, and none is needed. RubyGems' own
+# default for a root install is Gem.bindir = /usr/local/bin (confirmed live,
+# `ruby -e 'puts Gem.bindir'`), which is already ahead of /usr/bin on the
+# default PATH -- so a gem's executables are on every account's PATH with no
+# /etc/profile.d drop-in. An unprivileged `gem install` without sudo still
+# goes to that account's own ~/.local/share/gem, which is exactly where
+# per-user state belongs (B2), and this playbook writes nothing there.
+#
+# Usage:
+#   ansible-playbook core/ruby.yml -e host=<inventory host or group>
+#   ansible-playbook core/ruby.yml -e host=ws01 -e ruby_interpreter_version=3.3.9
+
+- name: Install Ruby and RubyGems system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    ruby_dpkg_ok: "install ok installed|"
+    # apt candidate versions on Ubuntu 26.04 (resolute), checked 2026-08-31.
+    # Release-specific, like every other apt pin here: overriding one only
+    # helps if that exact dpkg version is available from the target's
+    # configured apt sources.
+    ruby_packages:
+      # The metapackages: Depends: ruby3.3 + libruby + ruby-rubygems.
+      - name: ruby
+        version: "1:3.3build1"
+      - name: ruby-dev
+        version: "1:3.3build1"
+      # The interpreter itself, where the version that matters lives.
+      - name: ruby3.3
+        version: "3.3.8-2ubuntu3.1"
+      # The `gem` command. A dependency of `ruby`, pinned in its own right
+      # because every gem-based playbook downstream drives it directly.
+      - name: ruby-rubygems
+        version: "3.6.7-2ubuntu2"
+    # What the binaries must report for themselves, independent of dpkg.
+    ruby_interpreter_version: "3.3.8"
+    ruby_rubygems_version: "3.6.7"
+    # Disk-backed, not /tmp, which is a size-capped tmpfs on these hosts (C4).
+    ruby_root_home: /var/tmp/ruby-root-home
+    ruby_smoke_home: /var/tmp/ruby-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    ruby_verify_uid: 65534    # nobody
+    ruby_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed version of each package
+      # ${Status} as well as ${Version} -- see ruby_dpkg_ok above.
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ item.name }}"
+      register: ruby_installed
+      loop: "{{ ruby_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide which packages need installing
+      ansible.builtin.set_fact:
+        ruby_pending: "{{ ruby_pending | default([]) + [item.item.name ~ '=' ~ item.item.version] }}"
+      loop: "{{ ruby_installed.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: (item.stdout | default('')) != (ruby_dpkg_ok ~ item.item.version)
+
+    - name: 2a. Decide whether this run can verify what it installed
+      ansible.builtin.set_fact:
+        ruby_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (ruby_pending | default([]) | length > 0)) }}
+
+    - name: 2b. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install {{ ruby_pending | default([]) | join(', ') }},
+          so the version checks and the unprivileged script run below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (ruby_can_verify | bool)
+
+    - name: 3. Install the packages that need installing
+      # One apt transaction for all four: the metapackages and the
+      # interpreter have to agree with each other, and installing them
+      # separately lets apt satisfy one pin by moving another.
+      ansible.builtin.apt:
+        name: "{{ ruby_pending | default([]) }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        allow_downgrade: true
+        install_recommends: false
+      when: (ruby_pending | default([])) | length > 0
+
+    - name: 4. Verify the installed version of each package
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ item.name }}"
+      register: ruby_version_out
+      loop: "{{ ruby_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      failed_when: ruby_version_out.stdout != (ruby_dpkg_ok ~ item.version)
+      check_mode: false
+      when: ruby_can_verify | bool
+
+    - name: 5. Resolve the ruby binary on PATH
+      ansible.builtin.command: which ruby
+      register: ruby_path
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      when: ruby_can_verify | bool
+
+    - name: 6. Fail if ruby on PATH is not the system install
+      # The rbenv/rvm/mise guard, and the reason this playbook exists in this
+      # shape: a per-account version manager on the connecting user's PATH
+      # would make every downstream `gem install` under become land in that
+      # one account's home instead of /var/lib/gems.
+      ansible.builtin.fail:
+        msg: >-
+          ruby resolved to '{{ ruby_path.stdout | default('') }}', which is not
+          /usr/bin/ruby. It looks like a per-user version manager (rbenv, rvm,
+          mise) is shadowing the system Ruby for this account -- a gem
+          installed through it would not be shared with anyone else on this
+          host.
+      when:
+        - ruby_can_verify | bool
+        - (ruby_path.stdout | default('')) != '/usr/bin/ruby'
+
+    - name: 7. Create the root-side scratch HOME
+      # `gem` writes ~/.local/share/gem and ~/.cache/gem on invocations as
+      # innocuous as --version, and under become that would be /root, which
+      # B2 forbids. Removed again by task 11.
+      ansible.builtin.file:
+        path: "{{ ruby_root_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+
+    - name: 8. Read the gem install and executable directories
+      # Resolved at run time, never assumed (C5): these paths carry the Ruby
+      # ABI version in them, so they move with the interpreter. Every
+      # gem-based playbook downstream reads them the same way.
+      ansible.builtin.command:
+        cmd: ruby -e 'require "rubygems"; puts Gem.default_dir; puts Gem.bindir'
+        chdir: "{{ ruby_root_home }}"
+      environment:
+        HOME: "{{ ruby_root_home }}"
+        GEM_SPEC_CACHE: "{{ ruby_root_home }}/spec-cache"
+      register: ruby_gem_dirs
+      changed_when: false
+      check_mode: false
+      when: ruby_can_verify | bool
+
+    - name: 9. Create a scratch HOME for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ ruby_smoke_home }}"
+        state: directory
+        owner: "{{ ruby_verify_uid }}"
+        group: "{{ ruby_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+
+    - name: 10. Run ruby and gem as an unprivileged user
+      # Real work, not just --version: the ruby check parses JSON with the
+      # stdlib and prints the value back, which proves the interpreter can
+      # load a default gem rather than merely start. Both greps match
+      # version-bearing output, so neither passes when the binary is missing
+      # and the shell answers "command not found" (C3).
+      #
+      # chdir into the scratch HOME: uid 65534 cannot stat this playbook's
+      # checkout path, and ruby stats the current directory on startup.
+      #
+      # Single quotes throughout: each command is spliced into a
+      # double-quoted `bash -c` string below, so a literal double quote in
+      # one is swallowed before bash ever sees it -- which is why the JSON
+      # round trip builds its document with JSON.generate and %q() rather
+      # than writing an object literal.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ ruby_verify_uid }} --regid={{ ruby_verify_gid }} --clear-groups
+          env HOME={{ ruby_smoke_home }} bash -c "{{ item }}"
+        chdir: "{{ ruby_smoke_home }}"
+      loop:
+        - "ruby -v | grep -q '^ruby {{ ruby_interpreter_version }}'"
+        - "ruby -rjson -e 'j = JSON.generate({ %q(ok) => %q(ruby-smoke-test) }); puts JSON.parse(j)[%q(ok)]' | grep -q '^ruby-smoke-test$'"
+        - "gem --version | grep -q '^{{ ruby_rubygems_version }}$'"
+        - "gem list --local --exact --installed json | grep -q '^true$'"
+      loop_control:
+        label: "{{ item.split(' ') | first }}"
+      register: ruby_smoke
+      changed_when: false
+      failed_when: ruby_smoke.rc != 0
+      check_mode: false
+      when: ruby_can_verify | bool
+
+    - name: 11. Remove the scratch directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ruby_root_home }}"
+        - "{{ ruby_smoke_home }}"
+      check_mode: false
+
+    - name: 12. Display installation summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['Ruby ' ~ ruby_interpreter_version ~ ' and RubyGems '
+              ~ ruby_rubygems_version ~ ' installed system-wide:']
+             + ((ruby_packages | map(attribute='name') | list)
+                | zip(ruby_packages | map(attribute='version') | list)
+                | map('join', ' ')
+                | map('regex_replace', '^', '  ')
+                | list)
+             + ['',
+                '  gems installed by root land in:  '
+                ~ (ruby_gem_dirs.stdout_lines[0] | default('/var/lib/gems/<abi>')),
+                '  their executables in:            '
+                ~ (ruby_gem_dirs.stdout_lines[1] | default('/usr/local/bin'))
+                ~ '   (already on PATH)',
+                '',
+                'Verified as an unprivileged user (uid ' ~ ruby_verify_uid
+                ~ '): the interpreter reported ' ~ ruby_interpreter_version
+                ~ ', parsed JSON with the stdlib, and gem reported '
+                ~ ruby_rubygems_version ~ '.',
+                '',
+                'No shell configuration was changed and no per-user state was written.',
+                '',
+                'Usage:',
+                '  sudo gem install <gem> -v <version> --no-document   # shared, root-owned',
+                '  gem install <gem>                                   # per account, ~/.local/share/gem',
+                '',
+                'A gem with a C extension also needs a compiler (build-essential),',
+                'which this playbook does not install: ruby-dev brings the headers only.',
+                '',
+                'This is the prerequisite for misc/asciidoctor.yml.'] }}
+      when: ruby_can_verify | bool
