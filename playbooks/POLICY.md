@@ -125,8 +125,32 @@ one, it should assert it: run the tool as an unprivileged uid with the variable 
 that the "not configured" error is *not* what comes back.
 
 Being a name the tool reads is necessary, not sufficient. There must also be a shared endpoint
-worth naming. No playbook in this repository currently sets an environment variable, because
-none of the candidate names has a site-wide value this repository can supply.
+worth naming, and that is rarer than the list of candidate names suggests: across all of
+`playbooks/` there is one. [cloud-cli/jenkins-cli.yml](cloud-cli/jenkins-cli.yml) publishes a
+default `JENKINS_URL` — in `/etc/profile.d/jenkins-cli.sh` rather than `/etc/environment`, so the
+assignment can be conditional (`: "${JENKINS_URL:=...}"`) and an account that exports its own
+keeps it — and it asserts the result the way the paragraph above requires, by resolving
+`$JENKINS_URL` in an `env -i` login shell as an unprivileged uid.
+[cloud-cli/sonar-scanner.yml](cloud-cli/sonar-scanner.yml) has an endpoint of exactly the same
+kind and deliberately does not express it as a variable at all: `sonar.host.url` goes into the
+distribution's own `conf/sonar-scanner.properties`. Both values come from an A2 play var, never
+from `lookup('env', ...)`.
+
+Every other variable these playbooks write is not endpoint configuration, and the distinction is
+worth keeping straight: those are *search paths* into a root-owned shared install tree, so that a
+tool installed once is discoverable by an account that did no setup.
+
+| Variable | Playbook | Points at |
+| --- | --- | --- |
+| `NODE_PATH` | [core/eslint.yml](core/eslint.yml), [misc/jsmin.yml](misc/jsmin.yml), [misc/mocha-chai.yml](misc/mocha-chai.yml) | npm's global `node_modules`, so `require()` resolves a globally installed package |
+| `BATS_LIB_PATH` | [misc/bats.yml](misc/bats.yml) | the shared BATS helper-library directory |
+| `PLAYWRIGHT_BROWSERS_PATH` | [misc/playwright.yml](misc/playwright.yml) | the shared browser bundle under `/opt` |
+
+These carry no site-specific value and no secret — the path is a fact about this host's install
+layout — so `/etc/environment` being world-readable costs nothing for them, and an unconditional
+`lineinfile` is the right shape. Two things still apply: the value is a path resolved at run time
+(C5), not a hardcoded prefix, and where two playbooks publish the same name they write an
+identical line, so whichever runs second is a no-op rather than a fight.
 
 ### A2. Endpoint config comes from a play var, not `lookup('env', ...)`. *(tightens point 5)*
 
@@ -582,6 +606,16 @@ Before opening a change for review, confirm:
   a `+2 changed` that is not a real change.
 - **npm-global playbooks do not sweep prefixes they no longer use.** See C5. Whether they should
   is the one open question there.
+- **Most npm-global playbooks let npm write to `/root/.npm`.** `npm install -g` under `become`
+  writes its cache and debug logs to `$HOME/.npm`, i.e. `/root/.npm`, which B2 forbids.
+  [core/eslint.yml](core/eslint.yml) and [misc/jsmin.yml](misc/jsmin.yml) run the install with a
+  scratch `HOME` under `/var/tmp` and remove it afterwards; [core/nodejs.yml](core/nodejs.yml),
+  [core/markdownlint.yml](core/markdownlint.yml), [misc/mocha-chai.yml](misc/mocha-chai.yml),
+  [misc/playwright.yml](misc/playwright.yml),
+  [cloud-cli/auth0-deploy-cli.yml](cloud-cli/auth0-deploy-cli.yml) and
+  [container/devcontainers.yml](container/devcontainers.yml) predate it and still write there.
+  The tree is root-owned and root-readable, so nothing leaks, but it is state in a `$HOME` that
+  no playbook should be creating.
 - **Nothing removes `~/.bashrc` blocks or per-user trees written by earlier single-user
   playbooks.** Deleting a playbook removes nothing from a host that ran it. Marked blocks,
   `xhost` lines, `~/.krew` trees and Homebrew prefixes stay in every account that acquired them.

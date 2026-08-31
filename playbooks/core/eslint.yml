@@ -1,0 +1,353 @@
+---
+# Install ESLint system-wide on a multi-user workstation, via a root-owned
+# global `npm install -g` -- the same mechanism core/markdownlint.yml and
+# misc/mocha-chai.yml use. Node.js itself is a prerequisite provisioned
+# elsewhere (core/nodejs.yml); this playbook only checks for it.
+#
+#   <npm prefix>/bin/eslint                     npm's bin symlink
+#   <npm prefix>/lib/node_modules/eslint        the npm package
+#
+# npm's global prefix is read from `npm config get prefix` rather than
+# assumed (C5): a NodeSource-installed nodejs defaults it to /usr, Ubuntu's
+# own nodejs package to /usr/local. Both are root-owned, so either is fine,
+# but hardcoding one breaks the other.
+#
+# Three findings, all confirmed live on this host's Node.js 24.19.0, that a
+# future reader would otherwise have to rediscover:
+#
+#   1. Ubuntu's own `eslint` package occupies the same path this install
+#      wants. The universe package (6.4.0~dfsg, i.e. pre-flat-config, still
+#      .eslintrc-only) ships /usr/bin/eslint as a symlink into
+#      /usr/share/nodejs/eslint/bin/eslint.js -- and on a NodeSource host,
+#      where npm's prefix is /usr, that is exactly where npm wants to put
+#      its own bin symlink. npm then refuses the ENTIRE install:
+#        npm error code EEXIST
+#        npm error path /usr/bin/eslint
+#      and nothing lands in /usr/lib/node_modules at all. This playbook
+#      fails loudly with the purge remedy rather than removing the symlink:
+#      C2 allows removing a shim that resolves into the tree being replaced,
+#      and this one resolves into an apt-owned tree instead, so deleting it
+#      would be a write behind dpkg's back. The guard does not check the
+#      prefix first: where npm's prefix is /usr/local the install does
+#      succeed, but apt's 6.4.0 copy is then a second eslint sitting at
+#      /usr/bin/eslint, so it has to go in either case.
+#
+#   2. A globally installed ESLint cannot resolve `eslint` itself from a
+#      project's config file without NODE_PATH. The config shape ESLint's
+#      own docs and `eslint --init` generate starts with
+#      `require('eslint/config')`, and Node resolves that relative to the
+#      config file, not to the eslint binary -- so from any directory
+#      outside the global tree it dies with
+#      "Error: Cannot find module 'eslint/config'". NODE_PATH pointing at
+#      the global node_modules fixes it, which is the same line
+#      misc/mocha-chai.yml publishes for Chai; identical value, so whichever
+#      playbook runs second is a no-op. The smoke test below deliberately
+#      uses the `require('eslint/config')` shape rather than a plain array,
+#      so this is what gets proven rather than assumed.
+#
+#   3. NODE_PATH does not help an ESM config. Node ignores NODE_PATH for
+#      `import`, so an eslint.config.mjs (or an eslint.config.js in a
+#      package with "type": "module") importing from 'eslint' fails with
+#      ERR_MODULE_NOT_FOUND even with NODE_PATH set. Such a project needs
+#      either a config that imports nothing -- a plain exported array of
+#      rule objects works in both module systems -- or a local eslint
+#      install. The same limit applies to plugins (typescript-eslint,
+#      eslint-plugin-*): they are per-project dependencies, are not
+#      installed here, and a global eslint can only resolve the ones that
+#      are themselves globally installed, CommonJS config only.
+#
+# The npm install runs with a scratch HOME under /var/tmp so that npm's
+# cache and debug logs do not land in /root/.npm (B2, C4). The other
+# npm-global playbooks predate this and still write there; see POLICY.md's
+# outstanding-debt list.
+#
+# Usage:
+#   ansible-playbook core/eslint.yml -e host=<inventory host or group>
+#   ansible-playbook core/eslint.yml -e host=ws01 -e eslint_version=10.9.1
+
+- name: Install ESLint system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    eslint_version: "10.9.1"
+    # Scratch HOME for the root-side npm run, and scratch directory for the
+    # unprivileged lint. Both under /var/tmp, not /tmp, which is a
+    # size-capped tmpfs on these hosts (C4).
+    eslint_root_home: /var/tmp/eslint-root-home
+    eslint_smoke_dir: /var/tmp/eslint-smoke
+    # The colliding apt package, and dpkg's "really installed" prefix (C2):
+    # a purged-but-not-removed package still answers with its version.
+    eslint_apt_package: eslint
+    eslint_dpkg_ok: "install ok installed|"
+    # uid/gid used to prove the install is usable by an arbitrary user
+    eslint_verify_uid: 65534    # nobody
+    eslint_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that Node.js is installed as a system package
+      ansible.builtin.command: dpkg -s nodejs
+      register: eslint_nodejs_dpkg
+      changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Fail if Node.js is not installed as a system package
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Node.js is not installed. Provision it (core/nodejs.yml)
+          before running this playbook.
+      when: eslint_nodejs_dpkg.rc != 0
+
+    - name: 3. Resolve the active node binary path
+      ansible.builtin.command: which node
+      register: eslint_node_path
+      changed_when: false
+      check_mode: false
+
+    - name: 4. Fail if node in PATH is not a system-wide install
+      # Guards against a per-user version manager (nvm, fnm, ...) shadowing
+      # the system node on PATH for the connecting account: a global npm
+      # install under become would then land wherever that shim points,
+      # which is per-user, not root-owned.
+      ansible.builtin.fail:
+        msg: >-
+          node resolved to '{{ eslint_node_path.stdout }}', which is not
+          under /usr/bin or /usr/local/bin. It looks like it is managed by a
+          per-user version manager rather than a system package.
+      when: eslint_node_path.stdout not in ['/usr/bin/node', '/usr/local/bin/node']
+
+    - name: 5. Check whether Ubuntu's own eslint package is installed
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ eslint_apt_package }}"
+      register: eslint_apt_dpkg
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Fail if the apt eslint package is installed
+      # Finding 1 in the header. The guard does not depend on npm's prefix,
+      # because neither outcome is acceptable: at prefix /usr the two want
+      # the same path and npm aborts the install outright, and at
+      # /usr/local the 6.4.0 copy survives at /usr/bin/eslint as a second,
+      # ancient eslint that anything invoking it by absolute path still
+      # gets. One tool, one version, every account.
+      ansible.builtin.fail:
+        msg: >-
+          The apt package '{{ eslint_apt_package }}'
+          ({{ eslint_apt_dpkg.stdout.split('|')[1] }}) is installed. It owns
+          /usr/bin/eslint: where npm's prefix is /usr, as it is on a
+          NodeSource host, that is exactly where npm's global bin symlink
+          goes, and `npm install -g eslint` fails with EEXIST and installs
+          nothing; where the prefix is /usr/local, that copy stays behind as
+          a second eslint on the host. It is also pre-flat-config (.eslintrc
+          only) and is not a substitute for a current ESLint either way.
+          Remove it first: sudo apt-get purge {{ eslint_apt_package }}
+      when: eslint_dpkg_ok in eslint_apt_dpkg.stdout
+
+    - name: 7. Create the root-side scratch HOME for npm
+      # npm writes its cache and debug logs under $HOME; left at /root they
+      # land in /root/.npm, which B2 forbids. Removed by task 13.
+      ansible.builtin.file:
+        path: "{{ eslint_root_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+
+    - name: 8. Resolve npm's global install prefix
+      # Read with the same scratch HOME the install below uses: npm reads
+      # $HOME/.npmrc, so a prefix read under a different HOME than the
+      # install runs with could name a different directory than the one the
+      # package lands in.
+      ansible.builtin.command:
+        cmd: npm config get prefix
+        chdir: "{{ eslint_root_home }}"
+      environment: &eslint_root_env
+        HOME: "{{ eslint_root_home }}"
+        TMPDIR: "{{ eslint_root_home }}"
+      register: eslint_npm_prefix
+      changed_when: false
+      check_mode: false
+
+    - name: 9. Check the currently installed eslint version
+      ansible.builtin.command: "{{ eslint_npm_prefix.stdout }}/bin/eslint --version"
+      register: eslint_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 10. Decide whether eslint needs installing
+      # The version is compared, not merely the presence of the binary, so
+      # that bumping eslint_version actually replaces the package.
+      ansible.builtin.set_fact:
+        eslint_install_needed: >-
+          {{ eslint_version not in (eslint_installed.stdout | default('')) }}
+        eslint_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (eslint_version not in (eslint_installed.stdout | default('')))) }}
+
+    - name: 10a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install eslint {{ eslint_version }}, so the version
+          check and the unprivileged lint below are skipped rather than
+          failed. Re-run without --check to verify.
+      when: not (eslint_can_verify | bool)
+
+    - name: 11. Install eslint via npm as root
+      # --engine-strict on purpose: eslint 10 declares
+      # node ^20.19.0 || ^22.13.0 || >=24, and npm's default is to print
+      # EBADENGINE as a warning and install anyway, which leaves a package
+      # that may or may not run. This turns that into a failed run.
+      ansible.builtin.command:
+        cmd: "npm install -g --engine-strict eslint@{{ eslint_version }}"
+        chdir: "{{ eslint_root_home }}"
+      environment: *eslint_root_env
+      when: eslint_install_needed | bool
+
+    - name: 12. Ensure the installed package is world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ eslint_npm_prefix.stdout }}/lib/node_modules/eslint"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when: eslint_can_verify | bool
+
+    - name: 13. Remove the root-side scratch HOME
+      ansible.builtin.file:
+        path: "{{ eslint_root_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 14. Verify the installed eslint version
+      # `eslint --version` prints version-bearing output ('v10.9.1') on
+      # stdout, so this cannot pass against an absent binary the way a
+      # `2>&1 | grep -i eslint` check would (C3).
+      ansible.builtin.command: "{{ eslint_npm_prefix.stdout }}/bin/eslint --version"
+      register: eslint_version_out
+      changed_when: false
+      failed_when: eslint_version not in eslint_version_out.stdout
+      check_mode: false
+      when: eslint_can_verify | bool
+
+    - name: 15. Publish NODE_PATH to all login sessions
+      # Finding 2 in the header. Identical line and regexp to
+      # misc/mocha-chai.yml's, pointing at the shared global node_modules
+      # directory rather than anything eslint-specific, so the two playbooks
+      # are no-ops for each other rather than fighting over the line.
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^NODE_PATH='
+        line: 'NODE_PATH="{{ eslint_npm_prefix.stdout }}/lib/node_modules"'
+        state: present
+
+    - name: 16. Create the scratch directory for the unprivileged lint
+      ansible.builtin.file:
+        path: "{{ eslint_smoke_dir }}"
+        state: directory
+        owner: "{{ eslint_verify_uid }}"
+        group: "{{ eslint_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: eslint_can_verify | bool
+
+    - name: 17. Write the config and the file the unprivileged lint checks
+      ansible.builtin.copy:
+        dest: "{{ eslint_smoke_dir }}/{{ item.name }}"
+        owner: "{{ eslint_verify_uid }}"
+        group: "{{ eslint_verify_gid }}"
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: eslint.config.js
+          content: |
+            const { defineConfig } = require('eslint/config');
+
+            module.exports = defineConfig([
+              {
+                files: ['**/*.js'],
+                rules: { 'no-unused-vars': 'error' },
+              },
+            ]);
+        - name: smoke.js
+          content: |
+            const unusedBinding = 1;
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: false
+      when: eslint_can_verify | bool
+
+    - name: 18. Lint the file as an unprivileged user
+      # Real offline work (A4's first preference), and it proves four things
+      # at once: uid 65534 can execute the binary, read the package tree,
+      # discover eslint.config.js from the working directory, and resolve
+      # `require('eslint/config')` out of the global node_modules.
+      #
+      # NODE_PATH is set explicitly rather than left to /etc/environment: a
+      # setpriv-spawned process is not a login session and never sources it.
+      # chdir into the scratch directory, not ansible's own working
+      # directory, which uid 65534 cannot stat (C6) -- and eslint discovers
+      # its config from the working directory, so this is also what puts the
+      # config above in scope.
+      #
+      # eslint exits non-zero when it reports an error, which the file above
+      # deliberately has. That non-zero exit is the expected, successful
+      # outcome of this check, not a failure of the run.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ eslint_verify_uid }} --regid={{ eslint_verify_gid }} --clear-groups
+          {{ eslint_npm_prefix.stdout }}/bin/eslint smoke.js
+        chdir: "{{ eslint_smoke_dir }}"
+      environment:
+        HOME: "{{ eslint_smoke_dir }}"
+        TMPDIR: "{{ eslint_smoke_dir }}"
+        NODE_PATH: "{{ eslint_npm_prefix.stdout }}/lib/node_modules"
+      register: eslint_smoke
+      changed_when: false
+      failed_when: "'no-unused-vars' not in eslint_smoke.stdout"
+      check_mode: false
+      when: eslint_can_verify | bool
+
+    - name: 19. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ eslint_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 20. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "ESLint {{ eslint_version_out.stdout | trim }} installed system-wide."
+          - ""
+          - "  {{ eslint_npm_prefix.stdout }}/bin/eslint"
+          - "  {{ eslint_npm_prefix.stdout }}/lib/node_modules/eslint"
+          - ""
+          - "NODE_PATH={{ eslint_npm_prefix.stdout }}/lib/node_modules published to /etc/environment."
+          - ""
+          - "Verified by linting a file as an unprivileged user (uid {{ eslint_verify_uid }}),"
+          - "with a config that requires eslint's own module out of the global prefix."
+          - ""
+          - "Usage:"
+          - "  eslint .                                     # Lint the current project"
+          - "  eslint --fix .                               # Apply fixable fixes"
+          - "  eslint --no-config-lookup --rule '{\"no-unused-vars\":\"error\"}' f.js"
+          - "                                               # Ad-hoc, no config file needed"
+          - ""
+          - "Each project supplies its own eslint.config.js. A CommonJS config can"
+          - "require('eslint/config') and any globally installed plugin (NODE_PATH); an"
+          - "ESM config (.mjs, or .js under \"type\": \"module\") cannot -- Node ignores"
+          - "NODE_PATH for import -- so those need a config that imports nothing, or a"
+          - "project-local eslint."
+      when: eslint_can_verify | bool

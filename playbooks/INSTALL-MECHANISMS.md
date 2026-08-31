@@ -8,7 +8,7 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 59 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 61 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
@@ -19,7 +19,7 @@ shared prerequisite rather than installing a runtime themselves.
 | 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 22 |
 | 4. Upstream git tag + install script / tree | 2 |
 | 5. pipx as root | 2 |
-| 6. `npm install -g` with `become` | 5 |
+| 6. `npm install -g` with `become` | 7 |
 | Second-layer package manager (see below) | 3 |
 
 ## 1. Ubuntu apt package
@@ -135,11 +135,20 @@ playbooks — see the prerequisite table below.
 
 | Playbook | Package(s) |
 | --- | --- |
+| [core/eslint.yml](core/eslint.yml) | `eslint` (needs `NODE_PATH` published so a project's config file can `require('eslint/config')`) |
 | [core/markdownlint.yml](core/markdownlint.yml) | `markdownlint-cli` |
 | [cloud-cli/auth0-deploy-cli.yml](cloud-cli/auth0-deploy-cli.yml) | `auth0-deploy-cli` |
 | [container/devcontainers.yml](container/devcontainers.yml) | `@devcontainers/cli` |
+| [misc/jsmin.yml](misc/jsmin.yml) | `jsmin` (Crockford's ES5-era minifier; no `--version`, so the pin is read from `npm ls -g`) |
 | [misc/mocha-chai.yml](misc/mocha-chai.yml) | `mocha` (has a CLI) + `chai` (pure library, no CLI — needs `NODE_PATH` published for `require()` to resolve it) |
 | [misc/playwright.yml](misc/playwright.yml) | `playwright`, plus its own `playwright install --with-deps` browser downloader redirected to a shared `/opt/playwright-browsers` via `PLAYWRIGHT_BROWSERS_PATH` |
+
+**Footnote:** [core/eslint.yml](core/eslint.yml) is the one place where mechanism 1 and
+mechanism 6 collide over a path. Ubuntu's universe `eslint` package (6.4.0, `.eslintrc`-era)
+ships `/usr/bin/eslint`, which is also where npm puts its global bin symlink when the prefix is
+`/usr` — and npm refuses the *entire* install with `EEXIST` rather than overwriting a file it
+does not own (POLICY.md C2). The playbook checks for that package and fails with the purge
+remedy instead of deleting an apt-owned symlink.
 
 **Footnote:** [core/nodejs.yml](core/nodejs.yml) also uses this mechanism internally,
 for Yarn and pnpm — but only after `corepack disable` removes the dispatcher shims NodeSource's
@@ -174,7 +183,7 @@ carrying its own copy of the pin.
 
 | Prerequisite | Provisioned by | Checked (not installed) by |
 | --- | --- | --- |
-| Node.js | [core/nodejs.yml](core/nodejs.yml) | markdownlint.yml, auth0-deploy-cli.yml, devcontainers.yml, mocha-chai.yml, playwright.yml |
+| Node.js | [core/nodejs.yml](core/nodejs.yml) | eslint.yml, markdownlint.yml, auth0-deploy-cli.yml, devcontainers.yml, jsmin.yml, mocha-chai.yml, playwright.yml |
 | OpenJDK | [core/openjdk.yml](core/openjdk.yml) | jenkins-cli.yml, maven.yml, zap.yml, asciidoctor.yml, plantuml.yml |
 | .NET SDK | [core/dotnet.yml](core/dotnet.yml) | dotnet-tools.yml |
 | PowerShell | [core/pwsh.yml](core/pwsh.yml) | azure-pwsh.yml |

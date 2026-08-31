@@ -448,6 +448,62 @@ ansible-playbook core/ansible.yml -e host=ws01 -e ansible_core_version=2.20.1-1
 ansible-playbook core/ansible.yml -e host=ws01 -e ansible_collection_community_general_version=13.3.0
 ```
 
+## eslint.yml
+
+Installs [ESLint](https://eslint.org/) via `npm install -g`, root-owned. Node.js itself is a
+prerequisite provisioned elsewhere ([nodejs.yml](nodejs.yml)); this playbook only checks for
+it, and fails loudly with setup instructions if it is missing. The same npm-global mechanics
+as `markdownlint.yml` below apply: pinned version rather than `@latest`, version-aware
+idempotency, npm's global prefix read from `npm config get prefix` rather than assumed, and
+the node-in-PATH guard against a per-user version manager capturing a global install.
+
+Three things are specific to ESLint, all confirmed live against Node.js 24.19.0:
+
+- **Ubuntu's own `eslint` package must not be installed.** The universe package (6.4.0, still
+  `.eslintrc`-only, so not a substitute anyway) owns `/usr/bin/eslint` as a symlink into
+  `/usr/share/nodejs/eslint/bin/eslint.js` — which is exactly where npm puts its global bin
+  symlink when the prefix is `/usr`, as it is on a NodeSource host. npm then refuses the
+  *entire* install with `EEXIST` and nothing lands in `/usr/lib/node_modules` at all. The
+  playbook checks for that package and fails with `sudo apt-get purge eslint` rather than
+  deleting the symlink: it resolves into an apt-owned tree, not into the npm tree being
+  replaced, so removing it would be a write behind dpkg's back. The guard does not consult the
+  prefix first, because the other case is no better: where the prefix is `/usr/local` the npm
+  install succeeds, and apt's 6.4.0 copy is then a second eslint sitting at `/usr/bin/eslint`.
+- **`NODE_PATH` is published to `/etc/environment`,** the same line
+  [misc/mocha-chai.yml](../misc/mocha-chai.yml) writes for Chai, pointing at the global
+  `node_modules` directory. Without it a project's `eslint.config.js` cannot load: the config
+  shape ESLint's docs and `eslint --init` generate begins with `require('eslint/config')`, and
+  Node resolves that relative to the config file rather than to the eslint binary, so it dies
+  with `Cannot find module 'eslint/config'` from any directory outside the global tree. Both
+  playbooks write an identical line, so whichever runs second is a no-op.
+- **An ESM config cannot use the global install.** Node ignores `NODE_PATH` for `import`, so an
+  `eslint.config.mjs` — or an `eslint.config.js` in a package marked `"type": "module"` — that
+  imports from `eslint` fails with `ERR_MODULE_NOT_FOUND` even with `NODE_PATH` set. Such a
+  project needs either a config that imports nothing (a plain exported array of rule objects
+  works in both module systems) or a project-local `eslint`. The same limit applies to plugins:
+  `typescript-eslint` and the `eslint-plugin-*` family are per-project dependencies, are not
+  installed here, and a global ESLint resolves only the ones that are themselves installed
+  globally, from a CommonJS config.
+
+The unprivileged verification step lints a file with an unused binding against a config that
+uses the `require('eslint/config')` shape, and asserts the `no-unused-vars` report — so it
+proves in one command that uid 65534 can execute the binary, read the package tree, discover
+`eslint.config.js` from the working directory, and resolve ESLint's own module out of the
+global prefix. ESLint exits non-zero when it reports an error, which is the expected outcome
+of that check, not a failure of the run.
+
+Two smaller differences from the older npm playbooks: the install passes `--engine-strict`, so
+an unsupported Node.js (ESLint 10 declares `^20.19.0 || ^22.13.0 || >=24`) fails the run
+instead of drawing npm's default `EBADENGINE` *warning* and installing anyway; and it runs with
+a scratch `HOME` under `/var/tmp`, removed afterwards, so npm's cache and debug logs do not
+land in `/root/.npm`.
+
+Version overrides:
+
+```bash
+ansible-playbook core/eslint.yml -e host=ws01 -e eslint_version=10.9.1
+```
+
 ## markdownlint.yml
 
 Installs [markdownlint-cli](https://github.com/igorshubovych/markdownlint-cli) via

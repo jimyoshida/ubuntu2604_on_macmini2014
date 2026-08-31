@@ -1103,3 +1103,84 @@ Each gem's latest release:
 ```bash
 curl -sS https://rubygems.org/api/v1/gems/asciidoctor.json | jq -r .version
 ```
+
+## jsmin.yml
+
+Installs [jsmin](https://www.npmjs.com/package/jsmin) — Douglas Crockford's JavaScript
+minifier, ported to Node by Peteris Krumins — via `npm install -g`, root-owned, the same
+mechanism [`mocha-chai.yml`](#mocha-chaiyml) and `core/eslint.yml` use. Node.js itself is a
+prerequisite provisioned elsewhere (`core/nodejs.yml`); this playbook only checks for it.
+
+| Path | Contents |
+| --- | --- |
+| `<npm prefix>/bin/jsmin` | npm's bin symlink |
+| `<npm prefix>/lib/node_modules/jsmin` | the npm package |
+| `/etc/environment` | `NODE_PATH=<npm prefix>/lib/node_modules` — for library use, not the CLI |
+
+**Read this before choosing jsmin for anything.** It is Crockford's 2002 `jsmin.c`
+algorithm, character-level and with no ES6 awareness, last published 2012-02-01 and
+unmaintained since. Confirmed live on this host's Node.js 24.19.0: a `//` sequence *inside a
+template literal* is taken for a line comment and everything to the end of that line is
+deleted — silently, exit status 0, and the output is a `SyntaxError` when Node loads it.
+
+```js
+const greet = (name) => `hello ${name} // not a comment`;   // in
+const greet=(name)=>`hello ${name}                          // out — backtick never closed
+```
+
+Nothing warns. Treat it as an ES5-era tool, check that its output still parses, and prefer a
+current minifier (terser, esbuild) for modern sources. Its licence field — "Doug Crockford's
+license that allows this module to be used for Good but not for Evil" — is not an OSI licence,
+which is worth knowing before it reaches a licence scanner.
+
+**jsmin has no `--version`,** and no flag that reports one: the CLI parses `-l`/`-c`/`-o`/
+`--overwrite` and treats the first other argument as the input *filename*, so
+`jsmin --version` tries to open a file called `--version` and dies with an uncaught `ENOENT`
+and a stack trace. The install guard and the pin check therefore read npm's own metadata
+(`npm ls -g jsmin@<version>`, non-zero both for a missing package and for a wrong version),
+and the real proof is the minification described below — the case
+[POLICY.md's C3](../POLICY.md) covers with "verify something else real".
+
+**The CLI needs no `NODE_PATH`; library use does.** `bin/jsmin` does `require('jsmin')` —
+itself a global package — and that resolves because Node follows the `<prefix>/bin/jsmin`
+symlink to its real path inside `<prefix>/lib/node_modules/jsmin/bin/`, from where the
+enclosing `lib/node_modules` *is* an ancestor `node_modules` directory. `require('jsmin')`
+from a project file anywhere else is not so lucky, so `NODE_PATH` is published to
+`/etc/environment` with the identical line `mocha-chai.yml` and `core/eslint.yml` write —
+pointing at the shared global `node_modules`, so whichever playbook runs second is a no-op.
+It does **not** help an ESM caller: `import 'jsmin'` from a `.mjs` file still fails with
+`ERR_MODULE_NOT_FOUND`, since Node ignores `NODE_PATH` for `import`.
+
+Unlike ESLint, nothing in the archive occupies the target path — Ubuntu ships no `jsmin`
+package, and `python3-jsmin` and `libghc-hjsmin-dev` are different implementations that
+install no `/usr/bin/jsmin` — so the `EEXIST` collision `core/eslint.yml` documents does not
+arise. The playbook asks `dpkg -S` who owns the path at run time anyway, rather than trusting
+that to stay true, and fails with the removal remedy if the answer is an apt package.
+
+### Verification
+
+Three checks, all as `nobody` in a scratch directory under `/var/tmp`:
+
+1. **Minify an ES5 file with `NODE_PATH` unset** — asserts the output is genuinely minified
+   *and* that the comment is gone, so echoing the input back unchanged cannot pass, and the
+   unset variable is what proves the CLI's zero-configuration path.
+2. **Minify with `-o` and run the result under `node`** — proves the file-output path works
+   for an ordinary account and that what came out is executable JavaScript, the check the
+   template-literal finding above says every jsmin output deserves.
+3. **`require('jsmin')` from a project file with `NODE_PATH` set** — asserts the variable the
+   playbook published actually does something, rather than assuming it.
+
+The fixture is deliberately ES5: a modern-syntax one would be testing jsmin's worst behaviour
+rather than its install.
+
+Version override:
+
+```bash
+ansible-playbook misc/jsmin.yml -e host=ws01 -e jsmin_version=1.0.1
+```
+
+The latest release (1.0.1 is also the newest there has ever been):
+
+```bash
+curl -sS https://registry.npmjs.org/jsmin | jq -r '."dist-tags".latest'
+```

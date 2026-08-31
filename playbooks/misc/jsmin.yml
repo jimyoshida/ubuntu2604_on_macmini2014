@@ -1,0 +1,409 @@
+---
+# Install jsmin (JavaScript minifier) system-wide on a multi-user workstation,
+# via a root-owned global `npm install -g` -- the same mechanism
+# core/markdownlint.yml, core/eslint.yml and misc/mocha-chai.yml use. Node.js
+# itself is a prerequisite provisioned elsewhere (core/nodejs.yml); this
+# playbook only checks for it.
+#
+#   <npm prefix>/bin/jsmin                     npm's bin symlink
+#   <npm prefix>/lib/node_modules/jsmin        the npm package
+#
+# npm's global prefix is read from `npm config get prefix` rather than
+# assumed (C5): a NodeSource-installed nodejs defaults it to /usr, Ubuntu's
+# own nodejs package to /usr/local. Both are root-owned, so either is fine,
+# but hardcoding one breaks the other.
+#
+# What this package is, since the name is generic: Douglas Crockford's 2002
+# jsmin.c, ported to JavaScript by Franck Marcia and to Node by Peteris
+# Krumins. Registry metadata, read live: latest is 1.0.1, published
+# 2012-02-01 and untouched since, `engines: node >=0.1.93`, no runtime
+# dependencies, and the license field reads "Doug Crockford's license that
+# allows this module to be used for Good but not for Evil" -- not an OSI
+# licence, which is worth knowing before it reaches a licence scanner.
+#
+# Five findings, all confirmed live against jsmin 1.0.1 on this host's
+# Node.js 24.19.0, that a future reader would otherwise have to rediscover:
+#
+#   1. jsmin has no --version, and no flag that reports one. The CLI parses
+#      -l/-c/-o/--overwrite and treats the first other argument as the input
+#      FILENAME, so `jsmin --version` tries to open a file called
+#      '--version' and dies with an uncaught ENOENT and a stack trace,
+#      exit 1. So the install guard and the verify step both read npm's own
+#      metadata (`npm ls -g jsmin@<version>`), and per C3 the real proof is
+#      the minification below, not a version string.
+#
+#   2. It is a character-level minifier with no ES6 awareness, and it fails
+#      SILENTLY. Inside a template literal, a `//` sequence is treated as a
+#      line comment and everything to the end of that line is deleted;
+#      exit status is still 0. Measured:
+#        const greet = (name) => `hello ${name} // not a comment`;
+#      minifies to a truncated line whose backtick is never closed, and the
+#      output is a SyntaxError when Node loads it. The minified file is the
+#      only place this shows up -- nothing warns. Treat jsmin as an ES5-era
+#      tool: for modern sources use a current minifier (terser, esbuild),
+#      and check jsmin's output actually parses before shipping it.
+#
+#   3. The CLI needs no NODE_PATH, which is not obvious given mocha-chai's
+#      and eslint's experience. bin/jsmin does `require('jsmin')` -- itself
+#      a global package -- and that resolves because Node follows the
+#      <prefix>/bin/jsmin symlink to its real path inside
+#      <prefix>/lib/node_modules/jsmin/bin/, from where the enclosing
+#      lib/node_modules IS an ancestor node_modules directory. Confirmed
+#      from an unrelated working directory with NODE_PATH unset, which is
+#      how the smoke test below runs it (policy point 9: prove the
+#      zero-configuration path).
+#
+#   4. Library use is the case that does need NODE_PATH. `require('jsmin')`
+#      from a project file anywhere else fails with MODULE_NOT_FOUND, and
+#      the module is worth using directly -- the API takes an
+#      aggressiveness level and a comment to prepend that the CLI exposes
+#      only partially. NODE_PATH is published to /etc/environment with the
+#      identical line and regexp core/eslint.yml and misc/mocha-chai.yml
+#      use, pointing at the shared global node_modules rather than anything
+#      jsmin-specific, so whichever playbook runs second is a no-op. Task
+#      20 asserts it rather than assuming it (A1).
+#
+#   5. NODE_PATH does not help an ESM caller. `import 'jsmin'` from a .mjs
+#      file fails with ERR_MODULE_NOT_FOUND even with NODE_PATH set, since
+#      Node ignores NODE_PATH for `import`. An ESM project needs
+#      createRequire(), or a project-local install. Same limit eslint.yml
+#      records for its config files.
+#
+# Unlike eslint, no apt package occupies the target path: Ubuntu ships no
+# `jsmin` package at all (`python3-jsmin` and `libghc-hjsmin-dev` are
+# different implementations and neither installs a /usr/bin/jsmin), so the
+# EEXIST collision core/eslint.yml documents does not arise. Task 6 checks
+# for it at run time anyway, by asking dpkg who owns the path, rather than
+# trusting that to stay true.
+#
+# The npm install runs with a scratch HOME under /var/tmp so that npm's
+# cache and debug logs do not land in /root/.npm (B2, C4).
+#
+# Usage:
+#   ansible-playbook misc/jsmin.yml -e host=<inventory host or group>
+#   ansible-playbook misc/jsmin.yml -e host=ws01 -e jsmin_version=1.0.1
+
+- name: Install jsmin system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    jsmin_version: "1.0.1"
+    # Scratch HOME for the root-side npm run, and scratch directory for the
+    # unprivileged minification. Both under /var/tmp, not /tmp, which is a
+    # size-capped tmpfs on these hosts (C4).
+    jsmin_root_home: /var/tmp/jsmin-root-home
+    jsmin_smoke_dir: /var/tmp/jsmin-smoke
+    # uid/gid used to prove the install is usable by an arbitrary user
+    jsmin_verify_uid: 65534    # nobody
+    jsmin_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check that Node.js is installed as a system package
+      ansible.builtin.command: dpkg -s nodejs
+      register: jsmin_nodejs_dpkg
+      changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and the guards and
+      # checks below then act on output that was never produced.
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Fail if Node.js is not installed as a system package
+      ansible.builtin.fail:
+        msg: >-
+          System-wide Node.js is not installed. Provision it (core/nodejs.yml)
+          before running this playbook.
+      when: jsmin_nodejs_dpkg.rc != 0
+
+    - name: 3. Resolve the active node binary path
+      ansible.builtin.command: which node
+      register: jsmin_node_path
+      changed_when: false
+      check_mode: false
+
+    - name: 4. Fail if node in PATH is not a system-wide install
+      # Guards against a per-user version manager (nvm, fnm, ...) shadowing
+      # the system node on PATH for the connecting account: a global npm
+      # install under become would then land wherever that shim points,
+      # which is per-user, not root-owned.
+      ansible.builtin.fail:
+        msg: >-
+          node resolved to '{{ jsmin_node_path.stdout }}', which is not under
+          /usr/bin or /usr/local/bin. It looks like it is managed by a
+          per-user version manager rather than a system package.
+      when: jsmin_node_path.stdout not in ['/usr/bin/node', '/usr/local/bin/node']
+
+    - name: 5. Create the root-side scratch HOME for npm
+      # npm writes its cache and debug logs under $HOME; left at /root they
+      # land in /root/.npm, which B2 forbids. Removed by task 13.
+      ansible.builtin.file:
+        path: "{{ jsmin_root_home }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      check_mode: false
+
+    - name: 6. Resolve npm's global install prefix
+      # Read with the same scratch HOME the install below uses: npm reads
+      # $HOME/.npmrc, so a prefix read under a different HOME than the
+      # install runs with could name a different directory than the one the
+      # package lands in.
+      ansible.builtin.command:
+        cmd: npm config get prefix
+        chdir: "{{ jsmin_root_home }}"
+      environment: &jsmin_root_env
+        HOME: "{{ jsmin_root_home }}"
+        TMPDIR: "{{ jsmin_root_home }}"
+      register: jsmin_npm_prefix
+      changed_when: false
+      check_mode: false
+
+    - name: 7. Check whether an apt package owns npm's bin path for jsmin
+      # The generalised form of core/eslint.yml's finding 1: `npm install -g`
+      # refuses the ENTIRE install with EEXIST rather than overwriting a file
+      # it does not own, and on a NodeSource host (prefix /usr) npm's bin
+      # symlink goes straight into apt's territory. Asking dpkg who owns the
+      # path catches any such package, present or future, without this
+      # playbook having to name one. rc 0 means dpkg owns it.
+      ansible.builtin.command: "dpkg -S {{ jsmin_npm_prefix.stdout }}/bin/jsmin"
+      register: jsmin_path_owner
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 8. Fail if an apt package owns npm's bin path for jsmin
+      ansible.builtin.fail:
+        msg: >-
+          {{ jsmin_npm_prefix.stdout }}/bin/jsmin is owned by an apt package
+          ({{ jsmin_path_owner.stdout | trim }}). npm refuses the whole
+          install with EEXIST rather than overwriting a file it does not own,
+          so remove that package before running this playbook. Removing the
+          file by hand is not the fix: it is a write behind dpkg's back.
+      when: jsmin_path_owner.rc == 0
+
+    - name: 9. Check whether jsmin is already installed at the pinned version
+      # npm's own metadata, not the binary: finding 1 -- jsmin has no
+      # --version to compare against. One package, so the `npm ls -g a@1 b@2`
+      # OR-across-arguments trap C2 records does not apply here, but the
+      # one-call-per-package shape is kept anyway.
+      ansible.builtin.command:
+        cmd: "npm ls -g jsmin@{{ jsmin_version }} --depth=0"
+        chdir: "{{ jsmin_root_home }}"
+      environment: *jsmin_root_env
+      register: jsmin_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 10. Decide whether jsmin needs installing
+      # Guarded on the pinned version, not on the presence of the binary, so
+      # that bumping jsmin_version actually replaces the package -- and the
+      # guard sees an absent tool, since `npm ls` exits non-zero both when
+      # the package is missing and when it is installed at another version
+      # (confirmed live: rc 1 for a version mismatch, rc 254 for a prefix
+      # holding nothing at all).
+      ansible.builtin.set_fact:
+        jsmin_install_needed: "{{ jsmin_installed.rc != 0 }}"
+        jsmin_can_verify: "{{ not (ansible_check_mode and jsmin_installed.rc != 0) }}"
+
+    - name: 10a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install jsmin {{ jsmin_version }}, so the pin check
+          and the unprivileged minification below are skipped rather than
+          failed. Re-run without --check to verify.
+      when: not (jsmin_can_verify | bool)
+
+    - name: 11. Install jsmin via npm as root
+      ansible.builtin.command:
+        cmd: "npm install -g jsmin@{{ jsmin_version }}"
+        chdir: "{{ jsmin_root_home }}"
+      environment: *jsmin_root_env
+      when: jsmin_install_needed | bool
+
+    - name: 12. Ensure the installed package is world-readable
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files.
+      ansible.builtin.file:
+        path: "{{ jsmin_npm_prefix.stdout }}/lib/node_modules/jsmin"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when: jsmin_can_verify | bool
+
+    - name: 13. Remove the root-side scratch HOME
+      ansible.builtin.file:
+        path: "{{ jsmin_root_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 14. Verify jsmin is installed at the pinned version
+      # Reads npm's install metadata rather than running the binary, which
+      # cannot report its own version (finding 1). What the binary does is
+      # verified by tasks 17-20, which is where C3's "verify something real"
+      # is satisfied for this playbook.
+      ansible.builtin.command: "npm ls -g jsmin@{{ jsmin_version }} --depth=0"
+      register: jsmin_pin_check
+      changed_when: false
+      failed_when: jsmin_pin_check.rc != 0
+      check_mode: false
+      when: jsmin_can_verify | bool
+
+    - name: 15. Publish NODE_PATH to all login sessions
+      # Finding 4. Identical line and regexp to core/eslint.yml's and
+      # misc/mocha-chai.yml's, pointing at the shared global node_modules
+      # directory rather than anything jsmin-specific, so the playbooks are
+      # no-ops for each other rather than fighting over the line.
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^NODE_PATH='
+        line: 'NODE_PATH="{{ jsmin_npm_prefix.stdout }}/lib/node_modules"'
+        state: present
+
+    - name: 16. Create the scratch directory for the unprivileged checks
+      ansible.builtin.file:
+        path: "{{ jsmin_smoke_dir }}"
+        state: directory
+        owner: "{{ jsmin_verify_uid }}"
+        group: "{{ jsmin_verify_gid }}"
+        mode: '0755'
+      check_mode: false
+      when: jsmin_can_verify | bool
+
+    - name: 17. Write the files the unprivileged checks use
+      # smoke.js is deliberately ES5: finding 2 -- jsmin silently mangles a
+      # template literal containing '//', so a modern-syntax fixture would be
+      # testing jsmin's worst behaviour rather than its install.
+      ansible.builtin.copy:
+        dest: "{{ jsmin_smoke_dir }}/{{ item.name }}"
+        owner: "{{ jsmin_verify_uid }}"
+        group: "{{ jsmin_verify_gid }}"
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: smoke.js
+          content: |
+            /* a comment jsmin removes */
+            function add( a , b ) {
+                return a + b ;
+            }
+            console.log( add( 2 , 3 ) ) ;
+        - name: uselib.js
+          content: |
+            const { jsmin } = require('jsmin');
+            process.stdout.write(jsmin('function  f( a ) {  return a ; }'));
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: false
+      when: jsmin_can_verify | bool
+
+    - name: 18. Minify a file as an unprivileged user
+      # Real offline work (A4's first preference), and the check C3 asks for
+      # where a tool has no --version: assert that the output is genuinely
+      # minified, and that the comment is gone, so echoing the input back
+      # unchanged cannot pass.
+      #
+      # NODE_PATH is deliberately NOT set here: finding 3 -- the CLI resolves
+      # its own module through the bin symlink, and leaving the variable
+      # unset is what proves the zero-configuration path (policy point 9).
+      # chdir into the scratch directory, not ansible's own working
+      # directory, which uid 65534 cannot stat (C6).
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ jsmin_verify_uid }} --regid={{ jsmin_verify_gid }} --clear-groups
+          {{ jsmin_npm_prefix.stdout }}/bin/jsmin smoke.js
+        chdir: "{{ jsmin_smoke_dir }}"
+      environment:
+        HOME: "{{ jsmin_smoke_dir }}"
+        TMPDIR: "{{ jsmin_smoke_dir }}"
+      register: jsmin_smoke
+      changed_when: false
+      failed_when: >-
+        'function add(a,b){return a+b;}' not in jsmin_smoke.stdout
+        or 'a comment jsmin removes' in jsmin_smoke.stdout
+      check_mode: false
+      when: jsmin_can_verify | bool
+
+    - name: 19. Minify to a file and run the result, as an unprivileged user
+      # Proves the -o write path works for an ordinary account, and that what
+      # jsmin produced is executable JavaScript rather than merely shorter
+      # text -- the check finding 2 says every jsmin output deserves.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ jsmin_verify_uid }} --regid={{ jsmin_verify_gid }} --clear-groups
+          sh -c '{{ jsmin_npm_prefix.stdout }}/bin/jsmin -o smoke.min.js smoke.js && node smoke.min.js'
+        chdir: "{{ jsmin_smoke_dir }}"
+      environment:
+        HOME: "{{ jsmin_smoke_dir }}"
+        TMPDIR: "{{ jsmin_smoke_dir }}"
+      register: jsmin_run
+      changed_when: false
+      failed_when: jsmin_run.stdout | trim != '5'
+      check_mode: false
+      when: jsmin_can_verify | bool
+
+    - name: 20. Require the module from a project file, as an unprivileged user
+      # Asserts the NODE_PATH task 15 published actually does something (A1:
+      # a shared variable the tool ignores is invisible). Set explicitly
+      # here, not left to /etc/environment: a setpriv-spawned process is not
+      # a login session and never sources it.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ jsmin_verify_uid }} --regid={{ jsmin_verify_gid }} --clear-groups
+          node uselib.js
+        chdir: "{{ jsmin_smoke_dir }}"
+      environment:
+        HOME: "{{ jsmin_smoke_dir }}"
+        TMPDIR: "{{ jsmin_smoke_dir }}"
+        NODE_PATH: "{{ jsmin_npm_prefix.stdout }}/lib/node_modules"
+      register: jsmin_lib
+      changed_when: false
+      failed_when: "'function f(a){return a;}' not in jsmin_lib.stdout"
+      check_mode: false
+      when: jsmin_can_verify | bool
+
+    - name: 21. Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ jsmin_smoke_dir }}"
+        state: absent
+      check_mode: false
+
+    - name: 22. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "jsmin {{ jsmin_version }} installed system-wide."
+          - ""
+          - "  {{ jsmin_npm_prefix.stdout }}/bin/jsmin"
+          - "  {{ jsmin_npm_prefix.stdout }}/lib/node_modules/jsmin"
+          - ""
+          - "NODE_PATH={{ jsmin_npm_prefix.stdout }}/lib/node_modules published to /etc/environment."
+          - ""
+          - "Verified as an unprivileged user (uid {{ jsmin_verify_uid }}) by minifying a"
+          - "file with NODE_PATH unset, running the minified output under node, and"
+          - "requiring the module from a project file with NODE_PATH set."
+          - ""
+          - "Usage:"
+          - "  jsmin app.js                       # Minified JS to stdout"
+          - "  jsmin -o app.min.js app.js         # ...to a file"
+          - "  jsmin --overwrite app.js           # ...over the input file"
+          - "  jsmin -l 1|2|3 app.js              # Aggressiveness: 1 keeps newlines,"
+          - "                                     # 2 (default) Crockford's algorithm, 3 removes all"
+          - "  jsmin -c '/*! banner */' app.js    # Prepend a comment to the output"
+          - "  cat app.js | jsmin                 # Reads stdin when no filename is given"
+          - "  const { jsmin } = require('jsmin') # As a library (NODE_PATH; CommonJS only)"
+          - ""
+          - "jsmin has no --version: the version above is npm's metadata (npm ls -g jsmin)."
+          - ""
+          - "It is Crockford's 2002 algorithm and is not ES6-aware. A '//' inside a template"
+          - "literal is taken for a comment and the rest of that line is deleted, silently and"
+          - "with exit status 0. Check that minified output still parses, and prefer a current"
+          - "minifier (terser, esbuild) for modern sources."
+      when: jsmin_can_verify | bool
