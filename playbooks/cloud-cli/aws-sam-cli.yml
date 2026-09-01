@@ -1,0 +1,462 @@
+---
+# Install the AWS SAM CLI system-wide on a multi-user workstation.
+#
+# AWS's own installer already targets root-owned system paths:
+#
+#   /usr/local/aws-sam-cli/<version>/   the bundled interpreter and libraries
+#   /usr/local/aws-sam-cli/current      symlink to the active version
+#   /usr/local/bin/sam                  symlink into current/bin
+#
+# so this is the same shape as cloud-cli/aws-cli.yml, and deliberately so: the
+# two installers are the same script family, down to the --update /
+# --install-dir / --bin-dir flags. What was on ws01/ws02 before this playbook
+# existed was an unmanaged hand-run of that installer -- no version pin, no
+# signature check, and nothing that would ever move it again.
+#
+# NOT apt, and not pip. There is no `aws-sam-cli` package in Ubuntu 26.04 and
+# no AWS apt repository that carries one; upstream's supported Linux paths are
+# this zip installer and Homebrew, and Homebrew is out (see README).
+# `pip install aws-sam-cli` is the third option and is rejected for the reason
+# every pip-into-the-system install is rejected here: it puts a large
+# dependency tree into the system Python, where it collides with apt-managed
+# packages and with anything else that pins boto3/botocore.
+#
+# TWO KEYS, NOT ONE, AND A CHAIN BETWEEN THEM. Unlike the AWS CLI, AWS signs
+# the SAM CLI with a *signer* key that is itself signed by a long-lived
+# *primary* key, and documents verification as two steps: check that the
+# primary certifies the signer, then check that the signer signed the artifact
+# (task 10 and task 11 below). Both key blocks are published only in the
+# installation documentation, not at a fetchable URL, so both are pinned here
+# and their fingerprints asserted after import:
+#   https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/reference-sam-cli-install-verify.html
+# The signer key expires 2027-05-19. When AWS rotates it, replace
+# aws_sam_cli_signer_key and aws_sam_cli_signer_fingerprint; the primary key
+# is the one that should stay put across rotations.
+#
+# THE UNPRIVILEGED CHECK NEEDS A SCRATCH HOME. `sam` writes ~/.aws-sam
+# (metadata.json, telemetry uuid) on every invocation, including the offline
+# ones, so a check running as an account with no home directory fails on the
+# write rather than on anything to do with the install -- the same trap
+# misc/maven.yml documents for ~/.m2. SAM_CLI_TELEMETRY=0 is set for that one
+# command so the check itself never phones home; it is deliberately NOT
+# written to /etc/environment, because telemetry is each account's own call
+# (the summary below prints how).
+#
+# Credentials stay per-user in ~/.aws and are not touched here: `sam deploy`
+# uses the same credential chain the AWS CLI does, which cloud-cli/aws-cli.yml
+# already leaves per-account.
+#
+# Usage:
+#   ansible-playbook cloud-cli/aws-sam-cli.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/aws-sam-cli.yml -e host=ws01 -e aws_sam_cli_version=1.165.0
+
+- name: Install the AWS SAM CLI system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    aws_sam_cli_version: "1.165.0"
+    aws_sam_cli_install_dir: /usr/local/aws-sam-cli
+    aws_sam_cli_bin_dir: /usr/local/bin
+    aws_sam_cli_bin: /usr/local/bin/sam
+    aws_sam_cli_base_url: >-
+      https://github.com/aws/aws-sam-cli/releases/download/v{{ aws_sam_cli_version }}
+    # ansible_facts['architecture'] -> upstream asset name. Unlike the AWS
+    # CLI's assets these are NOT the strings uname prints: the 64-bit ARM
+    # asset is aws-sam-cli-linux-arm64.zip, not aarch64.
+    aws_sam_cli_arch_map:
+      x86_64: x86_64
+      aarch64: arm64
+    aws_sam_cli_arch: "{{ aws_sam_cli_arch_map[ansible_facts['architecture']] | default('') }}"
+    aws_sam_cli_zip: "aws-sam-cli-linux-{{ aws_sam_cli_arch }}.zip"
+    # `sam --version` prints exactly this line, so the guard compares the
+    # whole trimmed string rather than searching for the number: a substring
+    # test for "1.16" would be satisfied by an installed 1.165.0.
+    aws_sam_cli_version_line: "SAM CLI, version {{ aws_sam_cli_version }}"
+    # Disk-backed, not /tmp: the installer zip is ~90MiB and unpacks larger,
+    # and /tmp is a size-capped tmpfs on these hosts.
+    aws_sam_cli_stage_dir: "/var/tmp/aws-sam-cli-install-{{ aws_sam_cli_version }}"
+    aws_sam_cli_smoke_home: /var/tmp/aws-sam-cli-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    aws_sam_cli_verify_uid: 65534    # nobody
+    aws_sam_cli_verify_gid: 65534    # nogroup
+    aws_sam_cli_primary_fingerprint: "DE299ABF8479DD37BE09095942FD5F7A73AD885A"
+    aws_sam_cli_signer_fingerprint: "EF463E86CA31933BB688CC1A4094ABB1BEDFDAB4"
+    # The long key id of the primary key, which is how `gpg --check-sigs`
+    # names it in the signer key's signature list (task 10).
+    aws_sam_cli_primary_keyid: "42FD5F7A73AD885A"
+    aws_sam_cli_primary_key: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+      Version: GnuPG v2.0.22 (GNU/Linux)
+
+      mQINBGRuSzMBEADsqiwOy78w7F4+sshaMFRIwRGNRm94p5Qey2KMZBxekFtoryVD
+      D9jEOnvupx4tvhfBHz5EcUHCEOdl4MTqdBy6vVAshozgxVb9RE8JpECn5lw7XC69
+      4Y7Gy1TKKQMEWtDXElkGxIFdUWvWjSnPlzfnoXwQYGeE93CUS3h5dImP22Yk1Ct6
+      eGGhlcbg1X4L8EpFMj7GvcsU8f7ziVI/PyC1Xwy39Q8/I67ip5eU5ddxO/xHqrbL
+      YC7+8pJPbRMej2twT2LrcpWWYAbprMtRoa6WfE0/thoo3xhHpIMHdPfAA86ZNGIN
+      kRLjGUg7jnPTRW4Oin3pCc8nT4Tfc1QERkHm641gTC/jUvpmQsM6h/FUVP2i5iE/
+      JHpJcMuL2Mg6zDo3x+3gTCf+Wqz3rZzxB+wQT3yryZs6efcQy7nROiRxYBxCSXX0
+      2cNYzsYLb/bYaW8yqWIHD5IqKhw269gp2E5Khs60zgS3CorMb5/xHgXjUCVgcu8a
+      a8ncdf9fjl3WS5p0ohetPbO2ZjWv+MaqrZOmUIgKbA4RpWZ/fU97P5BW9ylwmIDB
+      sWy0cMxg8MlvSdLytPieogaM0qMg3u5qXRGBr6Wmevkty0qgnmpGGc5zPiUbtOE8
+      CnFFqyxBpj5IOnG0KZGVihvn+iRxrv6GO7WWO92+Dc6m94U0EEiBR7QiOwARAQAB
+      tDRBV1MgU0FNIENMSSBQcmltYXJ5IDxhd3Mtc2FtLWNsaS1wcmltYXJ5QGFtYXpv
+      bi5jb20+iQI/BBMBCQApBQJkbkszAhsvBQkHhM4ABwsJCAcDAgEGFQgCCQoLBBYC
+      AwECHgECF4AACgkQQv1fenOtiFqTuhAAzi5+ju5UVOWqHKevOJSO08T4QB8HcqAE
+      SVO3mY6/j29knkcL8ubZP/DbpV7QpHPI2PB5qSXsiDTP3IYPbeY78zHSDjljaIK3
+      njJLMScFeGPyfPpwMsuY4nzrRIgAtXShPA8N/k4ZJcafnpNqKj7QnPxiC1KaIQWm
+      pOtvb8msUF3/s0UTa5Ys/lNRhVC0eGg32ogXGdojZA2kHZWdm9udLo4CDrDcrQT7
+      NtDcJASapXSQL63XfAS3snEc4e1941YxcjfYZ33rel8K9juyDZfi1slWR/L3AviI
+      QFIaqSHzyOtP1oinUkoVwL8ThevKD3Ag9CZflZLzNCV7yqlF8RlhEZ4zcE/3s9El
+      WzCFsozb5HfE1AZonmrDh3SyOEIBMcS6vG5dWnvJrAuSYv2rX38++K5Pr/MIAfOX
+      DOI1rtA+XDsHNv9lSwSy0lt+iClawZANO9IXCiN1rOYcVQlwzDFwCNWDgkwdOqS0
+      gOA2f8NF9lE5nBbeEuYquoOl1Vy8+ICbgOFs9LoWZlnVh7/RyY6ssowiU9vGUnHI
+      L8f9jqRspIz/Fm3JD86ntZxLVGkeZUz62FqErdohYfkFIVcv7GONTEyrz5HLlnpv
+      FJ0MR0HjrMrZrnOVZnwBKhpbLocTsH+3t5It4ReYEX0f1DIOL/KRwPvjMvBVkXY5
+      hblRVDQoOWc=
+      =d9oG
+      -----END PGP PUBLIC KEY BLOCK-----
+    aws_sam_cli_signer_key: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+      Version: GnuPG v2.0.22 (GNU/Linux)
+
+      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
+      LtZnq+n4SfeNbZjD2FQWZR4CrA==
+      =lHfs
+      -----END PGP PUBLIC KEY BLOCK-----
+
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No AWS SAM CLI installer is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to
+          aws_sam_cli_arch_map.
+      when: aws_sam_cli_arch | length == 0
+
+    - name: 3. Check the currently installed AWS SAM CLI version
+      ansible.builtin.command: "{{ aws_sam_cli_bin }} --version"
+      register: aws_sam_cli_installed
+      changed_when: false
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them and the checks below
+      # act on output that was never produced.
+      check_mode: false
+      failed_when: false
+
+    - name: 4. Decide whether the AWS SAM CLI needs installing
+      # The version is compared, not merely the presence of the binary, so
+      # that bumping aws_sam_cli_version actually replaces the install.
+      ansible.builtin.set_fact:
+        aws_sam_cli_install_needed: >-
+          {{ (aws_sam_cli_installed.stdout | default('') | trim) != aws_sam_cli_version_line }}
+        aws_sam_cli_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (aws_sam_cli_installed.stdout | default('') | trim) != aws_sam_cli_version_line) }}
+
+    - name: 4a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install the AWS SAM CLI {{ aws_sam_cli_version }},
+          so the version check and the unprivileged event-generation check
+          below are skipped rather than failed. Re-run without --check to
+          verify.
+      when: not (aws_sam_cli_can_verify | bool)
+
+    - name: 5. Create the staging directories
+      # The gnupg subdirectory is created here rather than left to gpg: under
+      # --batch, gpg will not create a missing --homedir and fails with
+      # "no writable keyring found" instead. 0700 is required, or gpg warns
+      # about unsafe permissions on every invocation.
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      loop:
+        - "{{ aws_sam_cli_stage_dir }}"
+        - "{{ aws_sam_cli_stage_dir }}/gnupg"
+      when:
+        - aws_sam_cli_install_needed | bool
+        # A dry run creates no staging directory, so nothing downstream of it
+        # can be attempted either -- and get_url, unlike command, is NOT
+        # skipped in check mode, so it really does try to download.
+        - not ansible_check_mode
+
+    - name: 6. Write the AWS SAM CLI signing keys
+      ansible.builtin.copy:
+        content: "{{ item.content }}"
+        dest: "{{ aws_sam_cli_stage_dir }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - name: aws-sam-cli-primary-key.asc
+          content: "{{ aws_sam_cli_primary_key }}"
+        - name: aws-sam-cli-signer-key.asc
+          content: "{{ aws_sam_cli_signer_key }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 7. Download the AWS SAM CLI installer and its signature
+      ansible.builtin.get_url:
+        url: "{{ aws_sam_cli_base_url }}/{{ item }}"
+        dest: "{{ aws_sam_cli_stage_dir }}/{{ item }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - "{{ aws_sam_cli_zip }}"
+        - "{{ aws_sam_cli_zip }}.sig"
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 8. Import both signing keys into a throwaway keyring
+      # A staging GNUPGHOME rather than root's own keyring: these keys are
+      # used to check one artifact and should not become permanently trusted
+      # for anything else on the host.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --homedir {{ aws_sam_cli_stage_dir }}/gnupg --batch --quiet
+          --import {{ aws_sam_cli_stage_dir }}/aws-sam-cli-primary-key.asc
+          {{ aws_sam_cli_stage_dir }}/aws-sam-cli-signer-key.asc
+      changed_when: true
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 9. Confirm the imported keys are the pinned AWS SAM CLI keys
+      # Guards the embedded key blocks themselves: a swapped key would
+      # otherwise produce a "good" signature for a swapped installer.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --homedir {{ aws_sam_cli_stage_dir }}/gnupg --batch
+          --with-colons --fingerprint
+      register: aws_sam_cli_fpr
+      changed_when: false
+      failed_when: >-
+        aws_sam_cli_primary_fingerprint not in aws_sam_cli_fpr.stdout
+        or aws_sam_cli_signer_fingerprint not in aws_sam_cli_fpr.stdout
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Confirm the primary key certifies the signer key
+      # The step that makes two keys worth having. Without it, pinning the
+      # signer key alone would be no stronger than the AWS CLI's single key:
+      # the artifact would be checked against whatever key this file happens
+      # to carry. `--check-sigs` verifies the signatures on the signer key
+      # rather than merely listing them (`--list-sigs`), and the primary's
+      # long key id must appear among them.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --homedir {{ aws_sam_cli_stage_dir }}/gnupg --batch
+          --check-sigs {{ aws_sam_cli_signer_fingerprint }}
+      register: aws_sam_cli_chain
+      changed_when: false
+      # A `sig!` line, not merely the key id somewhere in the output: `sig-`
+      # is what gpg prints for a signature that did not check out, and it
+      # carries the same key id.
+      failed_when: >-
+        aws_sam_cli_chain.stdout_lines
+        | select('search', '^sig!\s+' ~ aws_sam_cli_primary_keyid)
+        | list | length == 0
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 11. Verify the installer's signature
+      # gpg exits 0 only for a good signature; the "key is not certified with
+      # a trusted signature" warning it prints for an uncertified key does not
+      # affect the exit status, so the exit code is the gate. Task 10 is what
+      # answers that warning here.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --homedir {{ aws_sam_cli_stage_dir }}/gnupg --batch
+          --verify {{ aws_sam_cli_stage_dir }}/{{ aws_sam_cli_zip }}.sig
+          {{ aws_sam_cli_stage_dir }}/{{ aws_sam_cli_zip }}
+      changed_when: false
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 12. Unpack the installer
+      ansible.builtin.unarchive:
+        src: "{{ aws_sam_cli_stage_dir }}/{{ aws_sam_cli_zip }}"
+        dest: "{{ aws_sam_cli_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 13. Run the AWS SAM CLI installer
+      # --update makes the installer replace an existing install instead of
+      # refusing ("Found preexisting AWS SAM CLI installation ... rerun with
+      # --update"); the install/bin dirs are passed explicitly rather than
+      # relying on the installer's defaults staying what they are today.
+      ansible.builtin.command:
+        cmd: >-
+          {{ aws_sam_cli_stage_dir }}/install --update
+          --install-dir {{ aws_sam_cli_install_dir }}
+          --bin-dir {{ aws_sam_cli_bin_dir }}
+      changed_when: true
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 14. Make the install tree readable by every account
+      # The installer applies root's umask rather than an explicit mode, so
+      # this is set here instead of being inherited from whoever ran the play.
+      ansible.builtin.file:
+        path: "{{ aws_sam_cli_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+      when:
+        - aws_sam_cli_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 15. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ aws_sam_cli_stage_dir }}"
+        state: absent
+
+    - name: 16. Verify the installed AWS SAM CLI version
+      ansible.builtin.command: "{{ aws_sam_cli_bin }} --version"
+      register: aws_sam_cli_version_out
+      changed_when: false
+      failed_when: (aws_sam_cli_version_out.stdout | trim) != aws_sam_cli_version_line
+      check_mode: false
+      when: aws_sam_cli_can_verify | bool
+
+    - name: 17. Create a scratch HOME for the unprivileged check
+      # `sam` writes ~/.aws-sam even for offline subcommands -- see the
+      # header. 0700 so the check exercises a HOME it fully owns.
+      #
+      # It doubles as the working directory for the check below (chdir), and
+      # that is not optional: every sam subcommand looks for a samconfig.yml
+      # in the *current directory*, so with the cwd left wherever ansible ran
+      # from -- /home/ubuntu -- the check dies as uid 65534 on
+      # "PermissionError: [Errno 13] ... '/home/ubuntu/samconfig.yml'" the
+      # moment that home is 0750 rather than 0755. Found on ws02, where an
+      # install that worked perfectly failed its own verification; ws01, whose
+      # /home/ubuntu is 0755, passed the identical play. cloud-cli/gcx-cli.yml
+      # documents the same trap for its repository-level .gcx.yaml.
+      ansible.builtin.file:
+        path: "{{ aws_sam_cli_smoke_home }}"
+        state: directory
+        owner: "{{ aws_sam_cli_verify_uid }}"
+        group: "{{ aws_sam_cli_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: aws_sam_cli_can_verify | bool
+
+    - name: 18. Generate a sample event as an unprivileged user
+      # Exercises far more than --version does: `local generate-event` loads
+      # the bundled interpreter and the SAM template machinery and renders a
+      # real event document, entirely offline -- no credentials, no Docker,
+      # no network. With no AWS identity present it still exits 0, which is
+      # the expected result here: this playbook installs a client and
+      # deliberately configures no identity.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ aws_sam_cli_verify_uid }} --regid={{ aws_sam_cli_verify_gid }} --clear-groups
+          env HOME={{ aws_sam_cli_smoke_home }} SAM_CLI_TELEMETRY=0
+          {{ aws_sam_cli_bin }} local generate-event s3 put
+        chdir: "{{ aws_sam_cli_smoke_home }}"
+      register: aws_sam_cli_smoke
+      changed_when: false
+      failed_when: '"aws:s3" not in aws_sam_cli_smoke.stdout'
+      check_mode: false
+      when: aws_sam_cli_can_verify | bool
+
+    - name: 19. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ aws_sam_cli_smoke_home }}"
+        state: absent
+      check_mode: false
+      when: aws_sam_cli_can_verify | bool
+
+    - name: 20. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ aws_sam_cli_version_out.stdout | trim }}"
+          - ""
+          - "  {{ aws_sam_cli_install_dir }}/{{ aws_sam_cli_version }} ({{ aws_sam_cli_arch }})"
+          - "  {{ aws_sam_cli_install_dir }}/current   symlink to the active version"
+          - "  {{ aws_sam_cli_bin }}"
+          - ""
+          - >-
+            Installer signature verified against
+            {{ aws_sam_cli_signer_fingerprint }}, itself certified by the
+            AWS SAM CLI primary key {{ aws_sam_cli_primary_keyid }}.
+          - >-
+            Verified runnable by an unprivileged user
+            (uid {{ aws_sam_cli_verify_uid }}).
+          - ""
+          - "Credentials are per-account and are NOT configured by this playbook."
+          - "sam uses the same credential chain as the AWS CLI:"
+          - "  aws configure                 # or aws configure sso"
+          - "  sam --version"
+          - "  sam local generate-event s3 put   # works with no identity at all"
+          - ""
+          - "The SAM CLI reports telemetry by default. Per account:"
+          - "  export SAM_CLI_TELEMETRY=0"
+      when: aws_sam_cli_can_verify | bool

@@ -97,6 +97,7 @@ point goes on `PATH`.
 | [misc/zap.yml](misc/zap.yml) | ~270 MB distribution zip from the GitHub release — versioned directory + symlink to the launcher |
 | [core/pwsh.yml](core/pwsh.yml) | tarball from Microsoft — no `powershell` package exists for Ubuntu 26.04 at all; versioned directory + symlink |
 | [cloud-cli/aws-cli.yml](cloud-cli/aws-cli.yml) | vendor's own zip + `install` program (not ansible's `unarchive`) — versioned directory + symlinks, GPG-signature verified |
+| [cloud-cli/aws-sam-cli.yml](cloud-cli/aws-sam-cli.yml) | the same vendor zip + `install` program as `aws-cli.yml` — versioned directory + symlinks; GPG-signature verified against a signer key whose certification by AWS's primary key is checked too |
 | [cloud-cli/jenkins-cli.yml](cloud-cli/jenkins-cli.yml) | single jar from `repo.jenkins-ci.org` (a Maven repository, not GitHub) |
 | [misc/plantuml.yml](misc/plantuml.yml) | single jar from Maven Central, verified against the `.sha256` beside it — the GitHub release publishes only detached `.asc` signatures; apt's `plantuml` is PlantUML 1.2020.2 |
 | [cloud-cli/gitlab-cli.yml](cloud-cli/gitlab-cli.yml) | vendor `.deb` fetched and installed with `apt: deb=` — no vendor apt repo exists |

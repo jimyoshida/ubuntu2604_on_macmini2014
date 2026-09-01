@@ -294,6 +294,80 @@ it trails upstream by several minor releases (2.36.x at the time of writing) and
 package typically drifts further over its lifetime, while `aws` ships weekly. Revisit if
 `apt-cache policy awscli` on the target ever lands close to upstream.
 
+## aws-sam-cli.yml
+
+Installs the [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/)
+from AWS's official zip installer — the same installer family as `aws-cli.yml`, down to
+the `--update` / `--install-dir` / `--bin-dir` flags.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/aws-sam-cli/<version>/` | bundled interpreter and libraries |
+| `/usr/local/aws-sam-cli/current` | symlink to the active version |
+| `/usr/local/bin/sam` | executable (symlink into `current/bin`) |
+
+Version override:
+
+```bash
+ansible-playbook cloud-cli/aws-sam-cli.yml -e host=ws01 -e aws_sam_cli_version=1.165.0
+```
+
+### Two signing keys, and a chain between them
+
+Unlike the AWS CLI, AWS signs the SAM CLI with a **signer** key that is itself certified by
+a long-lived **primary** key, and
+[documents verification as two steps](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/reference-sam-cli-install-verify.html).
+The playbook does both: after importing, it asserts each fingerprint, then runs
+`gpg --check-sigs` on the signer key and requires a **`sig!`** line naming the primary key
+(`42FD5F7A73AD885A`) — `sig-` is what gpg prints for a signature that did not check out,
+and it carries the same key id.
+
+| Key | Fingerprint | Expires |
+| --- | --- | --- |
+| primary | `DE299ABF8479DD37BE09095942FD5F7A73AD885A` | — |
+| signer | `EF463E86CA31933BB688CC1A4094ABB1BEDFDAB4` | 2027-05-19 |
+
+Both are published only in the installation documentation, not at a fetchable URL, so both
+are embedded in the playbook. When AWS rotates the signer key, replace
+`aws_sam_cli_signer_key` and `aws_sam_cli_signer_fingerprint`; the primary key is the one
+that should stay put across rotations.
+
+### The unprivileged check needs a scratch HOME — and a scratch working directory
+
+`sam` writes `~/.aws-sam` (metadata, telemetry uuid) on every invocation, including the
+offline ones, so the check runs with `HOME` pointed at a scratch directory it owns — the
+same trap [`misc/maven.yml`](../misc/README.md) documents for `~/.m2`. That directory is
+also the check's **working directory** (`chdir`), which is not optional: every `sam`
+subcommand looks for a `samconfig.yml` in the current directory, so with the cwd left
+wherever Ansible ran from — `/home/ubuntu` — the check dies as uid 65534 on
+`PermissionError: [Errno 13] ... '/home/ubuntu/samconfig.yml'` the moment that home is
+`0750` rather than `0755`. This is exactly what happened on ws02 the first time the
+playbook ran for real, while ws01 passed; [`gcx-cli.yml`](#gcx-cliyml) documents the same
+trap for its repository-level `.gcx.yaml`. The command it runs
+is `sam local generate-event s3 put`, which renders a real event document with no
+credentials, no Docker and no network, and so exercises the bundled interpreter rather than
+just printing a version string. `SAM_CLI_TELEMETRY=0` is set for that one command;
+it is deliberately **not** written to `/etc/environment`, because telemetry is each
+account's own call.
+
+### Why not apt or pip
+
+There is no `aws-sam-cli` package in Ubuntu 26.04 and no AWS apt repository that carries
+one; upstream's supported Linux paths are this zip installer and Homebrew, and Homebrew is
+out. `pip install aws-sam-cli` is rejected for the reason every pip-into-the-system install
+is: it puts a large dependency tree into the system Python, where it collides with
+apt-managed packages and with anything else pinning `boto3`/`botocore`.
+
+### Per-user setup
+
+The playbook configures no identity. `sam` uses the same credential chain as the AWS CLI,
+which [`aws-cli.yml`](#aws-cliyml) already leaves per-account:
+
+```bash
+aws configure                     # or aws configure sso
+sam local generate-event s3 put   # works with no identity at all
+```
+
 ## azure-cli.yml
 
 Installs the [Azure CLI](https://learn.microsoft.com/cli/azure/) from Microsoft's apt
