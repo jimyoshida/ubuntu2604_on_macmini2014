@@ -187,11 +187,33 @@
       # tmpfs, Trivy's vulnerability database (~100MiB) may not fit, the same
       # SQLITE_FULL failure mode found migrating grype-syft.yml.
       ansible.builtin.file:
-        path: /var/tmp/trivy-verify
+        path: "{{ item }}"
         state: directory
         owner: root
         group: root
         mode: '1777'
+      loop:
+        - /var/tmp/trivy-verify
+        - /var/tmp/trivy-verify/target
+      check_mode: false
+      when: trivy_can_verify | bool
+
+    - name: 11a. Write a dependency manifest for the unprivileged scan to find
+      # The scan target has to be a tree uid 65534 can read completely. /etc is
+      # not: Trivy treats an unreadable entry as fatal, and this scan died on
+      # /etc/systemd/system/alloy.service.d/override.conf, which is root-only.
+      # A manifest of its own is also a better test than a directory of config
+      # files -- these pins are old enough to carry known CVEs, so the scan
+      # exercises the database it just downloaded rather than reporting
+      # nothing and exiting 0 either way.
+      ansible.builtin.copy:
+        content: |
+          requests==2.19.1
+          urllib3==1.24.1
+        dest: /var/tmp/trivy-verify/target/requirements.txt
+        owner: root
+        group: root
+        mode: '0644'
       check_mode: false
       when: trivy_can_verify | bool
 
@@ -200,10 +222,14 @@
       # proving the tool can create and use its own per-user cache
       # ($HOME/.cache/trivy by default) without any root-owned shared path.
       # Needs network egress to fetch the vulnerability database.
+      #
+      # chdir matters for more than the scan path: Trivy reads trivy.yaml from
+      # the working directory, and a directory uid 65534 cannot read makes it
+      # exit before scanning anything.
       ansible.builtin.command:
         cmd: >-
           setpriv --reuid={{ trivy_verify_uid }} --regid={{ trivy_verify_gid }} --clear-groups
-          trivy fs --scanners vuln -f table /etc
+          trivy fs --scanners vuln -f table target
         chdir: /var/tmp/trivy-verify
       environment:
         HOME: /var/tmp/trivy-verify
@@ -211,6 +237,9 @@
       register: trivy_smoke
       changed_when: false
       check_mode: false
+      failed_when: >-
+        trivy_smoke.rc != 0
+        or 'requirements.txt' not in trivy_smoke.stdout
       when: trivy_can_verify | bool
 
     - name: 13. Remove the scratch directory used for unprivileged verification
