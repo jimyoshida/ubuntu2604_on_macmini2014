@@ -88,7 +88,7 @@
       # pulls in now that install_recommends is false -- see that task.
       - name: mailutils
         version: "1:3.20-3build1"
-        verify_cmd: "dotlock --version | grep -q 'GNU Mailutils 3.20'"
+        verify_cmd: "dotlock --version | grep -q 'dotlock (GNU Mailutils) 3.20'"
       - name: jq
         version: "1.8.1-4ubuntu2"
         verify_cmd: "jq --version | grep -q 'jq-1.8.1'"
