@@ -123,6 +123,7 @@
     - name: 4. Read the tools already installed at this tool path
       ansible.builtin.command:
         cmd: "{{ dotnet_bin }} tool list --tool-path {{ dotnet_tools_path }}"
+        chdir: "{{ dotnet_tools_root_home }}"
       environment: &dotnet_env
         HOME: "{{ dotnet_tools_root_home }}"
         DOTNET_CLI_TELEMETRY_OPTOUT: "1"
@@ -173,6 +174,7 @@
         cmd: >-
           {{ dotnet_bin }} tool update {{ item.package }}
           --version {{ item.version }} --tool-path {{ dotnet_tools_path }}
+        chdir: "{{ dotnet_tools_root_home }}"
       environment: *dotnet_env
       loop: "{{ dotnet_tools_pending | default([]) }}"
       loop_control:
@@ -224,6 +226,7 @@
       # before it reads anything.
       ansible.builtin.command:
         cmd: "{{ dotnet_bin }} tool list --tool-path {{ dotnet_tools_path }}"
+        chdir: "{{ dotnet_tools_root_home }}"
       environment: *dotnet_env
       register: dotnet_tools_list_verify
       changed_when: false
