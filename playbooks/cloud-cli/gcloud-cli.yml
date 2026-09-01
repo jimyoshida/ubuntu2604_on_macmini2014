@@ -24,7 +24,7 @@
 #
 # Usage:
 #   ansible-playbook cloud-cli/gcloud-cli.yml -e host=<inventory host or group>
-#   ansible-playbook cloud-cli/gcloud-cli.yml -e host=ws01 -e gcloud_cli_version=579.0.0
+#   ansible-playbook cloud-cli/gcloud-cli.yml -e host=ws01 -e gcloud_cli_version=582.0.0
 
 - name: Install the Google Cloud CLI system-wide
   hosts: "{{ host }}"
@@ -40,9 +40,9 @@
     # its version, so every guard below compares the status too, or a removed
     # package reads as "already at the pin" (POLICY.md's C2).
     gcloud_cli_dpkg_ok: "install ok installed|"
-    gcloud_cli_version: "579.0.0"
+    gcloud_cli_version: "582.0.0"
     # Google's Debian revision. Kept separate so the version the CLI reports
-    # (579.0.0) and the version apt installs (579.0.0-0) stay in step.
+    # (582.0.0) and the version apt installs (582.0.0-0) stay in step.
     gcloud_cli_deb_revision: "0"
     gcloud_cli_pkg_version: "{{ gcloud_cli_version }}-{{ gcloud_cli_deb_revision }}"
     gcloud_cli_repo_uri: "https://packages.cloud.google.com/apt"

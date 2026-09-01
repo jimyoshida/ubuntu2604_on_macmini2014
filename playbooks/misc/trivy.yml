@@ -22,7 +22,7 @@
 #
 # Usage:
 #   ansible-playbook misc/trivy.yml -e host=<inventory host or group>
-#   ansible-playbook misc/trivy.yml -e host=ws01 -e trivy_version=0.73.0
+#   ansible-playbook misc/trivy.yml -e host=ws01 -e trivy_version=0.74.0
 
 - name: Install Trivy system-wide
   hosts: "{{ host }}"
@@ -38,7 +38,7 @@
     # its version, so every guard below compares the status too, or a removed
     # package reads as "already at the pin" (POLICY.md's C2).
     trivy_dpkg_ok: "install ok installed|"
-    trivy_version: "0.73.0"
+    trivy_version: "0.74.0"
     trivy_repo_uri: https://aquasecurity.github.io/trivy-repo/deb
     trivy_repo_suite: generic
     trivy_key_url: https://aquasecurity.github.io/trivy-repo/deb/public.key
