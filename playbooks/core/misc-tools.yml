@@ -4,7 +4,7 @@
 #
 #   /usr/bin/<tool>                    for every package that ships a binary
 #
-# All fourteen packages already come from Ubuntu's own apt archive, so unlike
+# All ten packages already come from Ubuntu's own apt archive, so unlike
 # most of _multi-user/tools/ this migration needed no reach work: the source
 # playbook (core/misc-tools.yml, renamed from core/agent-base.yml on
 # 2026-08-14 and from core/core-tools.yml on 2026-08-25) already installs to
@@ -14,13 +14,10 @@
 # idempotency (policy point 6) and per-package unprivileged verification
 # (policy point 9).
 #
-# The verification list is heterogeneous on purpose, not twelve copies of
-# `--version`: two packages do not fit that shape at all.
-#   - aha has no reliable --version output. Verified by feeding it a
-#     real ANSI escape sequence and checking it did real work: converted to
-#     an HTML document, not just echoed back.
-#   - docx2txt has no --version output either. Verified the same way: built
-#     a minimal real .docx and checked the extracted text came back correctly.
+# The verification list is heterogeneous on purpose, not nine copies of
+# `--version`: one package does not fit that shape at all.
+#   - docx2txt has no --version output. Verified by building a minimal real
+#     .docx and checking the extracted text came back correctly.
 # Every verify_cmd below was confirmed against the actual installed binary
 # rather than carried over from documentation, which is worth doing rather
 # than assuming: several plausible-looking guesses turned out to be wrong.
@@ -62,19 +59,6 @@
     # one only helps if that exact dpkg version is available from the
     # target's configured apt sources.
     misc_tools_packages:
-      - name: curl
-        # Advanced from 8.18.0-1ubuntu2.3, which resolute-updates superseded
-        # and the archive no longer carries -- so the pin was unsatisfiable on
-        # every host, and because task 3 installs all fourteen packages in
-        # one apt transaction, that one stale pin blocked the other
-        # thirteen too.
-        # The verify_cmd matches on the upstream version alone, so it needs no
-        # change when the Ubuntu revision moves.
-        version: "8.18.0-1ubuntu2.4"
-        verify_cmd: "curl --version | grep -q '^curl 8.18.0'"
-      - name: gnupg
-        version: "2.4.8-4ubuntu3"
-        verify_cmd: "gpg --version | grep -q 'gpg (GnuPG) 2.4.8'"
       - name: git
         version: "1:2.53.0-1ubuntu1"
         verify_cmd: "git --version | grep -q 'git version 2.53.0'"
@@ -89,13 +73,10 @@
       - name: mailutils
         version: "1:3.20-3build1"
         verify_cmd: "dotlock --version | grep -q 'dotlock (GNU Mailutils) 3.20'"
-      - name: jq
-        version: "1.8.1-4ubuntu2"
-        verify_cmd: "jq --version | grep -q 'jq-1.8.1'"
       - name: xlsx2csv
         version: "1:0.8.3-1build1"
         verify_cmd: "xlsx2csv --version | grep -q '^0.8.3$'"
-      # docx2txt has no --version output at all (like aha): verified by
+      # docx2txt has no --version output at all: verified by
       # building a minimal real .docx -- a zip with a bare
       # word/document.xml and word/_rels/document.xml.rels, no XML
       # declaration or namespace attributes needed since docx2txt's
@@ -136,7 +117,6 @@
         verify_cmd: >-
           parallel --version | grep -q '^GNU parallel 20240222'
           && seq 3 | parallel echo | sort | tr '\n' ' ' | grep -q '1 2 3'
-    misc_tools_aha_version: "0.5.1-3build2"
     misc_tools_smoke_home: /var/tmp/misc-tools-smoke-home
     # uid/gid used to prove the install is usable by an arbitrary user
     misc_tools_verify_uid: 65534    # nobody
@@ -152,9 +132,7 @@
       # task 4, which had the identical blindness.
       ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ item.name }}"
       register: misc_tools_installed
-      loop: >-
-        {{ misc_tools_packages
-           + [{'name': 'aha', 'version': misc_tools_aha_version}] }}
+      loop: "{{ misc_tools_packages }}"
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
@@ -187,10 +165,17 @@
       when: not (misc_tools_can_verify | bool)
 
     - name: 3. Install the packages that need installing
+      # One apt transaction for the whole list, so a single unsatisfiable pin
+      # blocks every other package here too -- which is how a stale curl pin
+      # (8.18.0-1ubuntu2.3, superseded by resolute-updates and no longer
+      # carried by the archive) once held back all the others. When one pin
+      # goes stale, apt reports only that package; check the rest are still
+      # installing.
+      #
       # install_recommends: false -- added for mailutils, whose only
       # recommendation is default-mta (postfix): pulling in a full mail
       # server as a side effect of a CLI tool list is not what this playbook
-      # is for. Applies to all fourteen packages, not just mailutils, which
+      # is for. Applies to all ten packages, not just mailutils, which
       # is the intended, minimal-footprint behavior for this playbook.
       ansible.builtin.apt:
         name: "{{ misc_tools_pending | default([]) }}"
@@ -207,9 +192,7 @@
       # version for a package whose binary is not on the host.
       ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ item.name }}"
       register: misc_tools_version_out
-      loop: >-
-        {{ misc_tools_packages
-           + [{'name': 'aha', 'version': misc_tools_aha_version}] }}
+      loop: "{{ misc_tools_packages }}"
       loop_control:
         label: "{{ item.name }}"
       changed_when: false
@@ -245,31 +228,13 @@
       check_mode: false
       when: misc_tools_can_verify | bool
 
-    - name: 7. Convert an ANSI escape sequence to HTML as an unprivileged user (aha)
-      # aha's --version output is not reliable enough to pin a match string
-      # against, so this proves real work instead: a bold ANSI escape must
-      # come back as an actual HTML document, not merely echoed unchanged.
-      ansible.builtin.shell:
-        cmd: >-
-          setpriv --reuid={{ misc_tools_verify_uid }} --regid={{ misc_tools_verify_gid }} --clear-groups
-          env HOME={{ misc_tools_smoke_home }} bash -c
-          "printf '\\033[1mmulti-user-smoke-test\\033[0m\\n' | aha"
-        chdir: "{{ misc_tools_smoke_home }}"
-      register: misc_tools_aha_smoke
-      changed_when: false
-      failed_when: >-
-        'multi-user-smoke-test' not in misc_tools_aha_smoke.stdout
-        or '<html' not in (misc_tools_aha_smoke.stdout | lower)
-      check_mode: false
-      when: misc_tools_can_verify | bool
-
-    - name: 8. Remove the scratch HOME
+    - name: 7. Remove the scratch HOME
       ansible.builtin.file:
         path: "{{ misc_tools_smoke_home }}"
         state: absent
       check_mode: false
 
-    - name: 9. Display installation summary
+    - name: 8. Display installation summary
       # Built as a real Jinja list, not a folded string joined on a literal
       # '\n' -- confirmed at run time that a '\n' inside a >- folded scalar
       # never reaches Jinja as an escape (YAML block scalars do not process
@@ -284,8 +249,7 @@
                 | map('join', ' ')
                 | map('regex_replace', '^', '  ')
                 | list)
-             + ['  aha ' ~ misc_tools_aha_version,
-                '',
+             + ['',
                 'Verified runnable by an unprivileged user (uid ' ~ misc_tools_verify_uid ~ ').',
                 'No shell configuration was changed and no per-user state was written.'] }}
       when: misc_tools_can_verify | bool

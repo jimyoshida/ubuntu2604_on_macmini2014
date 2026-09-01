@@ -84,9 +84,9 @@ that is a manual, per-account cleanup.
 
 ## misc-tools.yml
 
-Installs fourteen general-purpose CLI packages from the Ubuntu archive: `curl`, `gnupg`, `git`,
-`git-lfs`, `git-secret`, `mailutils`, `jq`, `xlsx2csv`, `docx2txt`, `net-tools`, `ncat`, `make`,
-`parallel`, `aha` — all to `/usr/bin`. Nothing is added to a shell profile, and the only
+Installs ten general-purpose CLI packages from the Ubuntu archive: `git`, `git-lfs`,
+`git-secret`, `mailutils`, `xlsx2csv`, `docx2txt`, `net-tools`, `ncat`, `make`,
+`parallel` — all to `/usr/bin`. Nothing is added to a shell profile, and the only
 per-user state any of them creates is GNU parallel's: running a job — not `--version`, which
 writes nothing — makes `~/.parallel/tmp` in the invoking account's own home, where it belongs.
 The install task passes `install_recommends: false`, added for `mailutils` (whose only
@@ -96,17 +96,14 @@ package here pulls in more than the CLI tool asked for.
 Every package is pinned and version-compared against what's installed, and every package is
 verified as an unprivileged user.
 
-Three packages do not fit a plain `--version` check, and the verify command for **every**
+Two packages do not fit a plain `--version` check, and the verify command for **every**
 package was confirmed against the actual installed binary rather than assumed:
 
-- **`aha`** has no reliably documented `--version` output. Verified by feeding it a real
-  ANSI bold escape sequence and checking it came back as an actual HTML document, not merely
-  echoed unchanged.
 - **`parallel`** could be checked with a version string, but running jobs is the whole point
   of it, so its check runs three and compares their combined output — the one verify command
   here that does real work. Ubuntu's package prints no citation notice (confirmed: an
   unprivileged run writes nothing at all to stderr), so nothing has to be silenced for it.
-- **`docx2txt`** has no `--version` output at all. Verified the same way as `aha`: builds a
+- **`docx2txt`** has no `--version` output at all. Verified by doing real work too: builds a
   minimal real `.docx` (a zip containing a bare `word/document.xml` and
   `word/_rels/document.xml.rels`) and checks the extracted text comes back correctly.
 
@@ -402,8 +399,9 @@ Also lays down:
 
 `yq.yml` lives as its own playbook in this directory (below) rather than bundled here, and
 `jsonnet.yml` lives in [`misc/`](../misc/README.md) — each pinned and verified independently.
-`jq` used to be split out the same way, but now lives in [`misc-tools.yml`](#misc-toolsyml)
-instead, alongside the other plain-apt CLI tools.
+`jq` used to be split out the same way, and was then folded into
+[`misc-tools.yml`](#misc-toolsyml); it has since moved to the base OS layer, so no playbook in
+this directory carries it any more.
 
 **No vendor apt repo needed for `gum` and `glow`.** Ubuntu 26.04 ("resolute") carries apt
 packages for both directly (`gum` 0.17.0-1, `glow` 2.1.1-1), so a single apt install covers
