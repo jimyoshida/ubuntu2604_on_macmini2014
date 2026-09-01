@@ -66,6 +66,24 @@
         update_cache: true
         cache_valid_time: 3600
 
+    - name: 1a. Ensure interactive non-login shells read /etc/profile.d
+      # The other half of B3, which task 1's comment leaves implicit:
+      # /etc/profile.d/bash_completion.sh runs for LOGIN shells only, and a
+      # stock /etc/bash.bashrc does not loop over /etc/profile.d. Without this
+      # hook the shared completion installed below is never registered in the
+      # `bash -ic` shell the verification uses, and that task fails.
+      #
+      # Same marker and block as core/modern-tools.yml task 7 by design:
+      # blockinfile keys on the marker, so whichever playbook runs first lays
+      # it down and the rest are no-ops. This playbook must not depend on
+      # having been run after that one -- core/helm.yml carried exactly that
+      # assumption and failed on hosts modern-tools had not yet reached.
+      ansible.builtin.blockinfile:
+        path: /etc/bash.bashrc
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: profile.d for interactive shells"
+        block: |
+          for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
+
     - name: 2. Fail on an unsupported CPU architecture
       ansible.builtin.fail:
         msg: >-
