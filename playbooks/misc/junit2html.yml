@@ -115,6 +115,13 @@
         name: junit2html
         source: "junit2html=={{ junit2html_version }}"
         state: install
+        # state: install alone is a no-op when the app is already installed,
+        # whatever version it is at -- ws01 sat at 31.1.3 against a 31.1.4 pin
+        # and the task reported ok without moving it. force reinstalls at the
+        # pinned source instead. It only runs when the guard below is true,
+        # i.e. when the installed version is not already the pin, so a host
+        # at the pin is still untouched.
+        force: true
       environment:
         PIPX_HOME: "{{ junit2html_pipx_home }}"
         PIPX_BIN_DIR: "{{ junit2html_bin_dir }}"
